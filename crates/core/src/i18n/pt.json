@@ -1265,5 +1265,16 @@
   "slint.cfg.tip.icon_custom": "Import or export a full icon set (.naygoset), or reset all icons to the base set.",
   "listing.incomplete": "Listagem incompleta; alguns itens não puderam ser lidos",
   "slint.cfg.system_file_icons": "Usar ícones do sistema para arquivos",
-  "slint.cfg.tip.system_file_icons": "Usa o ícone associado pelo Windows a cada extensão. A consulta ocorre em segundo plano e tem limite de 512 tipos; desativado por padrão."
+  "slint.cfg.tip.system_file_icons": "Usa o ícone associado pelo Windows a cada extensão. A consulta ocorre em segundo plano e tem limite de 512 tipos; desativado por padrão.",
+  "splash.subtitle": "Explorador de arquivos",
+  "packs.err.save_theme": "Não foi possível salvar o tema: {error}",
+  "packs.err.delete_theme": "Não foi possível excluir o tema: {error}",
+  "packs.err.create_zip": "Não foi possível criar o zip: {error}",
+  "ops.err.trash_not_supported": "A Lixeira não está disponível neste sistema.",
+  "ops.err.trash_restored_elsewhere": "O destino apareceu durante a restauração e não foi sobrescrito: {original}. O item foi restaurado com outro nome em {restored}.",
+  "ops.failed.unreadable_folder": "Não foi possível ler a pasta: {reason}",
+  "ops.failed.link_not_copied": "Link não copiado (os links não são recriados no destino): {path}",
+  "ops.failed.link_not_moved": "Não foi possível mover o link; ele ficou na origem: {path} ({reason})",
+  "ops.failed.publish": "Não foi possível salvar a cópia no destino: {reason}",
+  "ops.failed.identity_unknown": "Não foi possível verificar se a origem e o destino são o mesmo arquivo; nada foi alterado: {reason}"
 }

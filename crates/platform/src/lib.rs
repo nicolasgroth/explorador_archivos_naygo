@@ -11,6 +11,9 @@ pub mod autostart;
 pub mod clipboard;
 pub mod comparison_point_store;
 pub mod context_menu;
+// Copia con CopyFile2: solo Windows; en otras plataformas rige la copia por defecto de `core`.
+#[cfg(windows)]
+mod copy_file;
 pub mod device_watch;
 pub mod dir_watch;
 pub mod dnd;
@@ -22,6 +25,7 @@ pub mod exe_meta;
 pub mod global_hotkey;
 pub mod known_folders;
 pub mod locale;
+pub mod long_path;
 pub mod mountinfo;
 pub mod move_rename;
 pub mod open;

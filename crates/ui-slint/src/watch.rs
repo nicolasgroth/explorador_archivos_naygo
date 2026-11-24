@@ -77,11 +77,9 @@ fn resolve_entries(events: &[DirEvent]) -> HashMap<PathBuf, Option<Entry>> {
             DirEvent::Removed(_) => None,
         };
         if let Some(p) = p {
-            out.entry(p.clone()).or_insert_with(|| {
-                std::fs::metadata(p)
-                    .ok()
-                    .map(|m| naygo_core::listing::entry_from_path(p, Some(&m)))
-            });
+            // Metadata del propio enlace (no del destino), igual que el listado.
+            out.entry(p.clone())
+                .or_insert_with(|| naygo_core::listing::entry_at(p));
         }
     }
     out
@@ -228,6 +226,59 @@ impl Watchers {
                 .any(|(_, t)| now.duration_since(*t).as_secs() < secs)
         })
     }
+
+    /// Rutas del panel `pane` con resaltado vigente (puede repetir una ruta marcada dos veces).
+    /// Es O(k) con k = rutas frescas del panel; no recorre el listado.
+    pub fn fresh_paths(&self, pane: u64, secs: u64, now: Instant) -> Vec<&Path> {
+        if secs == 0 {
+            return Vec::new();
+        }
+        self.fresh
+            .get(&pane)
+            .map(|v| {
+                v.iter()
+                    .filter(|(_, t)| now.duration_since(*t).as_secs() < secs)
+                    .map(|(p, _)| p.as_path())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Firma del CONJUNTO de rutas frescas vigentes del panel. Solo cambia cuando empieza o vence
+    /// un resaltado, así que `rows_signature` puede cachear mientras dura (antes devolvía `None`
+    /// y cada tick reconstruía todas las filas). Independiente del orden y de duplicados.
+    pub fn fresh_signature(&self, pane: u64, secs: u64, now: Instant) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut paths = self.fresh_paths(pane, secs, now);
+        if paths.is_empty() {
+            return 0;
+        }
+        paths.sort_unstable();
+        paths.dedup();
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        paths.len().hash(&mut h);
+        for p in paths {
+            p.hash(&mut h);
+        }
+        h.finish() | 1
+    }
+
+    /// Tiempo hasta que vence el próximo resaltado vigente (de cualquier panel). Permite que el
+    /// tick duerma hasta ese instante en vez de seguir a 30 ms solo para apagar el resaltado.
+    pub fn next_fresh_expiry(&self, secs: u64, now: Instant) -> Option<std::time::Duration> {
+        if secs == 0 {
+            return None;
+        }
+        // `is_fresh_ro` usa segundos enteros: vence cuando `elapsed.as_secs() >= secs`, es decir
+        // exactamente en `t + secs`.
+        let life = std::time::Duration::from_secs(secs);
+        self.fresh
+            .values()
+            .flatten()
+            .filter(|(_, t)| now.duration_since(*t).as_secs() < secs)
+            .map(|(_, t)| (*t + life).saturating_duration_since(now))
+            .min()
+    }
 }
 
 impl Default for Watchers {
@@ -323,6 +374,87 @@ mod tests {
         // prune limpia las vencidas.
         w.prune(3, later);
         assert!(!w.any_fresh(3, later));
+    }
+
+    #[test]
+    fn firma_fresca_solo_cambia_al_empezar_o_vencer() {
+        let mut w = Watchers::new();
+        let t0 = Instant::now();
+        assert_eq!(w.fresh_signature(1, 8, t0), 0);
+        w.mark_fresh(1, vec![PathBuf::from("C:/a.txt")], t0);
+        let s1 = w.fresh_signature(1, 8, t0);
+        assert_ne!(s1, 0);
+        // Mientras el conjunto vigente no cambia, la firma es estable (no depende de `now`).
+        assert_eq!(
+            w.fresh_signature(1, 8, t0 + Duration::from_millis(2500)),
+            s1
+        );
+        // Marcar dos veces la misma ruta no cambia el conjunto.
+        w.mark_fresh(
+            1,
+            vec![PathBuf::from("C:/a.txt")],
+            t0 + Duration::from_secs(1),
+        );
+        assert_eq!(w.fresh_signature(1, 8, t0 + Duration::from_secs(1)), s1);
+        let t2 = t0 + Duration::from_secs(2);
+        w.mark_fresh(1, vec![PathBuf::from("C:/b.txt")], t2);
+        let s2 = w.fresh_signature(1, 8, t2);
+        assert_ne!(s2, s1);
+        // Otro panel no afecta.
+        assert_eq!(w.fresh_signature(2, 8, t2), 0);
+        // Vence a.txt (las dos marcas): queda solo b.txt.
+        let t9 = t0 + Duration::from_secs(9);
+        assert_eq!(w.fresh_paths(1, 8, t9), vec![Path::new("C:/b.txt")]);
+        assert_ne!(w.fresh_signature(1, 8, t9), s2);
+        assert_eq!(w.fresh_signature(1, 0, t2), 0, "sin resaltado configurado");
+    }
+
+    #[test]
+    fn proximo_vencimiento_es_el_mas_cercano() {
+        let mut w = Watchers::new();
+        let t0 = Instant::now();
+        assert_eq!(w.next_fresh_expiry(8, t0), None);
+        w.mark_fresh(1, vec![PathBuf::from("C:/a.txt")], t0);
+        w.mark_fresh(
+            2,
+            vec![PathBuf::from("C:/b.txt")],
+            t0 + Duration::from_secs(3),
+        );
+        let now = t0 + Duration::from_secs(1);
+        assert_eq!(w.next_fresh_expiry(8, now), Some(Duration::from_secs(7)));
+        // Vencido a.txt, el próximo es b.txt.
+        let now = t0 + Duration::from_secs(8);
+        assert_eq!(w.next_fresh_expiry(8, now), Some(Duration::from_secs(3)));
+        assert_eq!(w.next_fresh_expiry(8, t0 + Duration::from_secs(20)), None);
+        assert_eq!(w.next_fresh_expiry(0, t0), None);
+    }
+
+    /// El watcher lee la metadata del ENLACE (no de su destino), igual que el listado: un
+    /// junction a un destino caído se resuelve como carpeta en vez de desaparecer.
+    #[cfg(windows)]
+    #[test]
+    fn resolve_entries_no_sigue_enlaces() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("target");
+        std::fs::create_dir(&target).unwrap();
+        let link = tmp.path().join("link");
+        let made = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&link)
+            .arg(&target)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if !made {
+            return;
+        }
+        std::fs::remove_dir(&target).unwrap();
+        let r = resolve_entries(&[DirEvent::Modified(link.clone())]);
+        let e = r
+            .get(&link)
+            .and_then(|o| o.as_ref())
+            .expect("el enlace se resuelve sin seguirlo");
+        assert_eq!(e.kind, naygo_core::fs_model::EntryKind::Directory);
     }
 
     #[test]

@@ -48,7 +48,15 @@ pub fn cmp_entries(a: &Entry, b: &Entry, spec: &SortSpec) -> std::cmp::Ordering 
 }
 
 /// Comparación de nombres case-insensitive estilo Windows.
+///
+/// Con nombres ASCII (el caso común) `to_lowercase` equivale a plegar byte a byte, así que se
+/// compara sin alocar: ordenar 100k nombres alocaba dos `String` por comparación (~1,7 millones
+/// de comparaciones) y dominaba el recálculo de la vista tras cada alta. Si alguno no es ASCII se
+/// conserva `to_lowercase` (reglas Unicode completas, p. ej. la sigma final).
 fn cmp_name(a: &Entry, b: &Entry) -> std::cmp::Ordering {
+    if a.name.is_ascii() && b.name.is_ascii() {
+        return cmp_ascii_ci(&a.name, &b.name);
+    }
     a.name.to_lowercase().cmp(&b.name.to_lowercase())
 }
 
@@ -127,6 +135,54 @@ mod tests {
         sort_entries(&mut v, &spec);
         let names: Vec<&str> = v.iter().map(|e| e.name.as_str()).collect();
         assert_eq!(names, vec!["Apple.txt", "banana.txt", "cherry.txt"]);
+    }
+
+    #[test]
+    fn nombre_ascii_sin_alocar_equivale_a_to_lowercase() {
+        let names = [
+            "a",
+            "A",
+            "ab",
+            "aB",
+            "Ab",
+            "a_b",
+            "a-b",
+            "a.b",
+            "a b",
+            "Z",
+            "z",
+            "_x",
+            "[x]",
+            "~x",
+            "@x",
+            "`x",
+            "0",
+            "9",
+            "",
+            "ABC.txt",
+            "abc.TXT",
+            "abd",
+            "ab",
+            "ñandú",
+            "Ñandú",
+            "Σίσυφος",
+            "ΣΑΣ",
+            "straße",
+            "STRASSE",
+            "é",
+            "E",
+        ];
+        for a in names {
+            for b in names {
+                let ea = entry(a, EntryKind::File, 0);
+                let eb = entry(b, EntryKind::File, 0);
+                assert_eq!(
+                    cmp_name(&ea, &eb),
+                    a.to_lowercase().cmp(&b.to_lowercase()),
+                    "{a:?} vs {b:?}"
+                );
+            }
+        }
     }
 
     #[test]

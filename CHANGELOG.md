@@ -7,6 +7,89 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Sin publicar]
 
+### Operaciones de archivos
+- Copiar y mover ya no recorren enlaces (junctions y symlinks) dentro de las carpetas.
+  No hay bucles ni se borra nada a través de un enlace. Copiar un enlace a carpeta que el usuario
+  seleccionó copia su contenido una sola vez; un enlace a carpeta que está dentro de lo copiado se
+  informa como fallido. Mover traslada el enlace como enlace dentro del mismo volumen; entre
+  volúmenes, el enlace queda en el origen y el paso se informa como fallido.
+- Sobrescribir o mover sobre el mismo archivo escrito con otra ruta ya no borra el original.
+  Naygo compara la identidad real del archivo (hard links, rutas `\\?\`, mayúsculas y minúsculas,
+  incluidas las no ASCII) y omite el paso.
+- En Windows las copias conservan fechas, atributos y flujos alternativos.
+  Se usa `CopyFile2`: se conservan oculto, sistema y solo lectura, y flujos como `Zone.Identifier`.
+  Cancelar no deja archivos temporales. Como las fechas se conservan, copiar dos veces con
+  «Saltar idénticos» omite todo en la segunda pasada.
+- Mover entre volúmenes escribe la copia en disco antes de borrar el origen.
+  Si la copia o la aplicación de atributos falla, el origen no se borra.
+- Copiar y mover funcionan con rutas de más de 260 caracteres.
+  Las operaciones propias usan rutas extendidas aunque la opción de rutas largas de Windows esté
+  apagada, y el ejecutable declara compatibilidad con rutas largas.
+- Una subcarpeta ilegible ya no detiene una copia o un movimiento.
+  Se informa como «No se pudo leer la carpeta» y el resto continúa. Al mover, esa subcarpeta y las
+  carpetas que la contienen se quedan en el origen (salvo que la carpeta entera se mueva con un
+  solo renombrado dentro del mismo volumen: entonces viaja completa, sin borrar nada). Si la carpeta seleccionada misma no se puede
+  leer, la operación no empieza, como antes. Reemplazar una carpeta que contiene una subcarpeta
+  ilegible no publica nada: el destino anterior y el origen quedan intactos.
+- Copiar otra vez con «Sobrescribir» sobre archivos de solo lectura ya funciona.
+  Como las copias ahora conservan el solo lectura, la segunda copia de una carpeta `.git` o de un
+  disco óptico fallaba con «Acceso denegado». Con la sobrescritura autorizada, Naygo reemplaza el
+  archivo; sin esa autorización no lo toca.
+- «Reintentar» ya no queda bloqueado por los enlaces que no se copiaron.
+  Antes, una carpeta con un junction hacía que la revisión de reintento rechazara todo, incluso los
+  archivos que sí se podían reintentar; ahora los enlaces quedan fuera y el resto se ofrece.
+- Los avisos de enlace no copiado, enlace no movido y copia que no se pudo guardar se muestran en el idioma de la interfaz.
+- Si no se puede comprobar si el origen y el destino son el mismo archivo, el paso falla sin tocar nada.
+- Restaurar desde la Papelera ya no pisa un elemento que aparece en el destino durante la operación.
+  El elemento restaurado queda con otro nombre y el aviso indica dónde.
+
+### Usabilidad
+- Un junction a carpeta se lista como carpeta y se puede abrir con doble clic o Enter.
+  Conserva sus propios atributos: un junction oculto de sistema sigue oculto, también al
+  actualizarse la carpeta en vivo y en la vista profunda.
+- Una carpeta con un enlace a un recurso de red apagado se lista al instante.
+  El listado ya no sigue el enlace para saber si es carpeta, así que no espera el timeout de la
+  red ni deja sin turno a los demás listados locales.
+- La búsqueda por contenido y los puntos de comparación ya no descargan los archivos de OneDrive que están solo en línea.
+  La búsqueda los cuenta como omitidos y el punto de comparación, como cobertura incompleta.
+- Calcular el tamaño de un junction seleccionado mide la carpeta a la que apunta.
+- Abrir archivos, abrir con, ejecutar como administrador, terminal y Explorador ya no congelan la ventana.
+  Las órdenes al Shell corren en un hilo propio; si fallan, el aviso llega cuando el Shell
+  responde. Pedir dos veces lo mismo mientras espera no lo encola de nuevo.
+- Un recurso de red caído ya no deja sin turno a los listados de discos locales.
+  Las carpetas locales y las remotas tienen cupos separados (8 y 4).
+- La vista profunda avisa cuando el recorrido queda incompleto.
+  Pasa si la carpeta ya no existe o si una subcarpeta no se puede leer; antes no se notaba.
+- El menú «Más opciones de Windows…» reenvía al Shell los mensajes de sus submenús, para que «Enviar a», «Abrir con» y los submenús de extensiones se muestren completos y con íconos (implementado; pendiente de validación manual).
+  «Nuevo» todavía no aparece en este menú.
+- Al renombrar en línea, el cursor ya no salta al final si aparece un archivo en la misma carpeta.
+- Se tradujeron a los 10 idiomas textos que faltaban.
+  Incluye el subtítulo de la pantalla de inicio, las etiquetas del selector de colores, los errores
+  al guardar o borrar un tema o crear un ZIP de packs, la Papelera no disponible, el elemento
+  restaurado con otro nombre y la carpeta ilegible.
+
+### Rendimiento
+- Un cambio en una carpeta abierta ya no repinta la ventana entera durante el resaltado.
+  Con la ventana en reposo, el CPU por cada 20 s pasó de 5,33 · 2,14 · 1,86 · 0 · 4,47 s a
+  0,66 · 0,72 · 0,02 · 0,02 · 0,64 s.
+- Un cambio dentro de una carpeta de 100.000 entradas ya no reconstruye todas las filas.
+  El CPU de los 12 s siguientes bajó de 8–12 s a 0,22 s y la memoria tras el evento, de
+  256/249 MiB a 176/157 MiB (working set / privada). Actualizar o agregar una fila con 100.000
+  cuesta 3,80 / 4,14 ms en lugar de 28,5 / 22,3 ms.
+- La detección de Windows Terminal y WSL se hace una vez, en segundo plano, al arrancar.
+- Memoria medida en release (working set / privada): bandeja 47/21 MiB, ventana en reposo 56–59 / 26–28 MiB y carpeta de 100.000 entradas ~185/167 MiB.
+  Son unos 1,4 KiB por fila. No crece en reposo.
+
+### Construcción
+- El código Slint generado vive en su propio crate (`naygo-ui-gen`).
+  Recompilar tras tocar un `.rs` de la UI baja de 1 min 01 s a 18,9 s en desarrollo y
+  `cargo check` de 41 s a 4,4 s. Tocar un `.slint` quedó más lento (1 min 02 s → 1 min 27 s).
+- El release usa `debug = "line-tables-only"`: el pico de RAM del build baja de 10,9 GiB a 6,7 GiB y el PDB de 473 MB a 177 MB.
+  El build release completo tardó ~10 min más que la línea base anterior, sin causa confirmada
+  (la línea base es de otro commit).
+- Las builds de desarrollo muestran la versión `X.Y.Z+build.dev`; solo el empaquetador fija el número de build.
+- `NAYGO_DEBUG_MULTI_INSTANCE=1` permite correr una instancia de prueba junto a otra abierta (solo desarrollo).
+
 ## [0.5.6] — 2026-11-20
 
 ### Usabilidad
@@ -396,7 +479,7 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
   componentes de ruta que no sean UTF-8 se rechazan antes de crear o truncar el archivo destino, en
   vez de sustituirse silenciosamente. Los dos tests Unix están compilados para Linux; falta correrlos
   en un host Linux nativo. Se regeneró la distribución Windows con gate completo y build supervisado;
-  hashes y firma pendiente constan en `docs/VALIDACION-BUILD-2026-10-15.md`. Esto no habilita
+  hashes y firma pendiente constan en `docs/evidencia/VALIDACION-BUILD-2026-10-15.md`. Esto no habilita
   operaciones Linux.
 - Las plantillas conservan rutas fijas como `PathBuf` y rechazan explícitamente una ruta POSIX no
   UTF-8 antes de cambiar el catálogo, ya que el JSON vigente sólo representa texto. La UI muestra el
@@ -410,7 +493,7 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
   abrir Naygo. La ruta se conserva en `PathBuf` y se escapa al construir avisos; flags y valores de
   tema/plantilla siguen siendo UTF-8. Los tests POSIX compilan en check/Clippy cruzados; falta su
   ejecución Linux nativa. El gate Windows y el build supervisado pasan; artefactos y hashes en
-  [`docs/VALIDACION-BUILD-2026-10-15.md`](docs/VALIDACION-BUILD-2026-10-15.md).
+  [`docs/evidencia/VALIDACION-BUILD-2026-10-15.md`](docs/evidencia/VALIDACION-BUILD-2026-10-15.md).
 - L-01A: el listado, el árbol y las búsquedas de core muestran bytes POSIX no UTF-8 como `\\xNN`,
   y duplican el backslash literal para que no se confunda con un escape. Buscar por el mismo texto
   visible encuentra el nombre original; la ruta operativa sigue en `PathBuf`. El check y Clippy
@@ -427,7 +510,7 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
   la reconciliación existente. Tres corridas release headless midieron 21,279 ms de mediana al
   añadir una fila a 100k, frente a 561,367 ms en el harness previo. Gate y distribución 0.5.2
   supervisados pasan; ZIP, setup y EXE sin firma Authenticode y sus hashes están en
-  `docs/VALIDACION-BUILD-2026-10-16.md`.
+  `docs/evidencia/VALIDACION-BUILD-2026-10-16.md`.
 - W-07 añade spans opt-in para duración de callbacks de teclado, navegación por filas y ordenamiento.
   No capturan entradas ni rutas; separan el callback del tick/renderer y no sustituyen las mediciones
   de interacción extremo a extremo.
@@ -465,7 +548,7 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
   verifica reciclaje, restauración y conservación del contenido destino. Pasaron 5/5 tests
   dirigidos de Papelera, 1.389 tests del workspace, Clippy `-D warnings`, formato y checks cruzados
   Windows de platform/UI. La distribución 0.5.2 se regeneró bajo supervisor y sus hashes se
-  verificaron en `docs/VALIDACION-BUILD-2026-10-15.md`.
+  verificaron en `docs/evidencia/VALIDACION-BUILD-2026-10-15.md`.
 - Se añadió `scripts/capture-w07-process.ps1` para recoger en JSON memoria, CPU, handles y threads
   del proceso Windows en ventanas configurables, más los mapeos SMB cuando están disponibles. No
   interactúa con Naygo ni sustituye las métricas internas opt-in o la matriz real de navegación.
@@ -480,7 +563,7 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
   `docs/BENCHMARKS.md`.
 - Se volvió a verificar el gate completo Windows y se regeneraron portable ZIP e instalador 0.5.2
   bajo el supervisor de memoria; ambos siguen sin firma Authenticode y sus hashes están en
-  `docs/VALIDACION-BUILD-2026-10-14.md`.
+  `docs/evidencia/VALIDACION-BUILD-2026-10-14.md`.
 - El restore de Papelera usa primero el nombre de parsing capturado por `PostDeleteItem` y ahora
   difiere por completo la enumeración de la carpeta virtual hasta necesitar el respaldo. Esto cubre
   runners sin enumerador Shell. El caché de hasta 1.024 identidades ahora expulsa FIFO para conservar
@@ -490,7 +573,7 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
   local; el build 0.5.2 final está verificado. El ZIP, el setup y sus hashes coinciden;
   queda correr GitHub Actions en Windows Server 2025.
 - Se regeneraron los artefactos 0.5.2 después de la corrección de Papelera. ZIP e instalador siguen
-  sin firma; hashes y límite de memoria constan en `docs/VALIDACION-BUILD-2026-10-14.md`.
+  sin firma; hashes y límite de memoria constan en `docs/evidencia/VALIDACION-BUILD-2026-10-14.md`.
 
 ### Distribución
 - El build supervisado aísla los módulos PowerShell 7 heredados al lanzar Windows PowerShell 5.1.
@@ -555,12 +638,12 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
   `-D warnings`; los stubs explicitan que espacio, carpetas conocidas y Papelera no están disponibles.
   Los recursos/helpers propios de Windows ya no generan warnings al compilar la variante Linux.
   La suite Windows, Clippy, formato y diff pasaron, y se regeneró la distribución 0.5.2 bajo supervisor;
-  los hashes figuran en `docs/VALIDACION-BUILD-2026-10-14.md`. Build y ejecución nativos Ubuntu siguen
+  los hashes figuran en `docs/evidencia/VALIDACION-BUILD-2026-10-14.md`. Build y ejecución nativos Ubuntu siguen
   pendientes.
 - La distribución Windows 0.5.2 se volvió a generar después de los cambios de parser e identidad de
   rutas: el build supervisado
   terminó dentro del tope de 12 GiB. EXE y setup siguen sin firma Authenticode; hashes y límites en
-  `docs/VALIDACION-BUILD-2026-10-14.md`.
+  `docs/evidencia/VALIDACION-BUILD-2026-10-14.md`.
 
 ### CI
 - El test de ida/vuelta de Papelera vuelve a ejecutarse en CI. El runner Windows no refrescaba de
@@ -577,18 +660,18 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
 - El preview ZIP/TAR/TAR.GZ limita registros e índice ZIP, bytes leídos/comprimidos/expandidos,
   rutas internas y suma de tamaños. Mantiene hasta 500 filas, sin extraer contenido; los límites
   conservan una salida parcial o muestran el aviso de recursos existente. Suite workspace, Clippy
-  y distribución supervisada pasaron; hashes en `docs/VALIDACION-BUILD-2026-10-13.md`.
+  y distribución supervisada pasaron; hashes en `docs/evidencia/VALIDACION-BUILD-2026-10-13.md`.
 - El preview PDF carga el documento una vez, obtiene las páginas y reutiliza el parser para extraer
   texto con el formato previo. Un writer detiene la extracción al llegar a 8.000 caracteres y el
   lector recorre hasta 500 páginas de contenido; conserva el aislamiento, timeout y cancelación
   existentes. No renderiza páginas. Suite completa, Clippy y build supervisado pasaron; hashes de
-  distribución registrados en `docs/VALIDACION-BUILD-2026-10-13.md`.
+  distribución registrados en `docs/evidencia/VALIDACION-BUILD-2026-10-13.md`.
 - El acceso cacheado a índices de vista comparte un `Arc<[usize]>` con el render y la comparación
   de filas, sin copiar el vector entero en cada hit. En el microbenchmark a 100.000 filas bajó de
   0,021924 ms con copia a 0,000061 ms compartido; el resultado no mide el frame completo. Suite
   workspace, Clippy global, formato, diff y Graphify pasaron. La distribución 0.5.2 se regeneró
   bajo supervisor y sus hashes coinciden con el manifiesto; evidencia y límites en
-  `docs/BENCHMARKS.md` y `docs/VALIDACION-BUILD-2026-10-13.md`.
+  `docs/BENCHMARKS.md` y `docs/evidencia/VALIDACION-BUILD-2026-10-13.md`.
 - Files, árbol y el diagnóstico de carpetas comparten un máximo de ocho workers. Cuando no hay
   plaza, Files conserva sólo la última ruta por panel, el árbol deduplica ramas y el probe conserva
   el último ámbito. Los permisos se liberan al terminar el hilo; los probes de navegación consultan
@@ -603,7 +686,7 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
   listado y construcción de previews. La cola y las muestras están limitadas; el event loop usa
   envío no bloqueante. El log al cierre contiene solo tipos estáticos y duraciones, sin rutas ni
   nombres de archivo. La distribución 0.5.2 se regeneró bajo supervisor; hashes y limitaciones
-  figuran en `docs/VALIDACION-BUILD-2026-10-13.md`. La matriz de rendimiento W-07 continúa pendiente.
+  figuran en `docs/evidencia/VALIDACION-BUILD-2026-10-13.md`. La matriz de rendimiento W-07 continúa pendiente.
 - Los mismos logs opt-in informan inicio, término, rechazos, trabajos activos y pico simultáneo
   de workers de preview y validación de rutas, usando los permisos reales que limitan esos hilos.
   El worker serial de packs también registra envíos, rechazos, espera de cola y duración. Una prueba
@@ -633,7 +716,7 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
   no se tratan como destino libre, el staging vive hasta el resultado y el motor revalida al
   ejecutar; copiar/mover ya no consulta `exists()` desde el controlador de operaciones.
 - Generada nuevamente la distribución 0.5.2 con W-01–W-06C; ver checksums y límites en
-  [validación del build del 13 de octubre](docs/VALIDACION-BUILD-2026-10-13.md).
+  [validación del build del 13 de octubre](docs/evidencia/VALIDACION-BUILD-2026-10-13.md).
 - Los cambios de ajustes, atajos y sesión se coalescen por archivo en un worker JSON único;
   al salir, Naygo espera las escrituras finales fuera del hilo de UI con plazo acotado.
 - La carga inicial de settings, idioma, atajos, sesión, favoritos y plantillas corre en un worker;

@@ -63,6 +63,78 @@ impl ListingAdmission {
     }
 }
 
+/// Plazas de listado para discos locales.
+pub const LOCAL_LISTING_SLOTS: usize = 8;
+/// Plazas de listado para shares UNC y unidades de red.
+pub const REMOTE_LISTING_SLOTS: usize = 4;
+
+/// Dos admisiones independientes: una ruta local nunca espera plaza detrás de listados remotos.
+/// Un share caído retiene su hilo (y su permiso) hasta que el sistema desiste; con un solo cupo,
+/// unos pocos shares colgados bloqueaban también los listados de los discos locales.
+#[derive(Clone)]
+pub struct ListingAdmissions {
+    local: ListingAdmission,
+    remote: ListingAdmission,
+}
+
+impl Default for ListingAdmissions {
+    fn default() -> Self {
+        Self::new(LOCAL_LISTING_SLOTS, REMOTE_LISTING_SLOTS)
+    }
+}
+
+impl ListingAdmissions {
+    pub fn new(local_maximum: usize, remote_maximum: usize) -> Self {
+        Self {
+            local: ListingAdmission::new(local_maximum),
+            remote: ListingAdmission::new(remote_maximum),
+        }
+    }
+
+    pub fn local(&self) -> &ListingAdmission {
+        &self.local
+    }
+
+    pub fn remote(&self) -> &ListingAdmission {
+        &self.remote
+    }
+
+    /// Admisión que corresponde a `path` según `locality` (ver [`crate::path_locality`]).
+    pub fn for_path(
+        &self,
+        path: &Path,
+        locality: &dyn crate::path_locality::VolumeLocality,
+    ) -> &ListingAdmission {
+        if crate::path_locality::is_remote_path(path, locality) {
+            &self.remote
+        } else {
+            &self.local
+        }
+    }
+
+    /// Admisión para un trabajo que recorre varias rutas en serie: basta una remota para que el
+    /// trabajo pueda colgarse, así que entonces usa el cupo remoto.
+    pub fn for_paths<'a>(
+        &self,
+        paths: impl IntoIterator<Item = &'a Path>,
+        locality: &dyn crate::path_locality::VolumeLocality,
+    ) -> &ListingAdmission {
+        if paths
+            .into_iter()
+            .any(|path| crate::path_locality::is_remote_path(path, locality))
+        {
+            &self.remote
+        } else {
+            &self.local
+        }
+    }
+
+    /// `true` si al menos uno de los dos cupos tiene plaza.
+    pub fn any_capacity(&self) -> bool {
+        self.local.has_capacity() || self.remote.has_capacity()
+    }
+}
+
 pub struct ListingPermit(Arc<AtomicUsize>);
 
 impl Drop for ListingPermit {
@@ -369,6 +441,28 @@ fn list_into(dir: &Path, token: &CancellationToken, tx: &mpsc::Sender<ListingMsg
     list_into_filtered(dir, token, &mut TestListingSink { tx }, ListingFilter::All);
 }
 
+/// ¿Los atributos de Windows indican un placeholder de nube sin contenido local (leerlo
+/// lo descargaría)? RECALL_ON_DATA_ACCESS (0x400000) o RECALL_ON_OPEN (0x40000).
+pub(crate) fn attrs_need_recall(attrs: u32) -> bool {
+    const FILE_ATTRIBUTE_RECALL_ON_OPEN: u32 = 0x0004_0000;
+    const FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS: u32 = 0x0040_0000;
+    attrs & (FILE_ATTRIBUTE_RECALL_ON_OPEN | FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS) != 0
+}
+
+/// Placeholder de nube sin contenido local: las lecturas de contenido masivas (búsqueda,
+/// recetas, huella de puntos de comparación) deben omitirlo para no disparar descargas.
+/// Nombres y tamaños siguen disponibles. Fuera de Windows siempre `false`.
+#[cfg(windows)]
+pub(crate) fn is_cloud_placeholder_offline(meta: &Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    attrs_need_recall(meta.file_attributes())
+}
+
+#[cfg(not(windows))]
+pub(crate) fn is_cloud_placeholder_offline(_meta: &Metadata) -> bool {
+    false
+}
+
 /// Lee los atributos "oculto" y "de sistema" de la metadata de Windows.
 /// Devuelve `(hidden, system)`. Si no hay metadata, ambos son `false`.
 /// `file_attributes()` es de `std::os::windows::fs::MetadataExt` (std puro,
@@ -404,16 +498,18 @@ pub fn entry_from_path(path: &Path, metadata: Option<&Metadata>) -> Entry {
         .map(crate::path_display::display_os_str)
         .unwrap_or_default();
 
-    let kind = match metadata {
-        Some(m) if m.is_dir() => EntryKind::Directory,
-        Some(m) if m.is_file() => EntryKind::File,
-        Some(_) => EntryKind::Other,
-        None => EntryKind::Other,
-    };
-
-    let size = match (metadata, kind) {
-        (Some(m), EntryKind::File) => Some(m.len()),
-        _ => None,
+    // Un enlace (symlink/junction) llega con metadata sin seguir. En Windows su tipo sale del
+    // PROPIO enlace (un junction o symlink de carpeta lleva el bit de directorio), sin tocar el
+    // destino: un enlace a un share caído no bloquea el listado ni retiene la plaza del worker.
+    // Un enlace a archivo queda sin tamaño (el del destino exigiría seguirlo). Oculto/sistema y
+    // fechas son siempre los del enlace (como el Explorador): p. ej. `Documents and Settings`
+    // es un junction oculto+sistema cuyo destino no lo es. Quien recorre recursivamente
+    // (tamaño, búsqueda, ops) decide por `is_symlink()`, no por `EntryKind`.
+    let (kind, size) = match metadata {
+        Some(m) if m.file_type().is_symlink() => (link_kind(path, m), None),
+        Some(m) if m.is_dir() => (EntryKind::Directory, None),
+        Some(m) if m.is_file() => (EntryKind::File, Some(m.len())),
+        Some(_) | None => (EntryKind::Other, None),
     };
 
     let modified = metadata.and_then(|m| m.modified().ok());
@@ -432,6 +528,41 @@ pub fn entry_from_path(path: &Path, metadata: Option<&Metadata>) -> Entry {
         created,
         hidden,
         system,
+    }
+}
+
+/// `Entry` de una ruta con la metadata del propio enlace (`symlink_metadata`): nunca sigue
+/// symlinks ni junctions. Es la lectura que usan el watcher, la vista profunda y la búsqueda,
+/// para coincidir con el listado. `None` si la ruta no se puede leer.
+pub fn entry_at(path: &Path) -> Option<Entry> {
+    std::fs::symlink_metadata(path)
+        .ok()
+        .map(|metadata| entry_from_path(path, Some(&metadata)))
+}
+
+/// Tipo de un enlace leído de sus propios atributos, sin seguirlo (Windows): el bit de
+/// directorio distingue un junction/symlink de carpeta de un symlink de archivo.
+#[cfg(windows)]
+fn link_kind(_path: &Path, metadata: &Metadata) -> EntryKind {
+    use std::os::windows::fs::FileTypeExt;
+    let file_type = metadata.file_type();
+    if file_type.is_symlink_dir() {
+        EntryKind::Directory
+    } else if file_type.is_symlink_file() {
+        EntryKind::File
+    } else {
+        EntryKind::Other
+    }
+}
+
+/// Fuera de Windows el enlace no dice a qué apunta: se resuelve el destino con una `stat`
+/// (destino roto → `Other`).
+#[cfg(not(windows))]
+fn link_kind(path: &Path, _metadata: &Metadata) -> EntryKind {
+    match std::fs::metadata(path) {
+        Ok(m) if m.is_dir() => EntryKind::Directory,
+        Ok(m) if m.is_file() => EntryKind::File,
+        _ => EntryKind::Other,
     }
 }
 
@@ -536,6 +667,96 @@ mod tests {
     use std::fs;
 
     #[test]
+    fn attrs_need_recall_detecta_los_dos_bits() {
+        assert!(attrs_need_recall(0x0040_0000));
+        assert!(attrs_need_recall(0x0004_0000 | 0x20));
+        assert!(!attrs_need_recall(0x20));
+        assert!(!attrs_need_recall(0x0000_0400 | 0x2));
+        assert!(!attrs_need_recall(0));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn enlace_oculto_sigue_oculto() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("target");
+        fs::create_dir(&target).unwrap();
+        let link = dir.path().join("link");
+        if !crate::ops::make_junction(&link, &target) {
+            return;
+        }
+        let ok = std::process::Command::new("cmd")
+            .arg("/C")
+            .arg("attrib")
+            .arg("+h")
+            .arg("+s")
+            .arg("/L")
+            .arg(&link)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if !ok {
+            return;
+        }
+        let (rx, worker) = spawn_listing(dir.path().to_path_buf(), CancellationToken::new());
+        worker.join().unwrap();
+        let mut found = None;
+        while let Ok(entry) = rx.try_recv_entry() {
+            if entry.name == "link" {
+                found = Some(entry);
+            }
+        }
+        let entry = found.unwrap();
+        assert_eq!(entry.kind, EntryKind::Directory);
+        assert!(entry.hidden && entry.system);
+    }
+
+    /// El tipo sale del propio enlace, sin seguirlo: un junction cuyo destino no responde (NAS
+    /// apagado) o ya no existe se lista igual como carpeta, sin bloquear el worker.
+    #[cfg(windows)]
+    #[test]
+    fn junction_a_destino_inexistente_se_lista_como_carpeta_sin_seguir() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("target");
+        fs::create_dir(&target).unwrap();
+        let link = dir.path().join("link");
+        if !crate::ops::make_junction(&link, &target) {
+            return;
+        }
+        fs::remove_dir(&target).unwrap();
+        let (rx, worker) = spawn_listing(dir.path().to_path_buf(), CancellationToken::new());
+        worker.join().unwrap();
+        let mut found = None;
+        while let Ok(entry) = rx.try_recv_entry() {
+            if entry.name == "link" {
+                found = Some(entry);
+            }
+        }
+        let entry = found.expect("el junction se lista");
+        assert_eq!(entry.kind, EntryKind::Directory);
+        assert_eq!(entry.size, None);
+    }
+
+    #[test]
+    fn junction_a_carpeta_se_lista_como_carpeta_navegable() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("target");
+        fs::create_dir(&target).unwrap();
+        let link = dir.path().join("link");
+        if !crate::ops::make_junction(&link, &target) {
+            return;
+        }
+        let (rx, worker) = spawn_listing(dir.path().to_path_buf(), CancellationToken::new());
+        worker.join().unwrap();
+        let mut kinds = std::collections::HashMap::new();
+        while let Ok(entry) = rx.try_recv_entry() {
+            kinds.insert(entry.name, entry.kind);
+        }
+        assert_eq!(kinds["target"], EntryKind::Directory);
+        assert_eq!(kinds["link"], EntryKind::Directory);
+    }
+
+    #[test]
     fn preflight_del_worker_termina_antes_de_emitir_las_filas() {
         let dir = tempfile::tempdir().unwrap();
         let admission = ListingAdmission::new(1);
@@ -635,6 +856,186 @@ mod tests {
         assert!(!worker.join().unwrap());
         assert_eq!(received.try_recv().unwrap().name, "queued");
         assert_eq!(terminal_rx.try_recv(), Ok(ListingOutcome::Cancelled));
+    }
+
+    /// Lister falso: el preflight corre en el worker con el permiso tomado y no vuelve hasta que
+    /// la prueba lo suelta, igual que un `read_dir` sobre un share caído.
+    fn spawn_hung_remote(
+        share: PathBuf,
+        admissions: &ListingAdmissions,
+        entered: mpsc::Sender<()>,
+        release: Arc<std::sync::Mutex<mpsc::Receiver<()>>>,
+    ) -> Result<(ListingReceiver, JoinHandle<()>), ListingStartError> {
+        let admission = admissions.for_path(&share, &AllLocal);
+        try_spawn_listing_filtered_with_preflight(
+            share,
+            CancellationToken::new(),
+            ListingFilter::All,
+            admission,
+            move |_, _| {
+                let _ = entered.send(());
+                let _ = release.lock().unwrap().recv();
+                Err(io::Error::new(io::ErrorKind::TimedOut, "share caído"))
+            },
+        )
+    }
+
+    /// Tabla de unidades de prueba: toda letra es local; solo las rutas UNC son remotas.
+    struct AllLocal;
+
+    impl crate::path_locality::VolumeLocality for AllLocal {
+        fn volume_is_remote(&self, _path: &Path) -> Option<bool> {
+            Some(false)
+        }
+    }
+
+    fn wait_terminal(rx: &ListingReceiver) -> (Vec<String>, ListingOutcome) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut names = Vec::new();
+        loop {
+            while let Ok(entry) = rx.try_recv_entry() {
+                names.push(entry.name);
+            }
+            if let Ok(outcome) = rx.try_recv_terminal() {
+                while let Ok(entry) = rx.try_recv_entry() {
+                    names.push(entry.name);
+                }
+                return (names, outcome);
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "el listado no terminó: quedó sin plaza"
+            );
+            thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+
+    #[test]
+    fn ocho_shares_colgados_no_dejan_sin_plaza_a_un_listado_local() {
+        let admissions = ListingAdmissions::default();
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        let release_rx = Arc::new(std::sync::Mutex::new(release_rx));
+        let mut hung = Vec::new();
+        let mut rejected = 0;
+        for index in 0..8 {
+            let share = PathBuf::from(format!(r"\\servidor-caido\recurso{index}"));
+            match spawn_hung_remote(
+                share,
+                &admissions,
+                entered_tx.clone(),
+                Arc::clone(&release_rx),
+            ) {
+                Ok(worker) => hung.push(worker),
+                Err(ListingStartError::Capacity) => rejected += 1,
+                Err(ListingStartError::Spawn(error)) => panic!("spawn: {error}"),
+            }
+        }
+        for _ in 0..hung.len() {
+            entered_rx
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .unwrap();
+        }
+        assert_eq!(hung.len(), REMOTE_LISTING_SLOTS);
+        assert_eq!(rejected, 8 - REMOTE_LISTING_SLOTS);
+        assert_eq!(admissions.remote().active(), REMOTE_LISTING_SLOTS);
+
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("local.txt"), b"ok").unwrap();
+        let local = admissions.for_path(dir.path(), &AllLocal);
+        assert!(std::ptr::eq(local, admissions.local()));
+        let (rx, worker) = try_spawn_listing_filtered(
+            dir.path().to_path_buf(),
+            CancellationToken::new(),
+            ListingFilter::All,
+            local,
+        )
+        .expect("un disco local no espera detrás de los shares colgados");
+        let (names, outcome) = wait_terminal(&rx);
+        worker.join().unwrap();
+        assert_eq!(names, ["local.txt"]);
+        assert_eq!(outcome, ListingOutcome::Complete);
+        assert_eq!(admissions.local().active(), 0);
+        assert_eq!(admissions.remote().active(), REMOTE_LISTING_SLOTS);
+
+        drop(release_tx);
+        for (_, worker) in hung {
+            worker.join().unwrap();
+        }
+        assert_eq!(admissions.remote().active(), 0);
+    }
+
+    #[test]
+    fn cuatro_shares_colgados_dejan_pasar_al_local_y_el_quinto_remoto_espera_su_turno() {
+        let admissions = ListingAdmissions::default();
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        let release_rx = Arc::new(std::sync::Mutex::new(release_rx));
+        let mut hung = Vec::new();
+        for index in 0..REMOTE_LISTING_SLOTS {
+            let share = PathBuf::from(format!(r"\\?\UNC\servidor-caido\recurso{index}"));
+            hung.push(
+                spawn_hung_remote(
+                    share,
+                    &admissions,
+                    entered_tx.clone(),
+                    Arc::clone(&release_rx),
+                )
+                .unwrap(),
+            );
+        }
+        for _ in 0..REMOTE_LISTING_SLOTS {
+            entered_rx
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .unwrap();
+        }
+
+        // Quinto local: entra de inmediato y termina.
+        let dir = tempfile::tempdir().unwrap();
+        let (rx, worker) = try_spawn_listing_filtered(
+            dir.path().to_path_buf(),
+            CancellationToken::new(),
+            ListingFilter::All,
+            admissions.for_path(dir.path(), &AllLocal),
+        )
+        .unwrap();
+        assert_eq!(wait_terminal(&rx).1, ListingOutcome::Complete);
+        worker.join().unwrap();
+
+        // Quinto remoto: el cupo lo rechaza de forma explícita (la UI lo deja en cola)...
+        let fifth = PathBuf::from(r"\\servidor-lento\quinto");
+        assert!(matches!(
+            try_spawn_listing_filtered(
+                fifth.clone(),
+                CancellationToken::new(),
+                ListingFilter::All,
+                admissions.for_path(&fifth, &AllLocal),
+            ),
+            Err(ListingStartError::Capacity)
+        ));
+        // ...y entra en cuanto un share colgado libera su plaza.
+        release_tx.send(()).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while admissions.remote().active() == REMOTE_LISTING_SLOTS {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "ninguna plaza se liberó"
+            );
+            thread::sleep(std::time::Duration::from_millis(1));
+        }
+        let (rx, worker) =
+            spawn_hung_remote(fifth, &admissions, entered_tx, Arc::clone(&release_rx))
+                .expect("el quinto remoto toma la plaza liberada");
+        entered_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap();
+        drop(release_tx);
+        assert!(matches!(wait_terminal(&rx).1, ListingOutcome::Failed(_)));
+        worker.join().unwrap();
+        for (_, worker) in hung {
+            worker.join().unwrap();
+        }
+        assert_eq!(admissions.remote().active(), 0);
     }
 
     #[test]

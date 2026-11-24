@@ -248,6 +248,21 @@ fn drain(c: &mut WorkspaceCtrl) -> bool {
     false
 }
 
+/// Deja ambos cupos de listado (local y remoto) con una plaza y la ocupa: simula workers que no
+/// terminan sin depender de en qué cupo cae la ruta de la prueba.
+fn saturate_listing_admissions(
+    c: &mut WorkspaceCtrl,
+) -> (
+    naygo_core::listing::ListingPermit,
+    naygo_core::listing::ListingPermit,
+) {
+    c.listing_admissions = naygo_core::listing::ListingAdmissions::new(1, 1);
+    (
+        c.listing_admissions.local().try_acquire().unwrap(),
+        c.listing_admissions.remote().try_acquire().unwrap(),
+    )
+}
+
 #[test]
 fn tree_reveal_termina_si_falta_un_ancestro_tras_listar() {
     let root = tempfile::tempdir().unwrap();
@@ -260,8 +275,7 @@ fn tree_reveal_termina_si_falta_un_ancestro_tras_listar() {
         root.path().to_path_buf(),
     ));
     c.trees.insert(tree, roots);
-    c.listing_admission = naygo_core::listing::ListingAdmission::new(1);
-    let slot = c.listing_admission.try_acquire().unwrap();
+    let slot = saturate_listing_admissions(&mut c);
     let missing = root.path().join("off-line").join("child");
     assert!(c.navigate_tree_to(tree, missing.clone()));
     assert_eq!(c.reveal_targets.get(&tree), Some(&missing));
@@ -417,8 +431,7 @@ fn navegaciones_sin_plaza_coalescen_a_la_ultima_ruta_del_panel() {
     let mut ctrl = WorkspaceCtrl::new_in(work.path().to_path_buf(), config.path().to_path_buf());
     assert!(drain(&mut ctrl));
 
-    ctrl.listing_admission = naygo_core::listing::ListingAdmission::new(1);
-    let held = ctrl.listing_admission.try_acquire().unwrap();
+    let held = saturate_listing_admissions(&mut ctrl);
     let pane = ctrl.active_id().unwrap();
     for index in 0..100 {
         let destination = if index == 99 {
@@ -438,6 +451,109 @@ fn navegaciones_sin_plaza_coalescen_a_la_ultima_ruta_del_panel() {
     assert!(!ctrl.pump_listings());
     assert!(ctrl.listings.contains_key(&pane));
     assert!(drain(&mut ctrl));
+}
+
+/// Cuatro shares colgados ocupan el cupo remoto completo: un quinto listado local entra y termina
+/// igual, y un quinto remoto queda en la cola del panel hasta que se libera una plaza remota.
+#[cfg(windows)]
+#[test]
+fn shares_colgados_no_bloquean_lo_local_y_el_remoto_pendiente_no_se_pierde() {
+    use naygo_core::icon_kind::DriveKind;
+    use naygo_platform::drives::DriveInfo;
+
+    let work = tempfile::tempdir().unwrap();
+    let config = tempfile::tempdir().unwrap();
+    let local_dir = tempfile::tempdir().unwrap();
+    std::fs::write(local_dir.path().join("local.txt"), b"ok").unwrap();
+    let mut ctrl = WorkspaceCtrl::new_in(work.path().to_path_buf(), config.path().to_path_buf());
+    assert!(drain(&mut ctrl));
+
+    let local_letter = naygo_core::path_locality::drive_letter(local_dir.path()).unwrap();
+    // Letra de red ficticia: no existe en el equipo, así que el listado remoto falla rápido en
+    // vez de ir a la red cuando por fin obtiene plaza.
+    let remote_letter = ('M'..='Z')
+        .rev()
+        .find(|letter| *letter != local_letter && !Path::new(&format!("{letter}:\\")).exists())
+        .expect("hay una letra libre para la unidad de red ficticia");
+    let drive = |letter: char, kind| DriveInfo {
+        path: PathBuf::from(format!("{letter}:\\")),
+        label: format!("{letter}:\\"),
+        kind,
+    };
+    ctrl.drive_snapshot = vec![
+        drive(local_letter, DriveKind::Fixed),
+        drive(remote_letter, DriveKind::Network),
+    ];
+    // `drain` espera los listados, no el sondeo de "carpeta no encontrada" del arranque, que
+    // también toma una plaza (remota: sin tabla de unidades, la carpeta inicial contaba como
+    // remota) hasta que su hilo termina. Se espera a que ambos cupos queden libres.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while ctrl.listing_admissions.remote().active() > 0
+        || ctrl.listing_admissions.local().active() > 0
+    {
+        ctrl.pump_missing_probe();
+        assert!(
+            std::time::Instant::now() < deadline,
+            "el sondeo inicial no terminó"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let hung: Vec<_> = (0..naygo_core::listing::REMOTE_LISTING_SLOTS)
+        .map(|_| ctrl.listing_admissions.remote().try_acquire().unwrap())
+        .collect();
+
+    let local_pane = ctrl.active_id().unwrap();
+    ctrl.start_listing(local_pane, local_dir.path().to_path_buf());
+    assert!(
+        ctrl.listings.contains_key(&local_pane),
+        "el listado local no espera al cupo remoto"
+    );
+
+    let remote_pane = ctrl
+        .ws
+        .add_pane(PanePurpose::Files, work.path().to_path_buf());
+    let remote_dir = PathBuf::from(format!("{remote_letter}:\\equipo"));
+    ctrl.start_listing(remote_pane, remote_dir.clone());
+    assert!(!ctrl.listings.contains_key(&remote_pane));
+    assert_eq!(
+        ctrl.pending_file_listings.get(&remote_pane),
+        Some(&remote_dir)
+    );
+
+    for _ in 0..2000 {
+        ctrl.pump_listings();
+        if !ctrl.listings.contains_key(&local_pane) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(!ctrl.listings.contains_key(&local_pane), "el local terminó");
+    let names: Vec<_> = ctrl
+        .ws
+        .pane(local_pane)
+        .and_then(|pane| pane.files.as_ref())
+        .unwrap()
+        .entries
+        .iter()
+        .map(|entry| entry.name.clone())
+        .collect();
+    assert_eq!(names, ["local.txt"]);
+    assert_eq!(
+        ctrl.pending_file_listings.get(&remote_pane),
+        Some(&remote_dir),
+        "el remoto sigue en cola mientras el cupo remoto está lleno"
+    );
+
+    let mut hung = hung;
+    drop(hung.pop());
+    assert!(!ctrl.pump_listings());
+    assert!(!ctrl.pending_file_listings.contains_key(&remote_pane));
+    assert!(
+        ctrl.listings.contains_key(&remote_pane),
+        "el remoto pendiente toma la plaza liberada"
+    );
+    assert!(drain(&mut ctrl));
+    drop(hung);
 }
 
 fn wait_for_workspace_persistence(c: &WorkspaceCtrl) {
@@ -1322,15 +1438,37 @@ fn dialogo_sync_replanifica_al_activar_borrado_de_sobrantes() {
     assert!(c.sync_open());
     assert!(drain_sync(&mut c));
     assert_eq!(c.sync_vm().rows.row_count(), 0, "apagado por defecto");
+    let empty_plan = c.sync_rows_fingerprint();
     c.sync_set_delete_extras(true);
     assert!(c.sync_vm().planning, "el cambio dispara un worker nuevo");
+    let planning = c.sync_rows_fingerprint();
+    assert_ne!(
+        planning, empty_plan,
+        "replanificar cambia la huella de filas"
+    );
     assert!(drain_sync(&mut c));
+    let planned = c.sync_rows_fingerprint();
+    assert_ne!(planned, planning, "llegar el plan cambia la huella");
+    assert_eq!(
+        c.sync_rows_fingerprint(),
+        planned,
+        "sin cambios, la huella es estable (las filas no se rearman por tick)"
+    );
     let vm = c.sync_vm();
     assert!(vm.delete_extras);
     assert_eq!(vm.rows.row_count(), 1);
     let row = vm.rows.row_data(0).unwrap();
     assert!(row.enabled && row.selected);
     assert!(vm.can_apply);
+    c.sync_toggle_item(0);
+    assert_ne!(
+        c.sync_rows_fingerprint(),
+        planned,
+        "marcar una fila cambia la huella"
+    );
+    assert!(!c.sync_rows_vm()[0].selected);
+    c.sync_close();
+    assert_eq!(c.sync_rows_fingerprint(), None);
 }
 
 #[test]
@@ -1568,18 +1706,30 @@ fn rows_signature_detecta_cambios_y_es_estable() {
     let s_cut = c.rows_signature(id, secs, now).unwrap();
     assert_ne!(s_pre_cut, s_cut, "cortar una ruta cambia la firma");
 
-    // Resaltado FRESCO vigente → None (no cachear: el fundido cambia cada tick).
+    // Resaltado FRESCO vigente: la firma lo incluye como CONJUNTO (antes era `None` y cada tick
+    // reconstruía todas las filas). Cambia al empezar, es estable mientras dura y vuelve al
+    // valor previo al vencer.
+    let s_pre_fresh = c.rows_signature(id, secs, now).unwrap();
     c.watchers
         .mark_fresh(id.0, vec![work.path().join("a.txt")], now);
-    assert!(
-        c.rows_signature(id, secs, now).is_none(),
-        "con una fila fresca vigente, la firma es None (no cachear)"
+    let s_fresh = c.rows_signature(id, secs, now).unwrap();
+    assert_ne!(s_pre_fresh, s_fresh, "empezar un resaltado cambia la firma");
+    let mid = now + std::time::Duration::from_millis(secs * 500);
+    assert_eq!(
+        c.rows_signature(id, secs, mid),
+        Some(s_fresh),
+        "mientras el resaltado dura, la firma es estable (cacheable)"
     );
-    // Pasado el tiempo de resaltado, vuelve a ser Some (cacheable de nuevo).
+    assert_eq!(
+        c.rows_context_signature(id, secs, now),
+        c.rows_context_signature(id, secs, mid),
+        "el contexto de deltas no depende del resaltado"
+    );
     let later = now + std::time::Duration::from_secs(secs + 1);
-    assert!(
-        c.rows_signature(id, secs, later).is_some(),
-        "vencido el resaltado, vuelve a ser cacheable"
+    assert_eq!(
+        c.rows_signature(id, secs, later),
+        Some(s_pre_fresh),
+        "vencido el resaltado, vuelve la firma previa"
     );
 }
 

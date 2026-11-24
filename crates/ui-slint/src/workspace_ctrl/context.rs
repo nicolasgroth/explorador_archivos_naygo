@@ -4,6 +4,48 @@
 
 use super::*;
 
+/// Terminales opcionales presentes en el PATH. Detectarlas recorre las carpetas del PATH (I/O
+/// de disco, lento con unidades de red), así que se calcula UNA vez en un worker al arrancar y
+/// el hilo de UI solo lee este resultado. Antes el menú contextual abierto lo recalculaba en
+/// cada tick de `sync_rows`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct TerminalTools {
+    windows_terminal: bool,
+    wsl: bool,
+}
+
+static TERMINAL_TOOLS: std::sync::OnceLock<TerminalTools> = std::sync::OnceLock::new();
+
+fn probe_terminal_tools(
+    slot: &std::sync::OnceLock<TerminalTools>,
+    detect_windows_terminal: impl FnOnce() -> bool,
+    detect_wsl: impl FnOnce() -> bool,
+) {
+    let _ = slot.set(TerminalTools {
+        windows_terminal: detect_windows_terminal(),
+        wsl: detect_wsl(),
+    });
+}
+
+/// Lanza el sondeo de terminales en un hilo propio y despierta la UI al terminar, para que el
+/// siguiente `sync_rows` publique el resultado. Si el hilo no se puede crear, las entradas
+/// quedan ocultas (mismo efecto que no tener las herramientas instaladas).
+pub(crate) fn start_terminal_tools_probe(waker: naygo_platform::dir_watch::Waker) {
+    let spawned = std::thread::Builder::new()
+        .name("naygo-terminal-probe".into())
+        .spawn(move || {
+            probe_terminal_tools(
+                &TERMINAL_TOOLS,
+                naygo_platform::open::windows_terminal_available,
+                naygo_platform::open::wsl_available,
+            );
+            waker();
+        });
+    if let Err(error) = spawned {
+        crate::logging::log_line(&format!("no se inició el sondeo de terminales: {error}"));
+    }
+}
+
 impl WorkspaceCtrl {
     pub(crate) fn take_creation_wait_notice(&mut self) -> bool {
         std::mem::take(&mut self.creation_wait_notice)
@@ -430,8 +472,7 @@ impl WorkspaceCtrl {
     /// Abrir el primer objetivo con su programa por defecto.
     pub fn ctx_open(&mut self) {
         if let Some(p) = self.context_targets().first().cloned() {
-            let result = naygo_platform::open::open_default(&p);
-            self.report_shell_result(result);
+            self.submit_shell(naygo_platform::open::ShellJob::Open(p));
         }
         self.close_context_menu();
     }
@@ -439,8 +480,7 @@ impl WorkspaceCtrl {
     /// Abrir-con… (diálogo del Shell) sobre el primer objetivo.
     pub fn ctx_open_with(&mut self) {
         if let Some(p) = self.context_targets().first().cloned() {
-            let result = naygo_platform::open::open_with_dialog(&p);
-            self.report_shell_result(result);
+            self.submit_shell(naygo_platform::open::ShellJob::OpenWith(p));
         }
         self.close_context_menu();
     }
@@ -449,8 +489,7 @@ impl WorkspaceCtrl {
     pub fn ctx_run_as_administrator(&mut self) {
         if let Some(p) = self.context_targets().first().cloned() {
             if naygo_platform::open::can_run_as_administrator(&p) {
-                let result = naygo_platform::open::run_as_administrator(&p);
-                self.report_shell_result(result);
+                self.submit_shell(naygo_platform::open::ShellJob::RunAsAdministrator(p));
             }
         }
         self.close_context_menu();
@@ -492,74 +531,37 @@ impl WorkspaceCtrl {
     }
 
     pub(crate) fn set_folder_shell_waker(&mut self, waker: naygo_platform::dir_watch::Waker) {
-        self.folder_shell_waker = Some(waker);
+        self.shell.set_waker(waker);
     }
 
-    /// Una plaza sin cola: no acumular hilos si un proveedor de red o Shell queda bloqueado.
     fn start_folder_shell(&mut self, dir: PathBuf, action: naygo_platform::open::FolderAction) {
-        self.pump_folder_shell();
-        if self.folder_shell_rx.is_some() {
-            self.pending_shell_error = Some(self.config.t("path.edit.busy"));
-            if let Some(waker) = &self.folder_shell_waker {
-                waker();
-            }
-            return;
-        }
-        let (tx, rx) = mpsc::channel();
-        let waker = self.folder_shell_waker.clone();
-        let started = std::thread::Builder::new()
-            .name("naygo-folder-shell".into())
-            .spawn(move || {
-                let result = std::panic::catch_unwind(|| {
-                    naygo_platform::open::open_folder_action(&dir, action)
-                })
-                .unwrap_or_else(|_| {
-                    Err(naygo_platform::open::ShellError::Failed(
-                        "Shell worker failed".into(),
-                    ))
-                });
-                let _ = tx.send(result);
-                if let Some(waker) = waker {
-                    waker();
-                }
-            });
-        match started {
-            Ok(_) => self.folder_shell_rx = Some(rx),
-            Err(error) => {
-                self.pending_shell_error = Some(error.to_string());
-                if let Some(waker) = &self.folder_shell_waker {
-                    waker();
-                }
-            }
-        }
+        self.submit_shell(naygo_platform::open::ShellJob::Folder { dir, action });
     }
 
+    /// Recoge los resultados que el worker Shell ya entregó y reporta los errores.
     pub(super) fn pump_folder_shell(&mut self) {
-        let Some(rx) = &self.folder_shell_rx else {
-            return;
-        };
-        match rx.try_recv() {
-            Ok(result) => {
-                self.folder_shell_rx = None;
-                self.report_shell_result(result);
+        for outcome in self.shell.drain() {
+            if outcome.report {
+                self.report_shell_result(outcome.result);
+            } else if let Err(error) = outcome.result {
+                crate::logging::log_line(&format!("operación Shell falló: {error}"));
             }
-            Err(mpsc::TryRecvError::Disconnected) => {
-                self.folder_shell_rx = None;
-                self.pending_shell_error = Some("Shell worker disconnected".into());
-            }
-            Err(mpsc::TryRecvError::Empty) => {}
         }
     }
 
     /// `true` si Windows Terminal (`wt.exe`) está disponible, para decidir si ofrecer la entrada
-    /// "Abrir Windows Terminal aquí" en el menú contextual.
+    /// "Abrir Windows Terminal aquí" en el menú contextual. Lee el resultado del sondeo de
+    /// arranque (`start_terminal_tools_probe`); mientras no termina, vale `false`.
     pub fn windows_terminal_available(&self) -> bool {
-        naygo_platform::open::windows_terminal_available()
+        TERMINAL_TOOLS
+            .get()
+            .is_some_and(|tools| tools.windows_terminal)
     }
 
     /// `true` si WSL (`wsl.exe`) está disponible, para ofrecer la entrada "Abrir WSL aquí".
+    /// Mismo sondeo cacheado que `windows_terminal_available`.
     pub fn wsl_available(&self) -> bool {
-        naygo_platform::open::wsl_available()
+        TERMINAL_TOOLS.get().is_some_and(|tools| tools.wsl)
     }
 
     /// Copiar la ruta del primer objetivo al portapapeles (como texto).
@@ -684,5 +686,25 @@ impl WorkspaceCtrl {
             return false;
         };
         self.open_dir_in_new_pane(dir, area)
+    }
+}
+
+#[cfg(test)]
+mod terminal_tools_tests {
+    use super::*;
+
+    #[test]
+    fn el_sondeo_guarda_el_resultado_una_sola_vez() {
+        let slot = std::sync::OnceLock::new();
+        assert!(slot.get().is_none());
+        probe_terminal_tools(&slot, || true, || false);
+        probe_terminal_tools(&slot, || false, || true);
+        assert_eq!(
+            slot.get(),
+            Some(&TerminalTools {
+                windows_terminal: true,
+                wsl: false
+            })
+        );
     }
 }

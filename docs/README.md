@@ -4,20 +4,21 @@ Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
 
 SPDX-License-Identifier: MIT
 
-Para identificar la instalación y la distribución local vigentes, sus hashes y límites de validación,
-consulta [estado actual](ESTADO-ACTUAL.md). Los hashes de distribución identifican los paquetes
-locales sin firma. La aceptación visual, la matriz de interoperabilidad OLE y los materiales 3MF avanzados
+Para la versión, la rama y la distribución local vigentes, sus hashes y límites de validación,
+consulta [estado actual](ESTADO-ACTUAL.md); los estados anteriores, con sus hashes, están en el
+[estado histórico](evidencia/estado-historico-2026.md). Los hashes de distribución identifican los
+paquetes locales sin firma. La aceptación visual, la matriz de interoperabilidad OLE y los materiales 3MF avanzados
 siguen pendientes; las pruebas concretas ya realizadas se detallan en el estado y el backlog.
 Para la siguiente secuencia de foco y aceptación, ver [plan de foco y validación](plans/2026-11-11-foco-teclado-y-validacion.md).
 
 Registro histórico: la instalación local **0.5.3** quedó actualizada al release disponible el 20 de octubre
 (EXE SHA-256 `868a69dec0f6f79d0e91e54326eb9762cd745921467dd45a72fd5a4000bd2b5a`).
 La actualización preservó los cuatro JSON de usuario y el PDB previo; sus hashes se registran en
-[`VALIDACION-INSTALACION-W06B-2026-10-20.md`](VALIDACION-INSTALACION-W06B-2026-10-20.md). El setup
+[`evidencia/VALIDACION-INSTALACION-W06B-2026-10-20.md`](evidencia/VALIDACION-INSTALACION-W06B-2026-10-20.md). El setup
 y el ZIP de ese momento no tenían firma Authenticode. El 2026-11-01 se hizo una prueba
 interactiva de 7-Zip, en un binario experimental separado; su alcance consta en el backlog.
 La instalación que se comprobó el 2026-11-01 es 0.5.4 del build anterior, no la distribución
-recién generada; ver los hashes en [estado actual](ESTADO-ACTUAL.md).
+recién generada; ver los hashes en el [estado histórico](evidencia/estado-historico-2026.md).
 La comparación W-07 controlada del 20 de octubre dio medianas 100k de 261,7 ms para el binario
 previo y 295,7 ms para el actual (+13,0 %), bajo el umbral orientativo de 15 %. Los dos runs tuvieron
 CPU total muestreada de 12–31 % y más de 44 GiB libres; por ser builds distintos y con actividad de
@@ -26,13 +27,14 @@ matriz local/UNC. La evidencia y JSONL están en [`BENCHMARKS.md`](BENCHMARKS.md
 UI Automation pasiva del build actual encontró 356 descendientes, 120/120 controles enfocables con
 nombre, 69 acciones `Invoke` y cero botones sin ese patrón. Narrador y recorrido manual de diálogos
 siguen pendientes. La evidencia de instalación, preservación y UIA está en
-[`VALIDACION-INSTALACION-W06B-2026-10-20.md`](VALIDACION-INSTALACION-W06B-2026-10-20.md) y
-[`ESTADO-ACTUAL.md`](ESTADO-ACTUAL.md).
+[`evidencia/VALIDACION-INSTALACION-W06B-2026-10-20.md`](evidencia/VALIDACION-INSTALACION-W06B-2026-10-20.md) y
+el [estado histórico](evidencia/estado-historico-2026.md).
 
 ## Orden de lectura para desarrollar
 
-1. [Estado local vigente](ESTADO-ACTUAL.md): base, comprobaciones y límites.
-2. [Backlog](BACKLOG.md): pendientes aprobados y cronología de cierres.
+1. [Estado actual](ESTADO-ACTUAL.md): versión, resumen del último lote, cifras, gate y distribución.
+2. [Backlog](BACKLOG.md): pendientes, corto y priorizado. La cronología de cierres anterior al
+   2026-11-24 está en el [backlog histórico](evidencia/backlog-historico-2026.md).
 3. [Arquitectura](ARQUITECTURA.md): responsabilidades, contratos y puntos de extensión.
 4. [Plan de rutas, preview y configuración](plans/2026-09-09-rutas-preview-y-configuracion.md):
    avances por bloque y mejoras pendientes; no sustituye las capacidades existentes.
@@ -74,7 +76,7 @@ siguen pendientes. La evidencia de instalación, preservación y UIA está en
    de Replace tras terminación abrupta. La actualización vigente del 2026-10-17 incluye la ruta
    abreviada junto a cada favorito; el EXE instalado está abierto y responde como PID 38744, SHA-256
    `357ee82a0a27b2dbae5cecbe35d63a6394e97315fd384cee9db4dd951d2b1561`. Los hashes de portable y
-   setup están en [Validación de favoritos](VALIDACION-FAVORITOS-2026-10-17.md); el gate completo
+   setup están en [Validación de favoritos](evidencia/VALIDACION-FAVORITOS-2026-10-17.md); el gate completo
    pasó 1.447 pruebas (8 ignoradas), Clippy `-D warnings`, formato y empaquetado supervisado.
    La captura pasiva
    histórica posterior al smoke, PID 9204, midió durante 3×30 s 79,1 MiB de working set,
@@ -83,54 +85,54 @@ siguen pendientes. La evidencia de instalación, preservación y UIA está en
    la inspección UIA, sin causa aislada. La hoja de aceptación W-13 para el release 0.5.3 conserva la matriz manual
    pendiente. La
    prioridad vigente es cerrar Windows antes de retomar hitos Linux.
-6. [Validación del visor STL/3MF y distribución Windows, 2026-10-17](VALIDACION-VISOR-3D-2026-10-17.md):
+6. [Validación del visor STL/3MF y distribución Windows, 2026-10-17](evidencia/VALIDACION-VISOR-3D-2026-10-17.md):
    dirección de giro, tooltip de controles, rasterización y build instalado.
-7. [Corrección de la columna Extensión para carpetas y distribución Windows, 2026-10-17](VALIDACION-BUILD-2026-10-17-E1.md).
-8. [Preservación JSON de rutas POSIX y distribución Windows, 2026-10-17](VALIDACION-BUILD-2026-10-17-L01A-JSON.md):
+7. [Corrección de la columna Extensión para carpetas y distribución Windows, 2026-10-17](evidencia/VALIDACION-BUILD-2026-10-17-E1.md).
+8. [Preservación JSON de rutas POSIX y distribución Windows, 2026-10-17](evidencia/VALIDACION-BUILD-2026-10-17-L01A-JSON.md):
    round-trip nativo pendiente de Linux; la distribución 0.5.3 quedó instalada y abierta en Windows.
 9. [Plan Linux Ubuntu LTS y derivados](plans/2026-10-13-linux-ubuntu-luna.md):
    x86_64, capacidades e hitos; L-00 tiene decisiones y dependencia runtime documentadas. El binding
    GLib local pasa typecheck aislado; falta entorno Linux nativo, validar degradación segura, notices del paquete real y
    compatibilidad del menú en GNOME/Wayland. La revisión de autoría/licencias y la verificación de
-   firmas del runtime Ayatana están en [Validación L-00](VALIDACION-L00-AUDITORIA-2026-10-17.md).
-10. [Captura W-07 y UI Automation de la distribución instalada, 2026-10-17](VALIDACION-FAVORITOS-2026-10-17.md).
-11. [Typecheck cruzado del binding Linux GLib y build Windows, 2026-10-17](VALIDACION-L03-CROSS-2026-10-17.md):
+   firmas del runtime Ayatana están en [Validación L-00](evidencia/VALIDACION-L00-AUDITORIA-2026-10-17.md).
+10. [Captura W-07 y UI Automation de la distribución instalada, 2026-10-17](evidencia/VALIDACION-FAVORITOS-2026-10-17.md).
+11. [Typecheck cruzado del binding Linux GLib y build Windows, 2026-10-17](evidencia/VALIDACION-L03-CROSS-2026-10-17.md):
     la UI Linux completa también pasa check/Clippy cruzados desde Windows con Fontconfig dinámico;
     no valida ABI/runtime ni integración con el escritorio.
-12. [Favoritos globales o propios por espacio, gate y build Windows, 2026-10-18](VALIDACION-E4-FAVORITOS-2026-10-18.md):
+12. [Favoritos globales o propios por espacio, gate y build Windows, 2026-10-18](evidencia/VALIDACION-E4-FAVORITOS-2026-10-18.md):
     migración de espacios v1 validada.
-13. [Organización y distribución Windows de la toolbar, 2026-10-18](VALIDACION-TOOLBAR-2026-10-18.md):
+13. [Organización y distribución Windows de la toolbar, 2026-10-18](evidencia/VALIDACION-TOOLBAR-2026-10-18.md):
     reordenación por grupos; falta aceptación visual en pantalla.
-14. [Selector rápido de espacios, gate y build Windows, 2026-10-18](VALIDACION-E4-SELECTOR-2026-10-18.md):
+14. [Selector rápido de espacios, gate y build Windows, 2026-10-18](evidencia/VALIDACION-E4-SELECTOR-2026-10-18.md):
     primera versión con recientes de sesión; el catálogo persistente y su gate están en el informe siguiente.
-15. [Catálogo persistente de recientes, gate y build Windows, 2026-10-18](VALIDACION-E4-CATALOGO-2026-10-18.md):
+15. [Catálogo persistente de recientes, gate y build Windows, 2026-10-18](evidencia/VALIDACION-E4-CATALOGO-2026-10-18.md):
     settings antiguos compatibles, distribución instalada y UIA inspeccionada; aceptación visual pendiente.
-16. [Corrección de errores ReadDir y build Windows, 2026-10-18](VALIDACION-READDIR-2026-10-18.md):
+16. [Corrección de errores ReadDir y build Windows, 2026-10-18](evidencia/VALIDACION-READDIR-2026-10-18.md):
     gate completo, checks cruzados `core`/`platform` para Linux y paquetes locales verificados; no instalados.
-17. [Corrección del ciclo de vida del tray Linux y build Windows, 2026-10-18](VALIDACION-L03-CROSS-2026-10-17.md):
+17. [Corrección del ciclo de vida del tray Linux y build Windows, 2026-10-18](evidencia/VALIDACION-L03-CROSS-2026-10-17.md):
     typecheck/Clippy del harness y gate Windows aprobados; distribución regenerada y verificada sin instalar.
-18. [L-05: capacidad de elevación sólo en Windows y build Windows, 2026-10-18](VALIDACION-L05-ADMIN-2026-10-18.md):
+18. [L-05: capacidad de elevación sólo en Windows y build Windows, 2026-10-18](evidencia/VALIDACION-L05-ADMIN-2026-10-18.md):
     1.453 pruebas (8 ignoradas), Clippy, formato y paquete supervisado con hashes verificados.
-19. [Revisión UI Automation de la instancia abierta, 2026-10-18](VALIDACION-UIA-2026-10-18.md):
+19. [Revisión UI Automation de la instancia abierta, 2026-10-18](evidencia/VALIDACION-UIA-2026-10-18.md):
     un `Edit` enfocable sin nombre en un binario anterior; el editor de texto del preview ya tiene
     etiqueta localizada; 1.455 pruebas y distribución pasaron, falta repetir UIA/Narrador con sesión
     desbloqueada.
-20. [Accesibilidad de toolbar y unidades, 2026-10-18](VALIDACION-W13-TOOLBAR-2026-10-18.md):
+20. [Accesibilidad de toolbar y unidades, 2026-10-18](evidencia/VALIDACION-W13-TOOLBAR-2026-10-18.md):
     roles, nombres y acciones accesibles en botones personalizados; gate completo aprobado, queda
     comprobación real con Narrador y UIA.
-21. [L-05: abrir con el escritorio Linux por defecto, 2026-10-18](VALIDACION-L05-OPEN-2026-10-18.md):
+21. [L-05: abrir con el escritorio Linux por defecto, 2026-10-18](evidencia/VALIDACION-L05-OPEN-2026-10-18.md):
     argv sin shell y rutas POSIX conservadas; falta ejecutar el flujo en Ubuntu 26.04.
-22. [L-01B: renombrado seguro del destino en conflicto, 2026-10-18](VALIDACION-L01B-RENAME-2026-10-18.md):
+22. [L-01B: renombrado seguro del destino en conflicto, 2026-10-18](evidencia/VALIDACION-L01B-RENAME-2026-10-18.md):
     gate y distribución Windows verificados; la prueba Unix se compiló cruzada, queda ejecutarla en Linux nativo.
-23. [W-17: renombrar sin reemplazar y build Windows, 2026-10-18](VALIDACION-W17-RENAME-2026-10-18.md):
+23. [W-17: renombrar sin reemplazar y build Windows, 2026-10-18](evidencia/VALIDACION-W17-RENAME-2026-10-18.md):
     carrera de destino cubierta, cambio de mayúsculas/minúsculas Windows conservado; gate, check Linux cruzado
     y distribución supervisada aprobados. Build no instalada.
-24. [E-6: toolbar adaptable y Espacios separado de Disposiciones, 2026-10-18](VALIDACION-E6-TOOLBAR-RESPONSIVE-2026-10-18.md):
+24. [E-6: toolbar adaptable y Espacios separado de Disposiciones, 2026-10-18](evidencia/VALIDACION-E6-TOOLBAR-RESPONSIVE-2026-10-18.md):
     gate completo y check/Clippy Linux cruzados aprobados; distribución Windows regenerada y verificada.
     La aceptación visual y UIA/Narrador siguen pendientes.
-25. [L-08 y build/instalación Windows 0.5.3, 2026-10-19](VALIDACION-L08-INSTANCE-2026-10-19.md):
+25. [L-08 y build/instalación Windows 0.5.3, 2026-10-19](evidencia/VALIDACION-L08-INSTANCE-2026-10-19.md):
     gate Windows y compilación cruzada Linux aprobados; runtime Linux nativo pendiente por WSL no disponible.
-26. [Comparación UTF-16 de rutas de Papelera Windows, 2026-10-19](VALIDACION-WINDOWS-TRASH-UTF16-2026-10-19.md):
+26. [Comparación UTF-16 de rutas de Papelera Windows, 2026-10-19](evidencia/VALIDACION-WINDOWS-TRASH-UTF16-2026-10-19.md):
     regresión reproducida y corregida; gate y build supervisado aprobados. Build aún no instalada.
 
 ## Uso del producto
@@ -143,30 +145,40 @@ siguen pendientes. La evidencia de instalación, preservación y UIA está en
 ## Construcción y calidad
 
 - [Compilar y empaquetar](BUILD.md)
-- [Auditoría de espacio y compilación de menor consumo](VALIDACION-BUILD-2026-09-14.md)
-- [Build supervisado de distribución, 2026-10-13](VALIDACION-BUILD-2026-10-13.md)
-- [Build supervisado y métricas W-07, 2026-10-14](VALIDACION-BUILD-2026-10-14.md)
-- [Validación del build 0.5.2, 2026-10-15](VALIDACION-BUILD-2026-10-15.md)
-- [Validación del build 0.5.2 y smoke portable, 2026-10-16](VALIDACION-BUILD-2026-10-16.md)
-- [Hoja de aceptación Windows 0.5.2, actualizada 2026-10-16](VALIDACION-WINDOWS-0.5.2-2026-10-15.md)
-- [W-06B: lectura de portapapeles al pegar fuera del hilo UI, 2026-10-20](VALIDACION-W06B-PASTE-CLIPBOARD-2026-10-20.md)
+- [Auditoría de espacio y compilación de menor consumo](evidencia/VALIDACION-BUILD-2026-09-14.md)
+- [Build supervisado de distribución, 2026-10-13](evidencia/VALIDACION-BUILD-2026-10-13.md)
+- [Build supervisado y métricas W-07, 2026-10-14](evidencia/VALIDACION-BUILD-2026-10-14.md)
+- [Validación del build 0.5.2, 2026-10-15](evidencia/VALIDACION-BUILD-2026-10-15.md)
+- [Validación del build 0.5.2 y smoke portable, 2026-10-16](evidencia/VALIDACION-BUILD-2026-10-16.md)
+- [Hoja de aceptación Windows 0.5.2, actualizada 2026-10-16](evidencia/VALIDACION-WINDOWS-0.5.2-2026-10-15.md)
+- [W-06B: lectura de portapapeles al pegar fuera del hilo UI, 2026-10-20](evidencia/VALIDACION-W06B-PASTE-CLIPBOARD-2026-10-20.md)
 - [Distribución, símbolos y pruebas aisladas](DISTRIBUTION.md)
 - [Code signing policy (política de firma de código) y estado SignPath](POLITICA-DE-FIRMA.md)
 - [Pruebas automáticas y manuales](PRUEBAS.md)
 - [Mediciones de rendimiento](BENCHMARKS.md)
-- [Validación de 0.5.2: selección, creación y refresco](VALIDACION-0.5.2.md)
-- [Validación de 0.5.3, gate e instalación Windows, 2026-10-19](VALIDACION-0.5.3-2026-10-19.md)
-- [Validación RP-5B: modo económico y retención del preview](VALIDACION-RP5B-2026-09-10.md)
-- [Validación RP-4B2: texto/3D aislados y memoria temporal](VALIDACION-RP4B2-2026-09-14.md)
-- [Validación de rutas RP-1 del 9 de septiembre](VALIDACION-2026-09-09.md)
-- [Validación de ruta superior RP-2 del 9 de septiembre](VALIDACION-RP2-2026-09-09.md)
-- [Validación de temas y configuración RP-3 del 9 de septiembre](VALIDACION-RP3-2026-09-09.md)
-- [Validación de cancelación y concurrencia RP-4A del 9 de septiembre](VALIDACION-RP4A-2026-09-09.md)
-- [Validación de lectores aislados RP-4B1 del 9 de septiembre](VALIDACION-RP4B1-2026-09-09.md)
-- [Validación de animación de imágenes RP-5A del 9 de septiembre](VALIDACION-RP5A-2026-09-09.md)
-- [Validación de la entrega del 7 de septiembre](VALIDACION-2026-09-07.md)
-- [Validaciones previas de 0.5.1](VALIDACION-0.5.1.md)
+- [Validación de 0.5.2: selección, creación y refresco](evidencia/VALIDACION-0.5.2.md)
+- [Validación de 0.5.3, gate e instalación Windows, 2026-10-19](evidencia/VALIDACION-0.5.3-2026-10-19.md)
+- [Validación RP-5B: modo económico y retención del preview](evidencia/VALIDACION-RP5B-2026-09-10.md)
+- [Validación RP-4B2: texto/3D aislados y memoria temporal](evidencia/VALIDACION-RP4B2-2026-09-14.md)
+- [Validación de rutas RP-1 del 9 de septiembre](evidencia/VALIDACION-2026-09-09.md)
+- [Validación de ruta superior RP-2 del 9 de septiembre](evidencia/VALIDACION-RP2-2026-09-09.md)
+- [Validación de temas y configuración RP-3 del 9 de septiembre](evidencia/VALIDACION-RP3-2026-09-09.md)
+- [Validación de cancelación y concurrencia RP-4A del 9 de septiembre](evidencia/VALIDACION-RP4A-2026-09-09.md)
+- [Validación de lectores aislados RP-4B1 del 9 de septiembre](evidencia/VALIDACION-RP4B1-2026-09-09.md)
+- [Validación de animación de imágenes RP-5A del 9 de septiembre](evidencia/VALIDACION-RP5A-2026-09-09.md)
+- [Validación de la entrega del 7 de septiembre](evidencia/VALIDACION-2026-09-07.md)
+- [Validaciones previas de 0.5.1](evidencia/VALIDACION-0.5.1.md)
 - [Protección de main](PROTEGER-RAMA-MAIN.md)
+
+## Evidencia e históricos
+
+- [`evidencia/`](evidencia/): los registros de validación `VALIDACION-*` (gates, builds,
+  instalaciones, UIA), fechados.
+- [Backlog histórico](evidencia/backlog-historico-2026.md) y
+  [estado histórico](evidencia/estado-historico-2026.md): las bitácoras completas hasta el
+  2026-11-24, congeladas. Lo vigente está en [BACKLOG.md](BACKLOG.md) y
+  [ESTADO-ACTUAL.md](ESTADO-ACTUAL.md).
+- [Plan 0.5.7: integridad, build y documentación](plans/2026-11-21-integridad-build-y-docs.md).
 
 ## Cómo interpretar y mantener estos documentos
 
@@ -180,6 +192,6 @@ El [plan de septiembre anterior](plans/2026-09-04-usabilidad-y-flujos-de-trabajo
 sus pendientes de aceptación; no quedó anulado por el nuevo plan.
 
 Después de una funcionalidad: comentar decisiones y límites en el módulo afectado, actualizar
-su guía, marcar el bloque en el backlog y registrar la validación. Actualizar `CHANGELOG.md`
+su guía, quitar el ítem del backlog y registrar la validación en `evidencia/`. Actualizar `CHANGELOG.md`
 cuando cambie el producto (se incorpora en Acerca de); no anunciar futuras prestaciones como
 entregadas. Una actualización sólo documental no exige alterar la versión o reconstruir el EXE.

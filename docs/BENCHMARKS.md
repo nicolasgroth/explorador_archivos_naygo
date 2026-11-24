@@ -3,7 +3,334 @@
 Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
 SPDX-License-Identifier: MIT
 
-### W-07 y vista profunda — perfil Release 0.5.6, 2026-11-21
+## T13 — listados grandes, 2026-11-22
+
+Causa: con una carpeta de 100k abierta, cada cambio dentro de ella costaba un núcleo completo durante
+el resaltado de 8 s. Mientras hubiera una ruta fresca, `rows_signature` devolvía `None` y cada tick
+de 30 ms reconstruía, convertía y comparaba las 100 020 filas, aunque `highlight` es un `bool` que no
+cambia hasta que vence. Además, cualquier alta o baja fuera de los dos deltas existentes construía
+las n filas (cadenas + `VecModel` de celdas por fila) y el modelo se reconciliaba con
+`remove`/`insert` de a una fila.
+
+Cambios (commits `fbaecbcc`, `5cee42f0`):
+
+- La firma de filas incluye el CONJUNTO de rutas frescas vigentes, que solo cambia al empezar o
+  vencer un resaltado. Mientras dura, el tick no reconstruye nada. El tick ya no sigue a 30 ms solo
+  para apagar el resaltado: duerme hasta el próximo vencimiento.
+- `RowsModel` (`impl slint::Model` sobre `Vec<RowData>`) avisa por tramo (`row_added(i, n)` /
+  `row_removed(i, n)`), sin `reset`. Guarda una clave por fila (identidad + contenido, solo enteros).
+  `sync_rows` compara claves y construye solo las filas que entran o cambian.
+- Core: `entries_appended` intercala las entradas nuevas en la vista vigente por búsqueda binaria
+  en vez de reordenar todo. `cmp_name` compara nombres ASCII sin alocar. Un lote del watcher solo de
+  altas se avisa como append.
+- El delta de filas modificadas busca las rutas por nombre final, sin hashear las 100k rutas.
+
+### `w10c_headless_sync_measurement`, 100k filas, release (ms)
+
+Antes: mediana de tres pasadas de la línea base 0.5.6 (`79b99963`, sección "W-07 y vista profunda"
+de abajo; mismo harness). Después: mediana de tres pasadas de `5cee42f0`.
+
+| Paso | 10k antes | 10k después | 100k antes | 100k después |
+| :--- | ---: | ---: | ---: | ---: |
+| Sync inicial | 28,27 | 29,61 | 286,34 | 311,87 |
+| Sync sin cambios | 0,153 | 0,033 | 1,617 | 0,055 |
+| Actualizar una fila | 2,80 | 0,375 | 28,54 | 3,80 |
+| Anexar una fila | 2,17 | 0,515 | 22,26 | 4,14 |
+| Alta en el medio | — | 1,22 | — | 13,36 |
+| Empieza resaltado | — | 1,34 | — | 12,10 |
+| Tick con resaltado vigente | — | 0,034 | — | 0,053 |
+| Raster software | 1,530 | 1,948 | 1,563 | 1,579 |
+
+Pasadas de 100k (después): una fila 3,80 · 7,77 · 3,36; append 3,93 · 5,40 · 4,14; alta en el medio
+13,01 · 14,53 · 13,36. Crudos: `target/bench-runtime/raw-t13/w10c-release-after.txt`. El test
+release compiló en 15m59s (incremental sobre el release del exe).
+
+Las tres columnas nuevas no existían en el harness anterior. "Alta en el medio" agrega una entrada
+que el orden por nombre intercala en la mitad. "Empieza resaltado" marca esa ruta como fresca, como
+hace el watcher tras un alta. "Tick con resaltado" es la mediana de cinco `sync_rows` seguidos con
+el resaltado vigente.
+
+Antes/después de esas columnas en perfil `test` (debug, mediana de tres pasadas, 100k, mismo
+harness extendido aplicado también sobre la base): alta en el medio 2389 → 196 ms; empieza resaltado
+2429 → 212 ms; tick con resaltado 2082 → 0,48 ms (era una reconstrucción completa por tick). En ese
+mismo perfil: sin cambios 43 → 0,38 ms, una fila 381 → 16 ms y append 128 → 7,8 ms. Crudos:
+`target/bench-runtime/raw-t13/w10c-dev-{before,after}-ext.txt`.
+
+- La meta de < 3 ms en "una fila" y "anexar" a 100k NO se alcanzó: 3,80 y 4,14 ms (antes 28,54 y
+  22,26; ~7× y ~5×). Lo que queda: el delta de filas modificadas recorre la vista buscando la ruta
+  (cada entrada desreferencia su ruta en el heap) y el primer append tras el llenado realoca el
+  `Vec<RowData>` de 100k filas (crece al doble). Ver propuestas en el informe de T13.
+- Alta en el medio y cambio de resaltado cuestan ~12–13 ms con 100k: son O(n) en claves enteras (sin
+  construir filas). Antes eran una reconstrucción completa de las n filas (en debug 2,4 s contra
+  0,17 s).
+- El llenado inicial sube ~9 % (286 → 312 ms) porque además calcula las claves de las 100k filas.
+
+### Proceso real, release (proceso raíz)
+
+Antes = exe `83cf3638` (T12, sin cambios de filas desde entonces); después = `5cee42f0`. Misma
+configuración portable (disposición clásica), `NAYGO_DEBUG_MULTI_INSTANCE=1`, una instancia tras
+otra. Fixture: 100 000 archivos vacíos + 20 carpetas. Los "antes" corrieron con una compilación
+`cargo test` (1 job) en paralelo. Los "después" corrieron sin compilación en paralelo.
+
+| Escenario | CPU antes | CPU después | WS antes → después (MiB) | Private antes → después (MiB) |
+| :--- | :--- | :--- | ---: | ---: |
+| Crear un archivo en la carpeta de 100k, CPU de los 12 s siguientes (2 eventos) | 8,09 · 11,80 s | 0,22 · 0,22 s | 256,2 → 176,1 | 248,7 → 156,6 |
+| 2. Home idle, 5 ventanas de 20 s | 0,28 · 0,47 · 0,03 · 0,31 · 0,09 s | 0,14 · 0,11 · 0 · 0,05 · 0,05 s | 58,2 → 58,5 | 27,3 → 27,4 |
+| 3. 100k + home, 4 ventanas de 20 s tras 60 s | 15,31 (listado) · 0,97 · 1,38 · 0,02 s | 0,02 · 0,03 · 0,06 · 0,03 s | 182,7 → 174,2 | 165,4 → 155,3 |
+
+Notas:
+
+- El evento en la carpeta de 100k baja de ~12 s de CPU por cada 12 s a 0,22 s (~50×). La memoria
+  tras el evento deja de crecer ~80 MiB: antes cada tick armaba un `Vec` nuevo de 100k filas y el
+  heap quedaba con ese pico. Ahora queda igual que en reposo.
+- En el escenario 3 el listado inicial de 100k ya terminó dentro de los 60 s de espera (antes se
+  comía la primera ventana con 15 s de CPU). Es el append incremental de la vista: cada lote del
+  listado ya no reordena las entradas acumuladas.
+- Memoria por fila (escenario 3 menos escenario 2): ~128 MiB por 100k → ~1,3 KiB por fila (antes
+  ~1,4 KiB). La ganancia viene de compartir el `SharedString` del nombre con su celda y de no
+  re-crear filas. `RowsModel` agrega 16 bytes de clave por fila (1,5 MiB por 100k).
+- Los escenarios 2 y 3 dependen de cuándo otra app escribe en home: comparan la forma, no un valor
+  exacto.
+
+### Cierre del lote — medición final, 2026-11-24
+
+Commit medido: `d68cee5e` (rama `fix/integridad-build-0.5.7`; el commit posterior `8c842f8f` solo cambió
+docs, así que el exe es el mismo). Versión que muestra el binario: `0.5.6+build.202611240518`. Release
+`target/release/naygo.exe` compilado el 2026-11-24 05:39, copiado a `target/bench-runtime/app-final/`
+(config portable aislada), lanzado con `NAYGO_DEBUG_MULTI_INSTANCE=1`, una instancia tras otra y sin
+compilaciones en paralelo. Mismo equipo y método que la línea base y T12/T13: configuración portable de
+disposición clásica, `scripts/capture-w07-process.ps1` con ventanas de 20 s y solo los campos del proceso
+raíz, fixture de 100 000 archivos vacíos + 20 carpetas (100 020 elementos). El Naygo instalado del autor
+corría en paralelo y no se tocó.
+
+| # | Escenario | WS (MiB) | Private (MiB) | CPU por ventana de 20 s | Muestras |
+|---|-----------|----------|---------------|-------------------------|----------|
+| 1 | Arranque `--tray`, sin ventana | 45,4 | 18,2–18,3 | 0 · 0,03 · 0 s | 3 ventanas, 25 s tras arrancar |
+| 2 | Ventana idle en home | 54,9–56,6 | 23,7–24,6 | 0,31 · 0,05 · 0 · 0 · 0,02 s | 5 ventanas, 30 s tras arrancar |
+| 3 | 100k recién listada y estable (el otro panel en home) | 172,6–172,7 | 150,7 | 0,02 · 0 · 0 · 0 s | 4 ventanas, 60 s tras arrancar |
+| 4 | La misma tras 10 min idle | 172,8 | 150,7 | 0,03 · 0,06 · 0,09 s | 3 ventanas, ~9 min tras las del escenario 3 |
+| 5 | Evento (crear un archivo) en la carpeta de 100k | 174,0–174,1 | 151,6 | 0,22 · 0,22 · 0,22 s en los 12 s siguientes | 3 eventos; 12 s en reposo antes: 0,05 s |
+| 5 de la línea base | Tras 20 previews | no medido | no medido | — | ver nota |
+| 6 de la línea base | Panel de operaciones con historial | no medido | no medido | — | ver nota |
+
+Handles 357–366 e hilos 18–24 en los escenarios con ventana; 343–348 handles y 19–23 hilos en `--tray`.
+
+### Comparación: línea base → tras T12/T13 → final
+
+| Escenario | Línea base (`aad0ac9f`) | Tras T12/T13 | Final (`d68cee5e`) |
+| :--- | :--- | :--- | :--- |
+| 1. `--tray`: WS / Private (MiB) | 46,5 / 20,9–21,0 | no se repitió | 45,4 / 18,2–18,3 |
+| 2. Home idle: WS / Private (MiB) | 56,2–59,2 / 25,8–28,0 | 58,5 / 27,4 | 54,9–56,6 / 23,7–24,6 |
+| 2. Home idle: CPU por ventana (s) | 5,33 · 2,14 · 1,86 · 0 · 4,47 | 0,14 · 0,11 · 0 · 0,05 · 0,05 (T13); 0,66 · 0,72 · 0,02 · 0,02 · 0,64 (T12) | 0,31 · 0,05 · 0 · 0 · 0,02 |
+| 3. 100k estable: WS / Private (MiB) | 183,6–185,1 / 166,1–167,1 | 174,2 / 155,3 | 172,6–172,7 / 150,7 |
+| 4. 100k tras 10 min: WS / Private (MiB) | 186,8 / 167,6 | no se repitió | 172,8 / 150,7 |
+| 5. Evento en 100k: CPU en 12 s (s) | ~12 (11,67 · 12,06 en T12) | 0,22 · 0,22 | 0,22 · 0,22 · 0,22 |
+| 5. Evento en 100k: WS / Private (MiB) | 252,7 / 245,4 | 176,1 / 156,6 | 174,1 / 151,6 |
+
+Lectura: las mejoras de T12 y T13 se mantienen en el binario final. El CPU en idle sigue en el rango
+de décimas de segundo por ventana (base: hasta 5,3 s), el evento en la carpeta de 100k sigue costando
+0,22 s por cada 12 s (base: ~12 s, un núcleo completo) y la memoria con 100k queda en 150,7 MiB
+privados (base: 166–167; T13: 155,3). No hay regresión frente a T12/T13 en ninguna cifra; la memoria
+es 1–5 MiB menor en todos los escenarios. En 10 min de reposo no crece (150,7 → 150,7 MiB privados).
+
+Salvedades de calidad de la medición:
+
+- Una sola corrida por escenario, sin repetir. Los escenarios 2 y 3 dependen de cuándo otra app escribe
+  en home: la sesión de Claude Code del autor reescribe `%USERPROFILE%\.claude.json` cada 15–25 s, causa
+  conocida de las ráfagas de CPU en idle (aquí solo 0,31 s en la primera ventana). Es parte de la línea
+  base realista y no se intentó suprimir. Comparan la forma, no un valor exacto.
+- A los 60 s el listado de 100k ya había terminado, así que no se capturó su CPU ni su pico de memoria
+  (la línea base midió un pico de 239–252 MiB de WS y ~15 s de CPU). No hay cifra final de ese pico.
+- Handles algo mayores que en T13 (357–366 contra 333–342); no se investigó. Que el listado ya no siga
+  enlaces (el tipo de un enlace sale del propio enlace) no movió estas cifras de forma visible.
+- No medido: "tras 20 previews" y "panel de operaciones con historial". Siguen sin poder automatizarse:
+  Bitdefender bloquea el envío de teclas y no hay acción UIA equivalente para cargar el preview ni para
+  copiar entre paneles; no se reintentaron más allá de lo ya documentado en la línea base.
+- `NAYGO_DEBUG_MULTI_INSTANCE=1` omite la recuperación de Reemplazar y la reanudación del diario en
+  la instancia de prueba, así que esos costos de arranque no entran en estas cifras.
+- Crudos: `target/bench-runtime/raw-final/` (sin versionar); fixture borrada al terminar.
+
+## T12 — después de modelos persistentes, 2026-11-21
+
+Causa de las ráfagas de CPU en idle de la línea base (abajo): cada archivo nuevo o modificado en una
+carpeta abierta (en la carpeta personal, el `.claude.json` que otra app reescribe cada ~15–25 s)
+activa el resaltado de 8 s, y durante ese tiempo el tick de 30 ms sigue vivo. En cada tick
+`sync_rows` creaba `ModelRc` nuevos; como `ModelRc` se compara por puntero, `ColumnMenuVm` y
+`BatchRenameVm` (overlays de ventana completa) cambiaban siempre y los paneles Propiedades y Vista
+previa se re-asignaban sin condición, así que el renderer por software repintaba la ventana en cada
+tick. Evidencia: el CPU era 100 % del hilo `main` (muestreo por hilo, ráfagas de 2,0 s de CPU cada 2 s
+durante ~8 s), cada ráfaga empezaba en el segundo en que cambiaba el `.claude.json`, y con
+contadores temporales (build dev) el tick en sí sumaba ~60–160 ms por cada 5 s: el resto era render.
+Al apagar esos tres orígenes en el build de diagnóstico, el CPU tras un evento bajó de 8,3 s a 0,8 s por
+cada 12 s; cada uno por separado bastaba para saturar el núcleo.
+
+Método: mismo equipo; release `75f2c09c`+`83cf3638` (después) contra el exe de la línea base `aad0ac9f`
+(antes), los dos lanzados uno tras otro con la misma configuración portable (disposición clásica:
+árbol, dos Files, Propiedades, Vista previa) y `NAYGO_DEBUG_MULTI_INSTANCE=1`. Captura con
+`scripts/capture-w07-process.ps1`, ventanas de 20 s, campos del proceso raíz. Los eventos controlados
+crean un archivo en la carpeta abierta y miden el CPU del proceso en los 12 s siguientes. Fixture de
+100k: 100 000 archivos vacíos + 20 carpetas (100 020 elementos).
+
+| Escenario | CPU antes (s por ventana) | CPU después (s por ventana) | WS antes → después (MiB) | Private antes → después (MiB) |
+| :--- | :--- | :--- | ---: | ---: |
+| 2. Ventana idle en home, 5 ventanas de 20 s | 5,33 · 2,14 · 1,86 · 0 · 4,47 | 0,66 · 0,72 · 0,02 · 0,02 · 0,64 | 56,0 → 55,1 | 24,9 → 23,8 |
+| 3. 100k en un panel y home en el otro, 4 ventanas de 20 s tras 60 s | 12,20 (listado) · 0 · 5,55 · 0 | 8,45 (listado) · 1,25 · 0,03 · 0,02 | 186,7 → 181,5 | 170,1 → 163,5 |
+| Evento en una carpeta de 40 archivos, 3 eventos de 12 s | 6,38 · 5,33 · 5,00 | 0,69 · 0,55 · 0,38 | 55,4 → 56,1 | 24,3 → 25,3 |
+| Evento en la carpeta de 100k, 2 eventos de 12 s | 11,67 · 12,06 | 11,70 · 12,05 | 252,7 → 251,7 | 245,4 → 244,3 |
+
+Notas:
+
+- Las ventanas de los escenarios 2 y 3 no controlan cuándo llega un cambio a home, así que comparan la
+  forma (ráfagas de 2–5,5 s antes, <1,3 s después) y no un valor exacto. Los eventos controlados sí
+  son comparables uno a uno: ~10× menos CPU tras un cambio en una carpeta chica.
+- La memoria no cambia de forma apreciable: las diferencias de 1–7 MiB caen dentro de la variación entre
+  corridas de la línea base.
+- Pendiente: un cambio dentro de una carpeta de 100k sigue costando un núcleo completo durante el
+  resaltado. Con el resaltado vigente la firma de filas no cachea (`rows_signature` devuelve `None`) y
+  cada tick reconstruye las 100 020 filas, aunque `highlight` es un `bool` que no cambia hasta que vence.
+  No es de modelos: queda para una tarea posterior.
+
+## Memoria en ejecución — línea base, 2026-11-21
+
+Commit medido: `aad0ac9f` (rama `fix/integridad-build-0.5.7`, versión 0.5.6), release con
+`debuginfo = "line-tables-only"`, render por software. Máquina: AMD Ryzen 7 1700X (8 núcleos, 16
+hilos), 63,9 GiB de RAM, Windows 10 Home 19045; en el mismo PC corría el Naygo instalado del autor,
+que no se tocó. El exe se copió a `target/bench-runtime/app/` (config portable aislada) y se lanzó
+siempre con `NAYGO_DEBUG_MULTI_INSTANCE=1`. Captura con `scripts/capture-w07-process.ps1` sobre el PID
+lanzado (ventanas de 20 s, observación cada 2 s); se reportan solo los campos del proceso raíz
+(`working_set_mib`, `private_mib`). Fixture: 100 000 archivos vacíos con nombres variados más 20
+subcarpetas (la UI reportó 100 020 elementos).
+
+| # | Escenario | Working set (MiB) | Private Bytes (MiB) | Muestras |
+|---|-----------|-------------------|---------------------|----------|
+| 1 | Arranque `--tray`, sin ventana | 46,5–46,6 | 20,9–21,0 | 3 ventanas, ~25 s tras arrancar |
+| 2 | Ventana idle en carpeta home | 56,2–59,2 | 25,8–28,0 | 5 ventanas (3 + 2), ~30 s a ~2 min tras arrancar |
+| 3 | 100k recién listada y estable | 183,6–185,1 (pico 239–252 durante el listado) | 166,1–167,1 (pico 229–241) | 2 corridas independientes, ventana estable de 20 s cada una |
+| 4 | La misma tras 10 min idle | 186,8 | 167,6 | 3 ventanas, ~10 min después de la estable |
+| 5 | Tras 20 previews | no medido de forma fiable | no medido de forma fiable | ver nota |
+| 6 | Panel de operaciones con historial | no medido | no medido | ver nota |
+
+Detalle de las corridas (WS / Private al inicio→fin de cada ventana): escenario 3, corrida 1:
+252,2→231,5 / 240,9→221,5, luego 231,4→185,1 / 221,6→167,1, luego 185,1 / 167,1 estable. Corrida 2
+(otro proceso, el mismo que después se midió en el escenario 4): 239,1→204,5, 229,9→183,6,
+183,6 / 166,1 estable. Escenario 4, tras
+~10 min: 186,8 / 167,6 en las tres ventanas. Handles 336–342 e hilos 17–21 en todos los escenarios
+con ventana; 318–323 handles en `--tray`. JSON crudos en `target/bench-runtime/raw/` (sin versionar).
+
+Escenario 5 (intento, no concluyente): se abrió `crates/ui-slint/src` y se seleccionaron 20 archivos
+`.rs` por UI Automation (`SelectionItemPattern`), porque Bitdefender bloquea el envío de teclas. El WS
+raíz pasó de 60,9 a 74,1 MiB y el Private de 29,4 a 32,5 MiB, pero no se pudo confirmar que la
+selección vía UIA dispare la carga real del preview (hay un panel «Vista previa», sin contenido
+legible por UIA) y la propia sesión UIA puede inflar la memoria. Esas cifras son solo orientativas;
+no se atribuyen a los previews. Escenario 6: no medido; copiar 50 archivos entre paneles exige
+selección + portapapeles/atajos o arrastre, que no se pudo automatizar de forma fiable con teclas
+bloqueadas y sin una acción UIA equivalente.
+
+Tiempos de listado con `NAYGO_PERF_METRICS=1`: no se obtuvo nada. `metrics.rs` solo agrupa los trabajos
+`preview`, `path_validation` y `pack`, y vuelca el resumen al cerrar; el listado no está instrumentado
+y el proceso se terminó con `Stop-Process` (el cierre de ventana lo envía a la bandeja). Lo único
+observable del listado es el CPU: unos 18–19 s de CPU del proceso en los primeros ~40 s tras abrir las
+100 020 entradas.
+
+Notas de calidad de la medición:
+
+- El campo `tree_*` y `process_count` del script no son fiables en esta máquina: con PIDs reutilizados
+  por Windows el árbol incluyó procesos ajenos (un IDE) y sumó >2 GiB. Por eso solo se usan los campos
+  del proceso raíz. En los escenarios 1–4 el conteo fue 1 proceso.
+- Aparecen ráfagas de CPU de 5–7,5 s dentro de una ventana de 20 s con memoria plana (p. ej. escenario 2,
+  y una ventana a los 10 min en el escenario 4); las demás ventanas marcan ~0. No se investigó la causa.
+- El Naygo instalado del autor corría en paralelo (hotkey global ocupado, tolerado por la segunda
+  instancia), por lo que hubo ruido de fondo de la máquina.
+
+Conclusión (solo con estos datos): el arranque en bandeja cuesta ~21 MiB privados y abrir la ventana
+sube a ~28 MiB, así que el piso es bajo. Lo que domina es el tamaño de la carpeta: 100 020 entradas
+agregan ~139 MiB privados (~1,4 KiB por fila) y ~126 MiB de WS sobre la ventana idle, mientras que el
+pico durante el listado (~240–250 MiB) supera en ~70–80 MiB al valor estable. En idle no hay
+crecimiento en 10 min (167,1→167,6 MiB privados), así que no se ve fuga a esa escala; los previews y
+el historial de operaciones quedan sin cuantificar. Primer objetivo para T12/T13: costo por fila y
+pico transitorio del listado.
+
+## Compilación — perfiles con line-tables-only, 2026-11-21
+
+Mismo método y equipo (`scripts/measure-build.ps1`, `CARGO_BUILD_JOBS=1`, `rustc 1.96.0`) sobre
+`086030c2` más los cambios de perfil. Dev: `[profile.dev.package.naygo-ui-gen]` probado con
+`debug = "line-tables-only"` y con `debug = false`; se conserva `false` (menor pico). Release:
+`debug = "line-tables-only"` (antes `true`), resto igual (`opt-level="s"`, thin LTO, 16 unidades).
+
+| Escenario (dev) | Tiempo | Pico WS (GiB) | Pico privada (GiB) |
+| :--- | ---: | ---: | ---: |
+| tocar `keys.rs`, ui-gen `line-tables-only` | 15,3 s | 4,78 | 2,71 |
+| tocar `app-window.slint`, ui-gen `line-tables-only` | 1m02s | 4,77 | 4,70 |
+| tocar `keys.rs`, ui-gen `debug = false` (vigente) | 13,6 s | 4,49 | 2,60 |
+
+Delta dev vs la medición anterior (debuginfo completa, `keys.rs`: 18,9 s, 6,39 / 3,59 GiB): pico WS
+-1,9 GiB, privada -1,0 GiB. El calentamiento tras cambiar el perfil costó 6m57s y 5m43s.
+
+| Escenario (release) | Tiempo | Pico WS (GiB) | Pico privada (GiB) | `naygo.exe` | `naygo.pdb` |
+| :--- | ---: | ---: | ---: | ---: | ---: |
+| `cargo build --release -p naygo-ui-slint --locked`, build completo | 39m33s | 6,68 | 7,20 | 45.468.160 B | 176.869.376 B |
+
+Delta vs la línea base documentada (29m18s, pico 10,92 GiB, commit `82db92d5`): esa cifra viene
+de un build supervisado (`docs/evidencia/estado-historico-2026.md`, "pico" sin más detalle, probablemente el contador
+de compromiso del Job, no WS), así que la métrica no es idéntica. Comparada con WS el pico baja
+unos 4,2 GiB (10,92 → 6,68); con privada, unos 3,7 GiB (10,92 → 7,20). El `.pdb` pasa de 473.083.904 B (build previo con `debug = true`,
+sin tocar) a 176.869.376 B; el `.exe` casi no cambia (45.369.856 → 45.468.160 B). El tiempo
+SUBE (+10m), pero la línea base viene de otra sesión/commit y la comparación no es directa (la
+máquina pudo estar con otra carga); queda sin explicar, no se asume causa.
+
+`CARGO_BUILD_JOBS=2` NO se probó: el pico con 1 trabajo (6,68 GiB WS / 7,20 privada) ya supera
+los 6 GiB, así que dos trabajos se acercarían al límite de 8 GiB; se mantiene el valor 1. Dividir
+ConfigWindow/Splash no se evalúa: el cuello medido en dev (link.exe) ya bajó con la debuginfo y
+no hay dato de que `ui-gen` domine el pico de release.
+
+## Compilación — tras separar naygo-ui-gen, 2026-11-21
+
+Mismo método y equipo que la línea base (abajo), sobre el commit `d9085170`
+(`rustc 1.96.0`), perfil `dev`, `CARGO_BUILD_JOBS=1`, una pasada por escenario tras un build de
+calentamiento. El código Slint generado (`app-window.rs`, 33.436.439 bytes) vive ahora en
+`naygo-ui-gen` y `ui-slint/build.rs` ya no se re-ejecuta por cambios de código.
+
+| Escenario | Tiempo | Pico WS (GiB) | Pico privada (GiB) |
+| :--- | ---: | ---: | ---: |
+| `cargo build -p naygo-ui-slint --locked`, sin cambios | 2,2 s | 0,12 | 0,10 |
+| `cargo build`, tras tocar `crates/ui-slint/src/keys.rs` | 18,9 s | 6,39 | 3,59 |
+| `cargo build`, tras tocar `crates/core/src/listing.rs` | 49,2 s | 6,39 | 3,59 |
+| `cargo build`, tras tocar `crates/ui-gen/ui/app-window.slint` | 1m27s | 6,40 | 4,80 |
+| `cargo check -p naygo-ui-slint --locked`, tras tocar `keys.rs` | 4,4 s | 0,33 | 0,78 |
+
+Delta vs línea base: tocar un `.rs` de `ui-slint` baja de 1m01s a 18,9 s (privada 6,06 → 3,59
+GiB) y `cargo check` de 41,4 s a 4,4 s; tocar un `.slint` sube de 1m02s a 1m27s (se recompilan
+`ui-gen` y luego `ui-slint`).
+
+Notas: una repetición de "tocar `keys.rs`" dio 17,4 s / 6,39 / 3,59. El pico de WS de ~6,4 GiB
+que queda es de `link.exe` (6,17 GiB WS, 3,41 GiB privada, muestreado por proceso) al enlazar la
+debuginfo del código generado; `rustc` no pasa de 3,35 GiB privada. El `cargo check` se midió con
+la caché de check caliente: el primer check tras tocar un `.slint` regenera también `ui-gen` en
+modo check (2m13s, 3,98 / 4,38 GiB en la pasada encadenada).
+
+## Compilación — línea base de desarrollo, 2026-11-21
+
+Medido con `scripts/measure-build.ps1` (suma el WorkingSet y la memoria privada de los procesos
+`cargo`, `rustc`, `build-script-build*` y `link` descendientes del comando, muestreo cada 500 ms)
+sobre el commit `13fceb06`, perfil `dev`, una pasada por escenario con cachés calientes.
+Equipo: 16 hilos lógicos, 64 GB de RAM, `CARGO_BUILD_JOBS=1`.
+
+| Escenario | Tiempo | Pico WS (GiB) | Pico privada (GiB) |
+| :--- | ---: | ---: | ---: |
+| `cargo build -p naygo-ui-slint --locked`, sin cambios | 2,1 s | 0,13 | 0,11 |
+| `cargo build`, tras tocar `crates/ui-slint/src/keys.rs` | 1m01s | 6,35 | 6,06 |
+| `cargo build`, tras tocar `crates/core/src/listing.rs` | 1m06s | 6,35 | 5,99 |
+| `cargo build`, tras tocar `crates/ui-slint/ui/app-window.slint` | 1m02s | 6,35 | 6,08 |
+| `cargo check -p naygo-ui-slint --locked`, tras tocar `keys.rs` | 41,4 s | 2,71 | 3,46 |
+
+El `app-window.rs` generado por Slint en `target/debug/build/naygo-ui-slint-*/out/` pesa
+33.436.455 bytes (31,9 MiB). Cualquier cambio en `ui-slint` recompila ese archivo completo, lo que
+explica el costo fijo de ~1 minuto y ~6 GiB incluso para un cambio trivial.
+
+Referencia release documentada: 29m18s, pico 10,92 GiB (commit `82db92d5`, `docs/evidencia/estado-historico-2026.md`);
+no se repitió en esta medición.
+
+## W-07 y vista profunda — perfil Release 0.5.6, 2026-11-21
 
 Se compiló el banco de pruebas del commit `79b99963` con el supervisor (27m26s, pico 9,36 GiB).
 `w10c_headless_sync_measurement` y `benchmark_vista_profunda_navegacion_y_filas` se repitieron
@@ -25,7 +352,7 @@ también pasó en Release con 256 invocaciones, listado vacío y sincronización
 (p50 7,8 µs, máximo 98,6 µs). Estas mediciones dejan pendiente la latencia de entrada física y
 presentación Winit, el recorrido completo con árboles reales y los casos local/UNC de W-07.
 
-### Vista profunda 0.5.6 — orden y filtros, 2026-11-20
+## Vista profunda 0.5.6 — orden y filtros, 2026-11-20
 
 Repetición de `benchmark_vista_profunda_navegacion_y_filas` en perfil de pruebas sin símbolos,
 con entradas sintéticas de una carpeta. La prueba cronometró dos órdenes explícitos por nombre,
@@ -39,7 +366,7 @@ un filtro que conserva 1.000 filas y el movimiento del cursor. Cifras en miliseg
 Una ejecución local del controlador. Queda por medir la ventana Release con Winit, árboles
 anidados reales y tiempo de presentación antes de decidir otras optimizaciones.
 
-### Vista profunda — marcas parciales, 2026-11-15
+## Vista profunda — marcas parciales, 2026-11-15
 
 `cargo test -p naygo-ui-slint --bin naygo --locked --offline
 benchmark_marcas_parciales_vista_profunda -- --ignored --nocapture --test-threads=1` mide
@@ -50,7 +377,7 @@ atribuir una reducción porcentual al frame completo. Esta ruta sigue recorriend
 encontrar posiciones y solo se usa con hasta ocho rutas afectadas, contexto idéntico y sin F2;
 otros cambios usan la reconciliación completa. Falta medir release/Winit y datos reales.
 
-### Vista profunda — contadores del pie cacheados, 2026-11-15
+## Vista profunda — contadores del pie cacheados, 2026-11-15
 
 Con el mismo benchmark sintético debug y 100.000 entradas, la mediana de 20 lecturas del pie
 pasó de 187,0 ms a 0,0122 ms. La lectura que reconstruyó el resumen tardó 194,09 ms en la nueva
@@ -59,7 +386,7 @@ La caché se invalida por entradas, selección o visibilidad; no incluye el esta
 disco ni el texto del filtro. Es una ejecución en una máquina, sin renderizado ni release; no
 permite concluir latencia visual. La actualización parcial de filas sigue pendiente.
 
-### Vista profunda — firma por revisión, 2026-11-15
+## Vista profunda — firma por revisión, 2026-11-15
 
 Con el mismo benchmark sintético debug de 100.000 entradas descrito abajo, la mediana de 20
 muestras de `rows_signature` pasó de 239,12 ms a 0,0233 ms; p95 por rango más cercano:
@@ -69,7 +396,7 @@ usa identidad y revisión de la colección; pruebas cubren mutaciones y reemplaz
 de cinco reconstrucciones de filas fue 525,58 ms y la del pie 187,0 ms en la última ejecución:
 ambos siguen pendientes de optimización y validación con interfaz real.
 
-### Vista profunda — controlador sintético debug, 2026-11-15
+## Vista profunda — controlador sintético debug, 2026-11-15
 
 `cargo test -p naygo-ui-slint --bin naygo --locked --offline
 benchmark_vista_profunda_navegacion_y_filas -- --ignored --nocapture --test-threads=1`
@@ -90,7 +417,7 @@ duplicados. Las otras mediciones no son mejoras atribuidas a este cambio; indica
 costos lineales más grandes. Faltan repeticiones controladas, release, frame UI completo y
 listados reales/locales/UNC antes de concluir sobre la experiencia del usuario.
 
-### W-07 — colores básicos 3MF, 2026-10-31
+## W-07 — colores básicos 3MF, 2026-10-31
 
 Con `scripts/build-release-guarded.ps1 -W07MeshPreviewMeasurement` se generó un 3MF sintético de
 96.800 triángulos con dos materiales base y se rasterizó a 1024×768. Tras calentar ambos modos,
@@ -100,7 +427,7 @@ representa necesariamente otros modelos o equipos. Los tiempos ordenados constan
 `target/agent-out/guarded-20261031-072135-037.out.log`; compilación y ejecución supervisadas,
 pico 0,87 GiB. No sustituye la revisión visual ni cierra los materiales avanzados de 3MF.
 
-### W-07 — repetición del listado local bajo carga variable, 2026-10-20
+## W-07 — repetición del listado local bajo carga variable, 2026-10-20
 
 Se repitió `cargo bench -p naygo-core --bench large_directory --locked -- --json --filesystem`
 dos veces en serie sobre el código 0.5.3. Cada ejecución hizo tres pasadas por fixture de 10.000
@@ -133,7 +460,7 @@ conservó en `target/agent-out/w07-current-repeat-20261020-postload.json`. Las c
 de `spawn_listing` con consumidor que drena entradas; no incluyen modelo Slint, renderer, input ni
 UNC. W-07 permanece abierto.
 
-### W-07 — repetición controlada y comparación local de builds, 2026-10-20
+## W-07 — repetición controlada y comparación local de builds, 2026-10-20
 
 Se corrió una vez cada ejecutable release del benchmark, primero el binario previo compilado el
 15-10 (`large_directory-dda6aca8729e07ba.exe`) y luego el actual del 20-10
@@ -160,7 +487,7 @@ JSONL y muestras de carga: `target/agent-out/w07-prior-controlled-20261020.jsonl
 `target/agent-out/w07-current-controlled-20261020-run3-system.jsonl`. W-07 sigue abierto hasta
 completar la matriz de UI/presentación y filesystem local/UNC.
 
-### W-07 — build W-06B instalada, 2026-10-20
+## W-07 — build W-06B instalada, 2026-10-20
 
 Tras la actualización autorizada, el proceso instalado PID 43624 (mismo SHA-256 que el Release
 0.5.3) se observó durante tres ventanas de 30 s, con 16 muestras por ventana. El working set máximo
@@ -169,7 +496,7 @@ fueron 0 / 0,015 / 0 s; se observó un solo proceso y ningún mapeo SMB. La sesi
 no hubo input, ni se controló reposo ni se midió latencia o presentación. Esta es evidencia pasiva
 del build actual, no cierra W-07. JSON: `target/agent-out/w07-installed-053-w06b-20261020-passive.json`.
 
-### W-07 — proceso instalado 0.5.3, 2026-10-20
+## W-07 — proceso instalado 0.5.3, 2026-10-20
 
 Muestra pasiva de PID 31304, cuyo ejecutable coincide con Naygo 0.5.3 instalado. Tres ventanas
 de 30 s con 16 observaciones cada una registraron pico estable de 57,7 MiB working set, 26,9 MiB
@@ -200,7 +527,7 @@ mediana de la misma máquina y marcar regresión si aumenta más de 15 % en dos 
 Ese umbral es un criterio de revisión, no una garantía de que exista ya un gate automático
 de benchmarks en CI. Registrar resultados reales y no inferir fluidez por pasar tests unitarios.
 
-### Resaltado de cambios por visita — 2026-10-13
+## Resaltado de cambios por visita — 2026-10-13
 
 Se amplió `large_directory` para comparar la búsqueda anterior por nombre con el índice por
 ruta completa. La prueba mide también el costo de construir el conjunto y verifica que ambos
@@ -217,7 +544,7 @@ la segunda, a diez. Es un microbenchmark sintético: demuestra el costo relativo
 mide I/O de disco, render, ruido del equipo ni latencia de interacción. No extrapolar los tiempos
 a otros equipos; el resultado observado para 10.000 filas fue aproximadamente 287 veces menor.
 
-### Línea base W-07 — tres ejecuciones, 2026-10-13
+## Línea base W-07 — tres ejecuciones, 2026-10-13
 
 Se ejecutó `cargo bench -p naygo-core --bench large_directory --locked` tres veces, sin tareas de
 compilación paralelas. Mismo checkout (`abdef402` + cambios locales W-01–W-06C), perfil release
@@ -244,7 +571,7 @@ conversión de modelos Slint, renderer, CPU en reposo, memoria del proceso, proc
 interacción. Faltan métricas opt-in y la matriz de UI/disco/UNC definida abajo; no atribuir estos
 tiempos al explorador completo.
 
-### Informe estructurado W-12 — 2026-10-14
+## Informe estructurado W-12 — 2026-10-14
 
 `cargo bench -p naygo-core --bench large_directory --locked -- --json` emite JSON Lines: una fila
 de huella (Rust, Windows, CPU, arquitectura, paralelismo y versión Naygo) y una fila por medición,
@@ -262,7 +589,7 @@ sintético en memoria.
 Esta corrida usa muestras individuales y mediana exacta; sus tiempos no deben compararse directamente
 con las tablas W-07/W-10A anteriores, que usaban otro agrupamiento de rondas.
 
-### Repetición Windows W-07 — 2026-10-14
+## Repetición Windows W-07 — 2026-10-14
 
 Tres ejecuciones externas nuevas, guardadas en `target/agent-out/w07-windows-repeat-20261014-193105.jsonl`,
 con el mismo Ryzen 7 1700X, Windows 10 Home 19045, Rust 1.96.0 y perfil `bench`. Cada escenario de
@@ -283,7 +610,7 @@ entre +1,0 % (índice de cambios) y +9,4 % (sort por tamaño), por debajo del um
 15 %; esto no constituye un gate ni una conclusión sobre fluidez. La corrida sigue siendo sintética,
 sin I/O, renderer, modelos Slint, interacción, consumo de CPU/RAM, handles o red. No cierra W-07.
 
-### Repetición Windows W-07 — 2026-10-15
+## Repetición Windows W-07 — 2026-10-15
 
 Tres ejecuciones nuevas en serie del harness JSONL, mismo host Windows 10 Home, AMD64 Family 23
 Model 1 Stepping 1 (AuthenticAMD), 16 hilos lógicos, Rust 1.96.0 (`ac68faa20`, 2026-05-25), Naygo
@@ -306,7 +633,7 @@ No se atribuye esa diferencia a un cambio de producto: las mediciones no aislaro
 perfil/artefacto ni estado de CPU entre fechas. Esta captura se conserva como una nueva observación del
 harness, no como una comparación causal ni cierre de rendimiento; falta la matriz de UI, disco y UNC.
 
-### Enumeración local real W-07 — 2026-10-15
+## Enumeración local real W-07 — 2026-10-15
 
 Se agregó un modo opt-in a `large_directory` que crea archivos vacíos en un directorio temporal local
 y los enumera mediante `naygo_core::spawn_listing`, el mismo worker/canal acotado que alimenta la UI.
@@ -345,7 +672,7 @@ $env:CARGO_BUILD_JOBS = "1"
 cargo bench -p naygo-core --bench large_directory --locked -- --json --filesystem
 ```
 
-### Muestra pasiva del proceso instalado — 2026-10-15
+## Muestra pasiva del proceso instalado — 2026-10-15
 
 El proceso instalado `naygo.exe` (PID 24072) se observó sin interacción deliberada: una ventana de
 20 s registró 72,4 MiB de working set, 54,8 MiB privados, 430 handles y 33 threads, sin delta de
@@ -400,7 +727,7 @@ el proceso raíz y no había mapeos SMB. Es un smoke corto durante arranque, sin
 confirmación de inactividad; no es una línea base ni cierra W-07. JSON:
 `target/agent-out/w07-portable-20261015-230955.json` (no versionado).
 
-### Release portable 0.5.2 — reposo tras arranque, 2026-10-16
+## Release portable 0.5.2 — reposo tras arranque, 2026-10-16
 
 Se repitió la captura sobre el portable actual extraído en una carpeta aislada, habilitando
 `NAYGO_PERF_METRICS=1` antes de iniciarlo. Windows 10 Home 10.0.19045; tres ventanas de 30 s,
@@ -416,7 +743,7 @@ Esta muestra aporta recursos del release tras arrancar, pero no representa una s
 confirma que se mantuviera inactivo durante todo el periodo. No incluye carga de navegación/preview,
 auxiliares, UNC ni latencias de entrada; no cierra W-07.
 
-### Instalación W-13 actualizada — observación pasiva, 2026-10-16
+## Instalación W-13 actualizada — observación pasiva, 2026-10-16
 
 Después de reinstalar la distribución final con AccessKit, el proceso instalado PID 32448 se
 observó en tres ventanas de 30 s, con muestreo cada 2 s. Sólo se observó el proceso principal;
@@ -426,7 +753,7 @@ no confirma inactividad, no incluye interacción, latencia UI, filesystem ni UNC
 causalmente con versiones/sesiones anteriores. No cierra W-07. JSON:
 `target/agent-out/w07-installed-accessibility-20261016.json` (no versionado).
 
-### Instalación W-10C actualizada — observación pasiva, 2026-10-16
+## Instalación W-10C actualizada — observación pasiva, 2026-10-16
 
 Tras actualizar la instalación de usuario al release W-10C, el proceso instalado (Windows 10 Home
 10.0.19045) se observó en tres ventanas de 30 s con intervalo de 2 s (16 muestras por ventana).
@@ -446,7 +773,7 @@ por eso no se enviaron teclas reales a esa ventana ajena. Las instancias aislada
 `w07-input3-20261016-020932/` y `w07-mousepost-20261016-021118/`. Esto identifica un límite del harness de automatización, no un fallo
 del callback de Naygo; falta repetir con la ventana en primer plano en una sesión interactiva.
 
-### Release portable 0.5.2 — carga de carpeta inicial 10k/100k, 2026-10-16
+## Release portable 0.5.2 — carga de carpeta inicial 10k/100k, 2026-10-16
 
 Se abrió por argumento CLI el corpus local de 10.000 y 100.000 archivos vacíos preparado para
 W-13. En cada escenario se conservaron tres arranques estables (10 s por ejecución), se habilitó
@@ -507,7 +834,7 @@ El script no lanza Naygo ni habilita sus métricas internas; `NAYGO_PERF_METRICS
 antes de iniciar la aplicación para capturar las fases instrumentadas. Esta recolección no sustituye
 la observación de interacción ni la matriz de filesystem.
 
-### W-10A — vista cacheada compartida, 2026-10-14
+## W-10A — vista cacheada compartida, 2026-10-14
 
 Misma máquina, Rust y perfil `bench` descritos arriba. El harness ejecutó 100 cache hits por
 escenario; `vista cacheada` conserva el resultado previo que clona `Vec<usize>`, mientras que
@@ -524,7 +851,7 @@ del `Arc`. La muestra es muy corta (100 operaciones) y el costo compartido se ac
 resolución del reloj; interpretar la razón como indicativa, no como un umbral estable. El tiempo
 de construcción inicial del índice y el render/UI completo no cambiaron ni se miden en esta tabla.
 
-### W-10B — sincronización Slint headless, 2026-10-15
+## W-10B — sincronización Slint headless, 2026-10-15
 
 Se ejecutó el flujo real `sync_rows` sobre `AppWindow` y `MinimalSoftwareWindow`, sin presentar ni
 rasterizar la ventana. Equipo Windows 10 Home 22H2, build 19045, Ryzen 7 1700X, 16 hilos lógicos,
@@ -561,7 +888,7 @@ Esta es una medición del flujo de sincronización y del modelo headless, no de 
 entrada de teclado/rueda ni una sesión interactiva. No extrapolarla a latencia percibida ni dar W-07
 por cerrado; falta capturar métricas con interacción real y revisar CPU/RAM y la matriz local/UNC.
 
-### W-07 — rasterizado software headless, 2026-10-16
+## W-07 — rasterizado software headless, 2026-10-16
 
 Se amplió la prueba manual `w10b_headless_sync_measurement` para forzar cinco redraws de la ventana
 `AppWindow` en `MinimalSoftwareWindow` después de cargar cada listado. Cada frame rasteriza a un
@@ -586,7 +913,7 @@ El gate workspace posterior pasó 1.399 tests y dejó 7 ignorados; Clippy global
 formato y `git diff --check` pasaron. Log supervisado:
 `target/agent-out/guarded-20261016-022620-776.out.log`.
 
-### W-07/W-10B — sync y raster software con test release, 2026-10-16
+## W-07/W-10B — sync y raster software con test release, 2026-10-16
 
 Se repitió el mismo harness sintético en perfil `release`, supervisado por
 `scripts/build-release-guarded.ps1 -W07ReleaseMeasurement` (Job de 12 GiB, Cargo jobs=1, offline y
@@ -617,7 +944,7 @@ Tras agregar el modo, el `-Probe -MemoryGiB 0.25` y el `-Verify` completo del su
 pasaron; el gate completo (suite y Clippy) alcanzó un pico incremental de 0,72 GiB. Log:
 `target/agent-out/guarded-20261016-044459-297.*.log`.
 
-### W-07 — rasterizado software headless release, repetición individual, 2026-10-16
+## W-07 — rasterizado software headless release, repetición individual, 2026-10-16
 
 Una repetición adicional del mismo test se ejecutó con el supervisor de memoria en perfil release
 (ThinLTO, Cargo jobs=1, offline y locked). En Windows 10 Home 22H2/build 19045, Ryzen 7 1700X,
@@ -635,7 +962,7 @@ filas sintéticas residentes en memoria; no incluye I/O, backend Winit, presenta
 entrada del usuario. Aporta otra observación de rasterizado release, pero no cierra W-07 ni permite
 inferir latencia interactiva. Log supervisado: `target/agent-out/guarded-20261016-225158-020.out.log`.
 
-### W-10C — append incremental, tres corridas release, 2026-10-16
+## W-10C — append incremental, tres corridas release, 2026-10-16
 
 El harness se ejecutó tres veces bajo `scripts/build-release-guarded.ps1 -W07ReleaseMeasurement`,
 con `MinimalSoftwareWindow`, el `sync_rows` real, Windows 10 Home 22H2/build 19045, Ryzen 7 1700X,
@@ -666,7 +993,7 @@ la compilación optimizada inicial tardó 34m02s y el Job alcanzó 8,60 GiB. Log
 `target/agent-out/guarded-20261016-082252-575.*.log` y
 `target/agent-out/guarded-20261016-082302-014.*.log`.
 
-### W-07 — callback de teclado Slint en release, 2026-10-16
+## W-07 — callback de teclado Slint en release, 2026-10-16
 
 El test manual `w07_headless_keyboard_callback_measurement` creó `AppWindow` headless, conectó el
 callback de producción con `wire_nav_keys` y ejecutó 256 veces el callback Slint generado mediante
@@ -684,7 +1011,7 @@ foco de teclado y no enrutaría un evento a `FilePanel`; la prueba no afirma que
 evidencia de costo interno del handler, no cierre de W-07. Falta repetir con Naygo enfocado y entrada
 real, además de renderer/presentación, CPU/RAM y matriz local/UNC.
 
-### Métricas locales opt-in — 2026-10-13
+## Métricas locales opt-in — 2026-10-13
 
 El binario permite habilitar muestras temporales con `NAYGO_PERF_METRICS=1`. Se escriben
 resúmenes en el log local al cerrar la aplicación; no hay envío remoto. La cola admite 512 eventos,
@@ -716,7 +1043,7 @@ latencia real de interacción, CPU en reposo, memoria del proceso principal y au
 disco local/UNC y escenarios de preview de la matriz. El opt-in puede introducir una pequeña
 contención del canal al cierre; el event loop solo intenta inserciones no bloqueantes.
 
-### Release portable 0.5.2 — reposo opt-in tras arranque, sesión JSON actualizada, 2026-10-16
+## Release portable 0.5.2 — reposo opt-in tras arranque, sesión JSON actualizada, 2026-10-16
 
 Se repitió la captura sobre el portable regenerado tras cambiar el formato JSON de `current_dir`.
 `NAYGO_PERF_METRICS=1` se definió antes del arranque. La ventana permaneció abierta durante tres
@@ -733,7 +1060,7 @@ no miden latencia percibida ni cierran W-07. Captura externa:
 `target/agent-out/w07-release-20261016-pathpersist-idle.json`; log interno:
 `target/agent-out/w07-portable-verify-20261016-pathpersist/naygo-2026-10-16.log`.
 
-### W-07 — captura pasiva de la build con pestañas accesibles, 2026-10-16
+## W-07 — captura pasiva de la build con pestañas accesibles, 2026-10-16
 
 Tras instalar el build W-13 se tomaron tres ventanas de 30 s, 16 muestras cada una con intervalo
 de 2 s. Se observó un solo proceso Naygo, sin mapeos SMB: pico de working set 60,5/60,6/60,6 MiB,
@@ -743,7 +1070,7 @@ externa no está controlada. La muestra no mide latencia, trabajo de UI, rendere
 que aparezcan entre intervalos, y no cierra W-07. JSON:
 `target/agent-out/w07-installed-w13-20261016.json`.
 
-### W-07 — repetición pasiva de la instalación actual, 2026-10-16
+## W-07 — repetición pasiva de la instalación actual, 2026-10-16
 
 Se repitieron tres ventanas de 30 s sobre el PID instalado 18068, con 16 muestras por ventana e
 intervalo de 2 s. Se observó un único proceso, sin mapeos SMB; working set pico de 60,9 MiB,
@@ -752,7 +1079,7 @@ memoria privada de 29,2 MiB, 385 handles de pico y 24 hilos de pico. Los deltas 
 latencia o trabajo de UI; no cierra W-07. Naygo permaneció abierto y respondiendo. JSON:
 `target/agent-out/w07-installed-w13-continuation-20261016.json`.
 
-### W-07 — captura pasiva de la instalación abierta, 2026-10-19 23:51–23:53
+## W-07 — captura pasiva de la instalación abierta, 2026-10-19 23:51–23:53
 
 Tres ventanas de 30 s sobre PID 50260 (build instalada, EXE SHA-256
 `960ccee8a5bdfb85eaafcd8fa6112e736d4b050237e7fdfb592f41799671cadc`), con 16 muestras cada una
@@ -780,7 +1107,7 @@ referencias de diseño, no resultados. El presupuesto comunicado de hasta dos pr
 320 MiB exige medir alternativas de menor consumo; no confundirlo con «preview de 64 MiB».
 Registrar también sort, conversión de modelos y render: un límite de recogida no acota el frame.
 
-### Release instalado tras regeneración L-01A — W-07 pasivo, 2026-10-16
+## Release instalado tras regeneración L-01A — W-07 pasivo, 2026-10-16
 
 Tras instalar in-place el paquete 0.5.2 más reciente y comprobar que los cuatro JSON de usuario y
 el PDB anterior conservaron sus SHA-256, se capturó PID 44816 durante tres ventanas de 30 s
@@ -790,7 +1117,7 @@ el PDB anterior conservaron sus SHA-256, se capturó PID 44816 durante tres vent
 no controla inactividad, no mide UI/Winit ni latencia, y puede omitir procesos más breves que el
 intervalo. No cierra W-07. JSON: `target/agent-out/w07-installed-latest-20261016.json`.
 
-### Release portable actual — smoke opt-in de inicio, 2026-10-16
+## Release portable actual — smoke opt-in de inicio, 2026-10-16
 
 El portable se abrió aislado por 10 s con `NAYGO_PERF_METRICS=1`, respondió y cerró con código 0
 mediante `--shutdown`. El log tiene 16 resúmenes: 13 spans más tres contadores de workers. En
@@ -805,7 +1132,7 @@ el workspace inicial, no un fixture ni una matriz; no mide renderer Winit, laten
 preview o reposo controlado, y no cierra W-07. El log está dentro de
 `target/agent-out/portable-smoke-latest-20261016-142853/`.
 
-### Release instalado activo — W-07 pasivo, 2026-10-16 14:43–14:44
+## Release instalado activo — W-07 pasivo, 2026-10-16 14:43–14:44
 
 Se muestreó PID 41724 durante tres ventanas de 30 s, con 16 observaciones por ventana y un
 intervalo configurado de 2 s. El árbol observado tuvo un solo proceso (sin auxiliares dentro de la
@@ -815,7 +1142,7 @@ terminar la captura. No se controló la inactividad ni hubo interacción; la dif
 muestras no se atribuye a una causa y esto no mide latencia, renderer, filesystem ni procesos más
 breves que el intervalo. No cierra W-07. JSON: `target/agent-out/w07-installed-latest-20261016-1443.json`.
 
-### Portable aislado con fixture de 10.000 archivos — W-07, 2026-10-16
+## Portable aislado con fixture de 10.000 archivos — W-07, 2026-10-16
 
 Se inició el portable actual con `NAYGO_PERF_METRICS=1` y un directorio aislado de 10.000 archivos
 vacíos; no se reutilizó el workspace del usuario. En el cierre, el log interno registró 256 muestras
@@ -832,7 +1159,7 @@ timeout impide confirmar la interacción o el primer frame. Es evidencia de carg
 telemetría, no cierra W-07 ni sustituye la matriz manual. JSON: `target/agent-out/w07-cu-20261016/process.json`;
 log opt-in en `target/agent-out/w07-cu-20261016/portable/`.
 
-### W-07 — accesibilidad de fixture limpia y límite de interacción, 2026-10-16
+## W-07 — accesibilidad de fixture limpia y límite de interacción, 2026-10-16
 
 Se extrajo el ZIP en una carpeta portable nueva (sin `settings.json` ni `workspace.json`) y se abrió
 un fixture sintético de 100 archivos mediante argumento CLI. El árbol de accesibilidad confirmó la
@@ -846,7 +1173,7 @@ En un segundo arranque, con el workspace de esa carpeta ya guardado, se pasó ot
 sintético como argumento; UIA mostró 25 filas `second-*.txt` y ninguna `synthetic-*.txt`, así que el
 override de CLI sí prevalece sobre la sesión anterior. La prueba no produjo spans `ui.input.*`.
 
-### Release instalado 0.5.2 con L-01B — W-07 pasivo, 2026-10-16 20:52 UTC
+## Release instalado 0.5.2 con L-01B — W-07 pasivo, 2026-10-16 20:52 UTC
 
 La instancia actual (PID 12532, SHA-256 `c9db8752…`) se observó pasivamente durante tres ventanas
 consecutivas de ~30 s. Working set: 62,9–63,1 MiB; memoria privada: 31,3–31,6 MiB; 390 handles y
@@ -855,7 +1182,7 @@ entrada, pero no se controló que la sesión estuviera inactiva; no atribuir el 
 un trabajo específico. Tampoco se midió latencia, renderer Winit, procesos que vivan menos de la
 ventana ni red. El proceso respondió al cerrar la muestra. JSON: `target/agent-out/w07-installed-l01b-20261016.json`.
 
-### Portable aislado de 100 archivos — W-07, 2026-10-16 17:55 UTC
+## Portable aislado de 100 archivos — W-07, 2026-10-16 17:55 UTC
 
 Se abrió una extracción limpia del portable 0.5.2 actual con `NAYGO_PERF_METRICS=1` y un fixture
 sintético de 100 archivos por argumento CLI. UIA encontró 23 nombres de fixture en la lista visible.
@@ -874,7 +1201,7 @@ volvió a abrir, respondiendo como PID 9204 con SHA-256 `c9db8752…`. JSON de p
 `target/agent-out/w07-installed-l01b-20261016.json`; log opt-in del fixture:
 `target/agent-out/w07-current-release-20261016/portable/naygo-2026-10-16.log`. No cierra W-07.
 
-### Release instalado relanzado tras smoke portable — W-07 pasivo, 2026-10-16 20:57–20:59 UTC
+## Release instalado relanzado tras smoke portable — W-07 pasivo, 2026-10-16 20:57–20:59 UTC
 
 Tras restaurar los cuatro JSON respaldados, se observó el PID 9204 (EXE `c9db8752…`) tres ventanas
 de ~30 s, sin interacción deliberada ni lectura UIA durante la medición. Working set 79,1 MiB,
@@ -884,7 +1211,7 @@ observó red. La muestra anterior del PID 12532 mostró CPU mayor luego de inspe
 lectura causara la diferencia es una hipótesis, no una conclusión: los estados de ambos procesos no
 se controlaron de forma idéntica. JSON: `target/agent-out/w07-installed-posttest-20261016.json`.
 
-### Instalación vigente PID 52608 — W-07 pasivo, 2026-10-16 23:42–23:43 local
+## Instalación vigente PID 52608 — W-07 pasivo, 2026-10-16 23:42–23:43 local
 
 Tres ventanas de 30 s con intervalo de 2 s observaron el release instalado (EXE
 `05eee5e4…`), con 16 muestras por ventana y un solo proceso. Working set máximo 71,4 MiB,
@@ -893,7 +1220,7 @@ SMB. La instancia respondió al terminar. No se confirmó inactividad ni hubo in
 no mide latencia y no cierra W-07. El máximo de árbol coincide con el proceso único; el método y sus
 límite de muestreo están en `target/agent-out/w07-process-current-20261016.json`.
 
-### W-07 — rasterizado STL antes/después, 2026-10-17
+## W-07 — rasterizado STL antes/después, 2026-10-17
 
 Repetición 2026-10-30, aspecto sólido predeterminado de 0.5.4 en preparación: el mismo harness
 supervisado reportó una mediana de **18,483 ms** en siete rondas (18,398–20,076 ms), con 96.800
@@ -931,7 +1258,7 @@ como orientación. Logs supervisados locales:
 `target/agent-out/guarded-20261017-123258-633.out.log` y
 `target/agent-out/guarded-20261017-133525-880.out.log` (no versionados).
 
-### Release instalado tras corregir el crash del drop — W-07 pasivo, 2026-10-17
+## Release instalado tras corregir el crash del drop — W-07 pasivo, 2026-10-17
 
 Se observó el Naygo 0.5.2 recién instalado (PID 23400, EXE SHA-256
 `309d751b4c55759cce63b559bdaf58d81ee4befe163f2c6136eb8d100622f30d`) durante tres ventanas de
@@ -945,7 +1272,7 @@ inactividad, no mide latencia, presentación Winit ni el uso de archivos, y el i
 hijos más breves. No cierra W-07. JSON:
 `target/agent-out/w07-post-drop-fix-20261017.json`.
 
-### Release E-1 instalado — W-07 pasivo, 2026-10-17 16:46–16:48 local
+## Release E-1 instalado — W-07 pasivo, 2026-10-17 16:46–16:48 local
 
 Tras actualizar in-place con el setup E-1 y verificar el EXE instalado (SHA-256
 `97bd204bfacee564f9632658ec89308643bc07808fa15f1d0ce2890ac51ef5bc`), se observó PID 12232 durante
@@ -958,7 +1285,7 @@ controló la inactividad ni se midió latencia, renderer Winit o interacción; n
 un estado de reposo ni a la inspección. El muestreo puede omitir procesos más breves que el intervalo.
 No cierra W-07. JSON: `target/agent-out/w07-installed-e1-20261017-1646.json`.
 
-### W-07 — callback de teclado Slint en release, repetición 2026-10-17
+## W-07 — callback de teclado Slint en release, repetición 2026-10-17
 
 Se ejecutó `scripts/build-release-guarded.ps1 -W07InputMeasurement` de forma aislada. El harness
 headless conecta `wire_nav_keys` a un `AppWindow` de producción y mide 256 llamadas
@@ -979,7 +1306,7 @@ matriz interactiva y no cierra W-07. Log supervisado: `target/agent-out/guarded-
 `target/agent-out/guarded-20261017-172458-519.out.log` y
 `target/agent-out/guarded-20261017-172503-255.out.log` (no versionados).
 
-### Release instalado con ruta de favoritos — W-07 pasivo, 2026-10-17 19:23–19:25 local
+## Release instalado con ruta de favoritos — W-07 pasivo, 2026-10-17 19:23–19:25 local
 
 Se observó el proceso PID 38744, iniciado a las 19:21:03, con el EXE recién generado e instalado
 (SHA-256 `357ee82a0a27b2dbae5cecbe35d63a6394e97315fd384cee9db4dd951d2b1561`). Tres ventanas de
@@ -993,7 +1320,7 @@ intervalo. No cierra W-07. UI Automation de solo lectura sobre la misma ventana 
 descendientes, 240 con nombre y 46 enfocables, sin truncar el árbol; esto es evidencia estructural
 para W-13, no una prueba con Narrador. JSON: `target/agent-out/w07-installed-favorites-20261017.json`.
 
-### Release E-5 instalado — W-07 pasivo y UIA, 2026-10-18 01:54–01:56 local
+## Release E-5 instalado — W-07 pasivo y UIA, 2026-10-18 01:54–01:56 local
 
 Se observó Naygo 0.5.2 recién instalada (PID 51408, EXE SHA-256
 `681b99ae728c0067d45b6d1a5f2bb52c9951bb32bc012ce96c405b7e5d39159f`) durante tres ventanas de
@@ -1007,7 +1334,7 @@ lectura expuso 721 descendientes, 536 con nombre y 55 enfocables; los 55 control
 nombre accesible y el árbol no se truncó. Es evidencia estructural, no aceptación con Narrador ni
 teclado real. JSON: `target/agent-out/w07-installed-e5-20261018.json`.
 
-### Repetición pasiva de E-5 instalado antes de actualizar a E-4 — 2026-10-18 04:23–04:25 local
+## Repetición pasiva de E-5 instalado antes de actualizar a E-4 — 2026-10-18 04:23–04:25 local
 
 Se capturó el mismo PID 51408, iniciado a las 01:53 y todavía ejecutando el EXE E-5 con SHA-256
 `681b99ae728c0067d45b6d1a5f2bb52c9951bb32bc012ce96c405b7e5d39159f`; no es la build E-4 más
@@ -1020,7 +1347,7 @@ no establece un perfil de reposo controlado, latencia ni presentación. En ese m
 estaba instalada; después se actualizó in-place y la app quedó abierta con el nuevo EXE. JSON:
 `target/agent-out/w07-current-installed-20261018.json`.
 
-### Release E-4 instalado — W-07 en escritorio bloqueado, 2026-10-18 04:37–04:39 local
+## Release E-4 instalado — W-07 en escritorio bloqueado, 2026-10-18 04:37–04:39 local
 
 Se observó el PID 25124, cuyo EXE instalado coincide por SHA-256 con `target/release/naygo.exe`
 (`feba7919f7f308bacb8198b4abf5eb61c1d8fbfafbe5ff1171916caf92376293`). La pantalla de bloqueo se
@@ -1034,7 +1361,7 @@ mide input, latencia de UI, presentación Winit, navegación ni filesystem. Tamp
 trabajo fuera de las ventanas de muestreo. No cierra W-07. Registro no versionado:
 `target/agent-out/w07-locked-installed-20261018.json`.
 
-### Build W-13 instalada — W-07 pasivo y UIA, 2026-10-18 12:32–12:33 local
+## Build W-13 instalada — W-07 pasivo y UIA, 2026-10-18 12:32–12:33 local
 
 Tras actualizar in-place Naygo 0.5.2, se observó PID 23868 con el EXE SHA-256
 `21e97c3557ce5998429c83d0820e3212e5a8c2ebdca77a27eafdc45e1f4fd831`, coincidente con Release.
@@ -1049,7 +1376,7 @@ intervalos de 2 s. Working set: 61,9 MiB; memoria privada: 30,5–30,6 MiB; 385�
 a la captura, pero no se controló inactividad; estas cifras no son una línea base de reposo ni miden
 latencia, presentación Winit o acceso a archivos. No cierra W-07. JSON: `target/agent-out/w07-w13-installed-20261018.json`.
 
-### E-6 instalado — observación pasiva, 2026-10-18 17:07–17:08 local
+## E-6 instalado — observación pasiva, 2026-10-18 17:07–17:08 local
 
 El PID 41292 ejecuta el release E-6 y su EXE instalado coincide con `target/release/naygo.exe`
 (`54fed15ac5585b6089a78ce7ebf6e14842b6934f7febd9f118c3bb3a14562a50`). Tres ventanas
@@ -1060,7 +1387,7 @@ reposo controlado ni permite atribuir consumo a un escenario de navegación. No 
 presentación Winit ni acceso a archivos y no cierra W-07. Registro no versionado:
 `target/agent-out/w07-e6-passive-20261018.json`.
 
-### Build instalada PID 48792 — observación pasiva, 2026-10-18 21:28–21:29 local
+## Build instalada PID 48792 — observación pasiva, 2026-10-18 21:28–21:29 local
 
 Tres ventanas consecutivas de 30 s, con 16 muestras cada 2 s, observaron un solo proceso
 (`naygo`) y ningún mapeo SMB. El working set se mantuvo en 93,9 MiB, la memoria privada en
@@ -1073,7 +1400,7 @@ pasiva de esta instancia anterior, no una línea base de reposo, una medición d
 validación de la build actual. No cierra W-07. Registro no versionado:
 `target/agent-out/w07-current-passive-20261018.json`.
 
-### Release 0.5.2 recién instalado — W-07 pasivo, 2026-10-18 21:35–21:37 local
+## Release 0.5.2 recién instalado — W-07 pasivo, 2026-10-18 21:35–21:37 local
 
 El PID 51452 ejecutó el EXE instalado cuyo SHA-256 coincide con Release
 (`210901465840187a497dca452d56b0cbf843807c11c52079e0bbeca0ac1d4673`). Tres ventanas de 30 s
@@ -1086,7 +1413,7 @@ Winit ni operaciones locales/UNC. Confirma recursos de la build actual en esas v
 línea base de reposo controlado y no cierra W-07. Registro no versionado:
 `target/agent-out/w07-current-release-installed-20261018.json`.
 
-### Límite de medición de presentación W-07 — Slint 1.16.1
+## Límite de medición de presentación W-07 — Slint 1.16.1
 
 Se revisó el API y el backend exactos fijados por el lockfile. El estado `AfterRendering` de
 Slint se notifica antes de presentar el back buffer; además, el renderer por software no
@@ -1099,7 +1426,7 @@ del backend; input a callback/modelo y tiempos de render headless siguen siendo 
 Referencias: [RenderingState en Slint 1.16.1](https://docs.rs/slint/1.16.1/slint/enum.RenderingState.html),
 [renderer Winit-software 1.16.1](https://github.com/slint-ui/slint/blob/v1.16.1/internal/backends/winit/renderer/sw.rs).
 
-### Release 0.5.3 instalado — captura pasiva W-07, 2026-10-19 00:38–00:40
+## Release 0.5.3 instalado — captura pasiva W-07, 2026-10-19 00:38–00:40
 
 El PID instalado **48444** ejecutó el EXE 0.5.3 cuyo hash coincide con Release. Tres ventanas de
 30 s, con 16 observaciones cada 2 s, vieron un proceso (Naygo) y ningún mapeo SMB. Working set
@@ -1111,7 +1438,7 @@ Fue una captura pasiva: no se controló inactividad, no hubo entrada, no se midi
 presentación Winit, y no se accedió a rutas locales/UNC. Por ello actualiza la observación de
 recursos del release 0.5.3 pero no cierra W-07. JSON: `target/agent-out/w07-0.5.3-installed-passive-20261019.json`.
 
-### Repetición de listado local W-07 — 2026-10-19
+## Repetición de listado local W-07 — 2026-10-19
 
 Se repitió `cargo bench -p naygo-core --bench large_directory --locked -- --json --filesystem`
 seis veces en serie, tres antes y tres después de evaluar la eliminación de una lectura atómica
@@ -1136,7 +1463,7 @@ preview, CPU/memoria y filesystem local/UNC. Resultados no versionados en
 `target/agent-out/w07-filesystem-current-20261019*.jsonl` y
 `target/agent-out/w07-filesystem-optimized-20261019-run{1,2,3}.jsonl`.
 
-### W-07 — evaluación de asignación de rutas por fila, 2026-10-19
+## W-07 — evaluación de asignación de rutas por fila, 2026-10-19
 
 Con fingerprint completo, tres ejecuciones externas de la implementación previa dieron medianas
 de 217,170 / 218,070 / 212,748 ms para 100.000 entradas; su mediana fue 217,170 ms. Una primera
@@ -1159,7 +1486,7 @@ Naygo 0.5.3. El conteo de temporales del fixture fue cero tras finalizar. Logs n
 `target/agent-out/w07-filesystem-path-reuse-20261019.jsonl`. W-07 sigue abierto para medición con
 carga controlada, interacción UI, presentación y rutas UNC.
 
-### Repetición del listado W-07 — ruta reutilizada, tres corridas, 2026-10-19
+## Repetición del listado W-07 — ruta reutilizada, tres corridas, 2026-10-19
 
 Se repitió en serie el modo `--filesystem` del benchmark release 0.5.3, con fixtures nuevas de
 10.000 y 100.000 archivos vacíos en cada corrida. Para 100.000, los tiempos totales de tres pasadas
@@ -1180,7 +1507,7 @@ convertirse en una garantía de latencia. Se verificó que no quedaran directori
 actividad de fondo entre corridas. W-07 sigue abierto. Logs sin versionar:
 `target/agent-out/w07-filesystem-path-reuse-repeat-20261019-run{1,2,3}.jsonl`.
 
-### Release 0.5.3 en segundo plano, sin entrada física — 2026-10-19 10:32–10:34
+## Release 0.5.3 en segundo plano, sin entrada física — 2026-10-19 10:32–10:34
 
 Se observó el PID 42728 durante 46 muestras en **101,2 s**. `GetLastInputInfo` pasó de 302,9 a
 404,1 s y Firefox conservó el primer plano al inicio y al final; no se enviaron entradas. Naygo
@@ -1196,7 +1523,7 @@ el CPU más alto de la captura pasiva anterior a una causa concreta. JSON sin ve
 `target/agent-out/w07-idle-current-20261019.json` (SHA-256
 `56c06b3e59be031f88b367ba87fb35ef0b0b0088008302b280aff7a73b52f335`).
 
-### Release 0.5.3 con W-06D instalado — muestra pasiva, 2026-10-19 10:09
+## Release 0.5.3 con W-06D instalado — muestra pasiva, 2026-10-19 10:09
 
 Se muestreó PID 42728 durante tres ventanas consecutivas de 30 s, con 16 observaciones por ventana.
 El working set pico fue **78,4/78,5/78,7 MiB**, memoria privada **46,6/46,7/46,8 MiB**,
@@ -1209,7 +1536,7 @@ como regresión de W-06D. No mide latencia, presentación Winit ni rendimiento l
 abierto. JSON sin versionar: `target/agent-out/w07-0.5.3-w06d-passive-20261019.json` (SHA-256
 `27f419d79595c32a894d6e0f8c8aeac75ee5fd4639d99f741553764bec1fcd03`).
 
-### Release 0.5.3 con acciones UIA de W-13 — captura pasiva, 2026-10-19 19:46–19:48 local
+## Release 0.5.3 con acciones UIA de W-13 — captura pasiva, 2026-10-19 19:46–19:48 local
 
 Se muestreó la instancia recién instalada PID 44872 en tres ventanas de 30 s, con 16 observaciones
 cada una. Naygo fue el único proceso observado y no había mapeos SMB. El árbol de proceso alcanzó

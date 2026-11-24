@@ -83,6 +83,7 @@ impl SyncPlan {
                 to,
                 bytes: item.bytes,
                 is_dir: item.is_dir,
+                planned_failure: None,
             });
             if !item.is_dir {
                 total_files += 1;

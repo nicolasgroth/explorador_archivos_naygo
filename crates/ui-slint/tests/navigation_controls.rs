@@ -10,9 +10,9 @@ use slint::{
 };
 use std::{cell::RefCell, rc::Rc};
 slint::slint! {
-    import { MatchedName } from "../ui/matched-name.slint";
-    import { NewFolder } from "../ui/new-folder.slint";
-    export { Theme } from "../ui/theme.slint";
+    import { MatchedName } from "../../ui-gen/ui/matched-name.slint";
+    import { NewFolder } from "../../ui-gen/ui/new-folder.slint";
+    export { Theme } from "../../ui-gen/ui/theme.slint";
     export component NavigationProbe inherits Window {
         width: 600px; height: 420px; background: black;
         in property <bool> folder-active;

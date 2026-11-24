@@ -309,7 +309,7 @@ impl WorkspaceCtrl {
         }
         match Listing::try_start(
             path.clone(),
-            &self.listing_admission,
+            self.listing_admission_for(&path),
             naygo_core::listing::ListingFilter::DirsOnly,
         ) {
             Ok(listing) => {
@@ -334,7 +334,8 @@ impl WorkspaceCtrl {
         for (id, path) in keys {
             self.pending_tree_listings.remove(&(id, path.clone()));
             self.queue_tree_listing(id, path);
-            if !self.listing_admission.has_capacity() {
+            // Con dos cupos, una rama remota sin plaza no frena a las locales que siguen.
+            if !self.listing_admissions.any_capacity() {
                 break;
             }
         }

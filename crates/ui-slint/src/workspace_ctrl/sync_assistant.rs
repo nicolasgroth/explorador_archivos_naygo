@@ -5,8 +5,7 @@
 use super::*;
 use crate::{SyncRowVm, SyncVm};
 use naygo_core::sync_plan::{SyncAction, SyncError, SyncMode, SyncOptions, SyncPlan};
-use slint::{ModelRc, SharedString, VecModel};
-use std::rc::Rc;
+use slint::{ModelRc, SharedString};
 
 pub struct SyncAssistantState {
     pub left: PathBuf,
@@ -17,6 +16,8 @@ pub struct SyncAssistantState {
     pub error: Option<String>,
     pub rx: Option<std::sync::mpsc::Receiver<Result<SyncPlan, SyncError>>>,
     pub token: naygo_core::CancellationToken,
+    /// Número de planificación (único por worker lanzado): identifica el plan sin compararlo.
+    pub generation: u64,
 }
 
 impl WorkspaceCtrl {
@@ -57,6 +58,7 @@ impl WorkspaceCtrl {
         let worker_left = left.clone();
         let worker_right = right.clone();
         let (tx, rx) = std::sync::mpsc::channel();
+        self.sync_generation = self.sync_generation.wrapping_add(1);
         std::thread::spawn(move || {
             let result = naygo_core::sync_plan::plan_sync(
                 &worker_left,
@@ -75,6 +77,7 @@ impl WorkspaceCtrl {
             error: None,
             rx: Some(rx),
             token,
+            generation: self.sync_generation,
         });
     }
 
@@ -207,11 +210,39 @@ impl WorkspaceCtrl {
         started
     }
 
+    /// VM completo del asistente (cabecera + filas). En producción `sync_rows` arma las filas
+    /// aparte, solo cuando cambia `sync_rows_fingerprint`.
+    #[cfg(test)]
     pub fn sync_vm(&self) -> SyncVm {
+        let mut vm = self.sync_vm_header();
+        vm.rows = ModelRc::from(std::rc::Rc::new(slint::VecModel::from(self.sync_rows_vm())));
+        vm
+    }
+
+    /// Huella de lo que determina las filas del asistente: planificación, plan recibido,
+    /// marcas e idioma (las acciones se traducen). `sync_rows` arma las hasta 5000 filas solo
+    /// cuando cambia, no en cada tick con el modal abierto. `None` con el asistente cerrado.
+    pub fn sync_rows_fingerprint(&self) -> Option<u64> {
+        use std::hash::{Hash, Hasher};
+        let state = self.sync_assistant.as_ref()?;
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        state.generation.hash(&mut h);
+        state
+            .plan
+            .as_ref()
+            .map(|plan| plan.items.len())
+            .hash(&mut h);
+        state.selected.hash(&mut h);
+        self.config.settings.language.0.hash(&mut h);
+        Some(h.finish())
+    }
+
+    /// Filas del asistente (hasta 5000).
+    pub fn sync_rows_vm(&self) -> Vec<SyncRowVm> {
         let Some(state) = self.sync_assistant.as_ref() else {
-            return SyncVm::default();
+            return Vec::new();
         };
-        let rows = state
+        state
             .plan
             .as_ref()
             .map(|plan| {
@@ -233,7 +264,14 @@ impl WorkspaceCtrl {
                     })
                     .collect::<Vec<_>>()
             })
-            .unwrap_or_default();
+            .unwrap_or_default()
+    }
+
+    /// VM del asistente sin filas (modelo vacío): lo barato que sí se refresca en cada tick.
+    pub fn sync_vm_header(&self) -> SyncVm {
+        let Some(state) = self.sync_assistant.as_ref() else {
+            return SyncVm::default();
+        };
         let mode = match state.options.mode {
             SyncMode::LeftToRight => 0,
             SyncMode::RightToLeft => 1,
@@ -247,7 +285,7 @@ impl WorkspaceCtrl {
             delete_extras: state.options.delete_extras,
             planning: state.rx.is_some(),
             error: SharedString::from(state.error.as_deref().unwrap_or_default()),
-            rows: ModelRc::from(Rc::new(VecModel::from(rows))),
+            rows: ModelRc::default(),
             can_apply: state.plan.is_some() && state.selected.iter().any(|selected| *selected),
         }
     }

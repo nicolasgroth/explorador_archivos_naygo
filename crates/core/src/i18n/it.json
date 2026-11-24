@@ -1265,5 +1265,16 @@
   "slint.cfg.tip.icon_custom": "Import or export a full icon set (.naygoset), or reset all icons to the base set.",
   "listing.incomplete": "Elenco incompleto; alcuni elementi non sono stati letti",
   "slint.cfg.system_file_icons": "Usa le icone di sistema per i file",
-  "slint.cfg.tip.system_file_icons": "Usa l’icona associata da Windows a ciascuna estensione. Le ricerche avvengono in background e sono limitate a 512 tipi; disattivato per impostazione predefinita."
+  "slint.cfg.tip.system_file_icons": "Usa l’icona associata da Windows a ciascuna estensione. Le ricerche avvengono in background e sono limitate a 512 tipi; disattivato per impostazione predefinita.",
+  "splash.subtitle": "Esplora file",
+  "packs.err.save_theme": "Impossibile salvare il tema: {error}",
+  "packs.err.delete_theme": "Impossibile eliminare il tema: {error}",
+  "packs.err.create_zip": "Impossibile creare lo zip: {error}",
+  "ops.err.trash_not_supported": "Il Cestino non è disponibile su questo sistema.",
+  "ops.err.trash_restored_elsewhere": "La destinazione è comparsa durante il ripristino e non è stata sovrascritta: {original}. L’elemento è stato ripristinato con un altro nome in {restored}.",
+  "ops.failed.unreadable_folder": "Impossibile leggere la cartella: {reason}",
+  "ops.failed.link_not_copied": "Collegamento non copiato (i collegamenti non vengono ricreati nella destinazione): {path}",
+  "ops.failed.link_not_moved": "Impossibile spostare il collegamento; è rimasto nell'origine: {path} ({reason})",
+  "ops.failed.publish": "Impossibile salvare la copia nella destinazione: {reason}",
+  "ops.failed.identity_unknown": "Impossibile verificare se l'origine e la destinazione sono lo stesso file; non è stato modificato nulla: {reason}"
 }

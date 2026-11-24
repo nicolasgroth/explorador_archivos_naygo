@@ -1265,5 +1265,16 @@
   "slint.cfg.tip.icon_custom": "Import or export a full icon set (.naygoset), or reset all icons to the base set.",
   "listing.incomplete": "Liste incomplète ; certains éléments n’ont pas pu être lus",
   "slint.cfg.system_file_icons": "Utiliser les icônes système pour les fichiers",
-  "slint.cfg.tip.system_file_icons": "Utilise l’icône associée par Windows à chaque extension. Les recherches s’exécutent en arrière-plan et sont limitées à 512 types ; désactivé par défaut."
+  "slint.cfg.tip.system_file_icons": "Utilise l’icône associée par Windows à chaque extension. Les recherches s’exécutent en arrière-plan et sont limitées à 512 types ; désactivé par défaut.",
+  "splash.subtitle": "Explorateur de fichiers",
+  "packs.err.save_theme": "Impossible d’enregistrer le thème : {error}",
+  "packs.err.delete_theme": "Impossible de supprimer le thème : {error}",
+  "packs.err.create_zip": "Impossible de créer le zip : {error}",
+  "ops.err.trash_not_supported": "La Corbeille n’est pas disponible sur ce système.",
+  "ops.err.trash_restored_elsewhere": "La destination est apparue pendant la restauration et n’a pas été écrasée : {original}. L’élément a été restauré sous un autre nom dans {restored}.",
+  "ops.failed.unreadable_folder": "Impossible de lire le dossier : {reason}",
+  "ops.failed.link_not_copied": "Lien non copié (les liens ne sont pas recréés à la destination) : {path}",
+  "ops.failed.link_not_moved": "Impossible de déplacer le lien ; il est resté à la source : {path} ({reason})",
+  "ops.failed.publish": "Impossible d'enregistrer la copie à sa destination : {reason}",
+  "ops.failed.identity_unknown": "Impossible de vérifier si la source et la destination sont le même fichier ; rien n'a été modifié : {reason}"
 }

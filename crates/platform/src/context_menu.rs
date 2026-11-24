@@ -36,6 +36,21 @@
 //! inicializamos COM en este hilo (`hr.is_ok()`). Si el hilo ya estaba en otro
 //! apartamento (`RPC_E_CHANGED_MODE`), no desbalanceamos el refcount de COM.
 //!
+//! ## Submenús diferidos y owner-draw (`IContextMenu2` / `IContextMenu3`)
+//!
+//! Varios submenús del Shell ("Enviar a", "Abrir con") y muchas
+//! extensiones de terceros (7-Zip, Git…) no rellenan su submenú en
+//! `QueryContextMenu`: lo hacen al recibir `WM_INITMENUPOPUP`, y dibujan sus
+//! ítems (íconos) con `WM_MEASUREITEM` / `WM_DRAWITEM`. Esos mensajes llegan a la
+//! ventana dueña del menú (el HWND de winit), no al Shell. Por eso, mientras
+//! `TrackPopupMenuEx` está activo, se instala una **subclase temporal**
+//! (`SetWindowSubclass`) que reenvía esos mensajes a `IContextMenu3::HandleMenuMsg2`
+//! (o `IContextMenu2::HandleMenuMsg`). Un guard RAII la quita siempre al terminar.
+//!
+//! "Nuevo" (`CNewMenu`) NO se arregla con este reenvío: ese verbo solo existe en el menú de
+//! FONDO de una carpeta (`CreateViewObject(IID_IContextMenu)`), que Naygo todavía no pide.
+//! Queda como tarea aparte.
+//!
 //! ## Tolerancia
 //!
 //! El filesystem es hostil: rutas que desaparecen, discos de red caídos,
@@ -67,6 +82,306 @@ pub enum ShellError {
     DifferentParents,
     /// La operación COM/Shell falló; el mensaje describe el HRESULT.
     Failed(String),
+}
+
+// Mensajes de menú que el Shell necesita recibir (valores de winuser.h; un test los
+// contrasta con las constantes del crate `windows`).
+#[cfg(any(windows, test))]
+const WM_DRAWITEM: u32 = 0x002B;
+#[cfg(any(windows, test))]
+const WM_MEASUREITEM: u32 = 0x002C;
+#[cfg(any(windows, test))]
+const WM_INITMENUPOPUP: u32 = 0x0117;
+#[cfg(any(windows, test))]
+const WM_MENUCHAR: u32 = 0x0120;
+#[cfg(any(windows, test))]
+/// `ODT_MENU`: el ítem owner-draw pertenece a un menú (no a un control).
+const ODT_MENU: u32 = 1;
+
+#[cfg(any(windows, test))]
+/// Qué versión de la interfaz de mensajes de menú ofrece el `IContextMenu` del Shell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MenuMsgInterface {
+    /// `IContextMenu3`: `HandleMenuMsg2`, con `LRESULT` (necesario para `WM_MENUCHAR`).
+    V3,
+    /// Solo `IContextMenu2`: `HandleMenuMsg`, sin `LRESULT`.
+    V2,
+}
+
+#[cfg(any(windows, test))]
+/// Decisión de la subclase para un mensaje recibido durante el menú.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MenuMsgRoute {
+    /// Reenviar al Shell con `HandleMenuMsg2` y devolver su `LRESULT`.
+    HandleMsg2,
+    /// Reenviar al Shell con `HandleMenuMsg` y devolver 0.
+    HandleMsg,
+    /// No es asunto del Shell: `DefSubclassProc`.
+    Default,
+}
+
+/// Valor que devuelve la subclase tras un reenvío exitoso al Shell. `shell_result` es el
+/// `plResult` que escribió `HandleMenuMsg2` (`None` con `IContextMenu2`, que no tiene `LRESULT`).
+///
+/// `WM_DRAWITEM` / `WM_MEASUREITEM` se contestan con `TRUE` (1, la convención Win32 de "mensaje
+/// procesado") cuando el Shell no dejó un valor propio. `WM_MENUCHAR` conserva lo que entrega el
+/// Shell (empaqueta la acción y el ítem), y `WM_INITMENUPOPUP` devuelve 0 ("procesado").
+#[cfg(any(windows, test))]
+fn forwarded_result(msg: u32, shell_result: Option<isize>) -> isize {
+    match msg {
+        WM_DRAWITEM | WM_MEASUREITEM => match shell_result {
+            Some(value) if value != 0 => value,
+            _ => 1,
+        },
+        _ => shell_result.unwrap_or(0),
+    }
+}
+
+#[cfg(any(windows, test))]
+/// Decide si un mensaje se reenvía al Shell. Pura y sin Win32, para poder probarla.
+///
+/// `ctl_type` es el primer campo (`CtlType`) de `DRAWITEMSTRUCT`/`MEASUREITEMSTRUCT`
+/// apuntado por `lParam` (`None` si `lParam` es nulo); solo importa en
+/// `WM_DRAWITEM`/`WM_MEASUREITEM`, que se reenvían únicamente para ítems de menú
+/// (`wParam == 0` y `CtlType == ODT_MENU`).
+fn route_menu_msg(
+    iface: MenuMsgInterface,
+    msg: u32,
+    wparam: usize,
+    ctl_type: Option<u32>,
+) -> MenuMsgRoute {
+    let forward = match iface {
+        MenuMsgInterface::V3 => MenuMsgRoute::HandleMsg2,
+        MenuMsgInterface::V2 => MenuMsgRoute::HandleMsg,
+    };
+    match msg {
+        WM_INITMENUPOPUP => forward,
+        WM_DRAWITEM | WM_MEASUREITEM if wparam == 0 && ctl_type == Some(ODT_MENU) => forward,
+        // Sin LRESULT, IContextMenu2 no puede responder WM_MENUCHAR.
+        WM_MENUCHAR if iface == MenuMsgInterface::V3 => forward,
+        _ => MenuMsgRoute::Default,
+    }
+}
+
+/// Interfaz de mensajes de menú que se entrega a la subclase por `dwRefData`.
+#[cfg(windows)]
+enum MenuMsgHandler {
+    V3(windows::Win32::UI::Shell::IContextMenu3),
+    V2(windows::Win32::UI::Shell::IContextMenu2),
+}
+
+#[cfg(windows)]
+impl MenuMsgHandler {
+    /// Prefiere `IContextMenu3`; si no, `IContextMenu2`; si no hay ninguno, `None`.
+    fn from_menu(menu: &windows::Win32::UI::Shell::IContextMenu) -> Option<Self> {
+        use windows::core::Interface;
+        if let Ok(v3) = menu.cast::<windows::Win32::UI::Shell::IContextMenu3>() {
+            return Some(Self::V3(v3));
+        }
+        menu.cast::<windows::Win32::UI::Shell::IContextMenu2>()
+            .ok()
+            .map(Self::V2)
+    }
+
+    fn interface(&self) -> MenuMsgInterface {
+        match self {
+            Self::V3(_) => MenuMsgInterface::V3,
+            Self::V2(_) => MenuMsgInterface::V2,
+        }
+    }
+}
+
+/// Funciones de subclase de comctl32, resueltas **por ordinal** en tiempo de ejecución.
+///
+/// Naygo no declara comctl32 v6 en su manifest, así que el proceso carga comctl32
+/// v5.8, que exporta `SetWindowSubclass` & cía. **solo por ordinal** (410-413). Un
+/// import estático por nombre (el que genera el crate `windows`) impide cargar el
+/// `.exe` (`STATUS_ENTRYPOINT_NOT_FOUND`). Los ordinales son estables y valen en v5 y v6.
+#[cfg(windows)]
+type SetWindowSubclassFn = unsafe extern "system" fn(
+    windows::Win32::Foundation::HWND,
+    windows::Win32::UI::Shell::SUBCLASSPROC,
+    usize,
+    usize,
+) -> windows::core::BOOL;
+#[cfg(windows)]
+type RemoveWindowSubclassFn = unsafe extern "system" fn(
+    windows::Win32::Foundation::HWND,
+    windows::Win32::UI::Shell::SUBCLASSPROC,
+    usize,
+) -> windows::core::BOOL;
+#[cfg(windows)]
+type DefSubclassProcFn = unsafe extern "system" fn(
+    windows::Win32::Foundation::HWND,
+    u32,
+    windows::Win32::Foundation::WPARAM,
+    windows::Win32::Foundation::LPARAM,
+) -> windows::Win32::Foundation::LRESULT;
+#[cfg(all(windows, test))]
+type GetWindowSubclassFn = unsafe extern "system" fn(
+    windows::Win32::Foundation::HWND,
+    windows::Win32::UI::Shell::SUBCLASSPROC,
+    usize,
+    *mut usize,
+) -> windows::core::BOOL;
+/// Firma genérica que devuelve `GetProcAddress`.
+#[cfg(windows)]
+type RawProc = unsafe extern "system" fn() -> isize;
+
+#[cfg(windows)]
+struct Comctl32Subclass {
+    set: SetWindowSubclassFn,
+    remove: RemoveWindowSubclassFn,
+    def: DefSubclassProcFn,
+    #[cfg(test)]
+    get: GetWindowSubclassFn,
+}
+
+#[cfg(windows)]
+impl Comctl32Subclass {
+    /// Tabla resuelta una vez por proceso; `None` si comctl32 no la ofrece (menú sin reenvío).
+    fn get() -> Option<&'static Self> {
+        static TABLE: std::sync::OnceLock<Option<Comctl32Subclass>> = std::sync::OnceLock::new();
+        TABLE.get_or_init(Self::resolve).as_ref()
+    }
+
+    fn resolve() -> Option<Self> {
+        use windows::core::PCSTR;
+        use windows::Win32::System::LibraryLoader::GetProcAddress;
+        let module = load_system_comctl32()?;
+        // SAFETY: comctl32 es un DLL del sistema; no se libera nunca, así que los
+        // punteros a función siguen válidos durante toda la vida del proceso. Cada
+        // ordinal se transmuta a la firma documentada de su función (commctrl.h).
+        unsafe {
+            let by_ordinal = |ordinal: usize| GetProcAddress(module, PCSTR(ordinal as *const u8));
+            let set = by_ordinal(410)?;
+            #[cfg(test)]
+            let get = by_ordinal(411)?;
+            let remove = by_ordinal(412)?;
+            let def = by_ordinal(413)?;
+            Some(Self {
+                set: std::mem::transmute::<RawProc, SetWindowSubclassFn>(set),
+                remove: std::mem::transmute::<RawProc, RemoveWindowSubclassFn>(remove),
+                def: std::mem::transmute::<RawProc, DefSubclassProcFn>(def),
+                #[cfg(test)]
+                get: std::mem::transmute::<RawProc, GetWindowSubclassFn>(get),
+            })
+        }
+    }
+}
+
+/// Carga `comctl32.dll` buscando SOLO en System32 (`LOAD_LIBRARY_SEARCH_SYSTEM32`): un DLL con ese
+/// nombre junto a un `naygo.exe` portable (carpeta de descargas, USB) nunca se carga.
+#[cfg(windows)]
+fn load_system_comctl32() -> Option<windows::Win32::Foundation::HMODULE> {
+    use windows::core::w;
+    use windows::Win32::System::LibraryLoader::{LoadLibraryExW, LOAD_LIBRARY_SEARCH_SYSTEM32};
+    // SAFETY: nombre UTF-16 estático terminado en NUL; sin handle de archivo (reservado).
+    unsafe { LoadLibraryExW(w!("comctl32.dll"), None, LOAD_LIBRARY_SEARCH_SYSTEM32) }.ok()
+}
+
+/// Procedimiento de la subclase temporal. `dwrefdata` es un `*const MenuMsgHandler`
+/// válido mientras la subclase está instalada (ver `MenuSubclass`).
+#[cfg(windows)]
+unsafe extern "system" fn menu_subclass_proc(
+    hwnd: windows::Win32::Foundation::HWND,
+    msg: u32,
+    wparam: windows::Win32::Foundation::WPARAM,
+    lparam: windows::Win32::Foundation::LPARAM,
+    _id: usize,
+    dwrefdata: usize,
+) -> windows::Win32::Foundation::LRESULT {
+    use windows::Win32::Foundation::LRESULT;
+    // Ningún panic puede cruzar la frontera FFI: si algo falla, comportamiento por defecto.
+    let handled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Option<LRESULT> {
+        if dwrefdata == 0 {
+            return None;
+        }
+        // SAFETY: `MenuSubclass` garantiza que el puntero vive más que la subclase.
+        let handler = unsafe { &*(dwrefdata as *const MenuMsgHandler) };
+        let ctl_type = if matches!(msg, WM_DRAWITEM | WM_MEASUREITEM) && lparam.0 != 0 {
+            // SAFETY: con WM_DRAWITEM/WM_MEASUREITEM, lParam apunta a DRAWITEMSTRUCT o
+            // MEASUREITEMSTRUCT; ambos empiezan con `UINT CtlType`.
+            Some(unsafe { *(lparam.0 as *const u32) })
+        } else {
+            None
+        };
+        match (
+            route_menu_msg(handler.interface(), msg, wparam.0, ctl_type),
+            handler,
+        ) {
+            (MenuMsgRoute::HandleMsg2, MenuMsgHandler::V3(menu)) => {
+                let mut result = LRESULT(0);
+                unsafe { menu.HandleMenuMsg2(msg, wparam, lparam, Some(&mut result)) }
+                    .ok()
+                    .map(|()| LRESULT(forwarded_result(msg, Some(result.0))))
+            }
+            (MenuMsgRoute::HandleMsg, MenuMsgHandler::V2(menu)) => {
+                unsafe { menu.HandleMenuMsg(msg, wparam, lparam) }
+                    .ok()
+                    .map(|()| LRESULT(forwarded_result(msg, None)))
+            }
+            _ => None,
+        }
+    }));
+    // Nota: `WM_INITMENUPOPUP` se reenvía SIEMPRE al Shell y no pasa por `DefSubclassProc` (el
+    // Explorador de Windows hace lo mismo): el menú pertenece al Shell, que rellena sus
+    // submenús diferidos aquí, y winit no usa menús propios en esta ventana, así que no hay un
+    // procedimiento por defecto que deba ver este mensaje.
+    match handled {
+        Ok(Some(result)) => result,
+        // La subclase solo se instala si la tabla se resolvió completa.
+        _ => match Comctl32Subclass::get() {
+            Some(comctl) => unsafe { (comctl.def)(hwnd, msg, wparam, lparam) },
+            None => LRESULT(0),
+        },
+    }
+}
+
+/// Subclase temporal del HWND dueño del menú; se quita en `Drop` (todo camino, incluso unwind).
+///
+/// El préstamo `'a` del `MenuMsgHandler` obliga al compilador a que el handler viva
+/// más que la subclase: `dwRefData` nunca queda colgando mientras esté instalada.
+#[cfg(windows)]
+struct MenuSubclass<'a> {
+    hwnd: windows::Win32::Foundation::HWND,
+    id: usize,
+    _handler: std::marker::PhantomData<&'a MenuMsgHandler>,
+}
+
+#[cfg(windows)]
+impl<'a> MenuSubclass<'a> {
+    /// Instala la subclase; `None` si Windows la rechaza (el menú sigue, sin reenvío).
+    fn install(
+        hwnd: windows::Win32::Foundation::HWND,
+        handler: &'a MenuMsgHandler,
+    ) -> Option<Self> {
+        let comctl = Comctl32Subclass::get()?;
+        let data = handler as *const MenuMsgHandler as usize;
+        // El id es la dirección del handler: único por invocación, aun si hubiera
+        // menús anidados sobre el mismo HWND.
+        let id = data;
+        // SAFETY: `menu_subclass_proc` es `extern "system"` con la firma SUBCLASSPROC;
+        // `data` apunta a un handler que vive `'a`, más que este guard.
+        let ok = unsafe { (comctl.set)(hwnd, Some(menu_subclass_proc), id, data) }.as_bool();
+        ok.then_some(Self {
+            hwnd,
+            id,
+            _handler: std::marker::PhantomData,
+        })
+    }
+}
+
+#[cfg(windows)]
+impl Drop for MenuSubclass<'_> {
+    fn drop(&mut self) {
+        // `install` solo construye el guard si la tabla existe.
+        if let Some(comctl) = Comctl32Subclass::get() {
+            // SAFETY: mismo hwnd, procedimiento e id con que se instaló; si el HWND ya
+            // no existe, la llamada solo devuelve FALSE.
+            let _ = unsafe { (comctl.remove)(self.hwnd, Some(menu_subclass_proc), self.id) };
+        }
+    }
 }
 
 /// PIDL absolutos poseídos durante todo el menú y liberados incluso si falla la preparación.
@@ -249,8 +564,24 @@ pub fn show_native_context_menu(
             // 5) Mostrar el menú modal. Con TPM_RETURNCMD devuelve el id elegido
             //    (0 = cancelado) en lugar de postear un WM_COMMAND. x,y son
             //    coordenadas de PANTALLA provistas por el llamador.
+            //    Mientras está abierto, una subclase temporal reenvía al Shell los
+            //    mensajes de submenús diferidos y owner-draw (ver doc del módulo).
+            //
+            //    SAFETY (subclase): `menu_handler` se declara ANTES del guard y el
+            //    guard toma un préstamo `&menu_handler`, así que el handler (y su
+            //    referencia COM) vive más que la subclase; el bloque interno hace que
+            //    el guard se destruya (RemoveWindowSubclass) al volver
+            //    TrackPopupMenuEx, también si hubiera unwind. `TrackPopupMenuEx` es
+            //    modal y corre en este mismo hilo (dueño del HWND), así que la
+            //    subclase solo se invoca aquí dentro, nunca desde otro hilo.
+            let menu_handler = MenuMsgHandler::from_menu(&context_menu);
             let flags = (TPM_RETURNCMD | TPM_RIGHTBUTTON).0;
-            let chosen = TrackPopupMenuEx(hmenu, flags, x, y, hwnd, None).0 as u32;
+            let chosen = {
+                let _subclass = menu_handler
+                    .as_ref()
+                    .and_then(|handler| MenuSubclass::install(hwnd, handler));
+                TrackPopupMenuEx(hmenu, flags, x, y, hwnd, None).0 as u32
+            };
 
             let outcome = if chosen != 0 {
                 // 6) Invocar el verbo elegido. lpVerb es un MAKEINTRESOURCEA del
@@ -300,6 +631,169 @@ pub fn show_native_context_menu(
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    /// comctl32 se carga SOLO del sistema: un `comctl32.dll` junto a un `naygo.exe` portable
+    /// nunca se usa.
+    #[cfg(windows)]
+    #[test]
+    fn comctl32_se_carga_desde_system32() {
+        use windows::Win32::System::LibraryLoader::GetModuleFileNameW;
+        let module = load_system_comctl32().expect("comctl32 del sistema");
+        let mut buffer = [0u16; 1024];
+        // SAFETY: `module` es un HMODULE válido (nunca se libera) y el búfer es nuestro.
+        let len = unsafe { GetModuleFileNameW(Some(module), &mut buffer) } as usize;
+        let loaded = PathBuf::from(String::from_utf16_lossy(&buffer[..len]));
+        // Windows puede redirigir la carga de System32 a su copia de WinSxS: ambas viven bajo
+        // %SystemRoot%; lo que nunca debe pasar es cargarla desde la carpeta del ejecutable.
+        let system_root = PathBuf::from(std::env::var("SystemRoot").unwrap());
+        let lower = |path: &std::path::Path| path.to_string_lossy().to_lowercase();
+        let loaded_lower = lower(&loaded);
+        assert!(
+            loaded_lower.starts_with(&lower(&system_root.join("System32")))
+                || loaded_lower.starts_with(&lower(&system_root.join("WinSxS"))),
+            "{}",
+            loaded.display()
+        );
+        let exe_dir = std::env::current_exe().unwrap();
+        assert_ne!(loaded.parent(), exe_dir.parent());
+    }
+
+    #[test]
+    fn route_menu_msg_reenvia_solo_mensajes_de_menu() {
+        use MenuMsgInterface::{V2, V3};
+        use MenuMsgRoute::{Default, HandleMsg, HandleMsg2};
+        // WM_INITMENUPOPUP: siempre al Shell, con la API de la interfaz disponible.
+        assert_eq!(
+            route_menu_msg(V3, WM_INITMENUPOPUP, 0x1234, None),
+            HandleMsg2
+        );
+        assert_eq!(
+            route_menu_msg(V2, WM_INITMENUPOPUP, 0x1234, None),
+            HandleMsg
+        );
+        // Owner-draw de menú (wParam 0 + ODT_MENU): al Shell.
+        for msg in [WM_DRAWITEM, WM_MEASUREITEM] {
+            assert_eq!(route_menu_msg(V3, msg, 0, Some(ODT_MENU)), HandleMsg2);
+            assert_eq!(route_menu_msg(V2, msg, 0, Some(ODT_MENU)), HandleMsg);
+            // Owner-draw de un control (wParam = id del control) o de otro tipo: no.
+            assert_eq!(route_menu_msg(V3, msg, 7, Some(ODT_MENU)), Default);
+            assert_eq!(route_menu_msg(V3, msg, 0, Some(4)), Default);
+            assert_eq!(route_menu_msg(V2, msg, 0, None), Default);
+        }
+        // WM_MENUCHAR requiere LRESULT: solo IContextMenu3.
+        assert_eq!(route_menu_msg(V3, WM_MENUCHAR, 0, None), HandleMsg2);
+        assert_eq!(route_menu_msg(V2, WM_MENUCHAR, 0, None), Default);
+        // Cualquier otro mensaje: DefSubclassProc.
+        for msg in [0x0000, 0x0001, 0x000F, 0x0111, 0x011F, 0x0200] {
+            assert_eq!(route_menu_msg(V3, msg, 0, Some(ODT_MENU)), Default);
+            assert_eq!(route_menu_msg(V2, msg, 0, Some(ODT_MENU)), Default);
+        }
+    }
+
+    #[test]
+    fn forwarded_result_sigue_la_convencion_win32() {
+        // Owner-draw procesado: TRUE (1) tanto con IContextMenu2 (sin LRESULT) como con
+        // IContextMenu3 que no escribió plResult (0).
+        for msg in [WM_DRAWITEM, WM_MEASUREITEM] {
+            assert_eq!(forwarded_result(msg, None), 1);
+            assert_eq!(forwarded_result(msg, Some(0)), 1);
+            // Si el Shell dejó un valor propio, se respeta.
+            assert_eq!(forwarded_result(msg, Some(7)), 7);
+        }
+        // WM_MENUCHAR conserva lo que entrega el Shell (incluido el 0).
+        assert_eq!(
+            forwarded_result(WM_MENUCHAR, Some(0x0002_0005)),
+            0x0002_0005
+        );
+        assert_eq!(forwarded_result(WM_MENUCHAR, Some(0)), 0);
+        // WM_INITMENUPOPUP: 0 ("procesado").
+        assert_eq!(forwarded_result(WM_INITMENUPOPUP, None), 0);
+        assert_eq!(forwarded_result(WM_INITMENUPOPUP, Some(0)), 0);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn constantes_de_mensajes_coinciden_con_win32() {
+        use windows::Win32::UI::WindowsAndMessaging as wm;
+        assert_eq!(WM_DRAWITEM, wm::WM_DRAWITEM);
+        assert_eq!(WM_MEASUREITEM, wm::WM_MEASUREITEM);
+        assert_eq!(WM_INITMENUPOPUP, wm::WM_INITMENUPOPUP);
+        assert_eq!(WM_MENUCHAR, wm::WM_MENUCHAR);
+    }
+
+    /// El menú real de un archivo expone IContextMenu2/3 y la subclase se instala y quita
+    /// sobre una ventana real sin dejar rastro (sin mostrar el menú).
+    #[cfg(windows)]
+    #[test]
+    fn handler_y_subclase_sobre_ventana_real() {
+        use windows::core::w;
+        use windows::Win32::Foundation::{LPARAM, WPARAM};
+        use windows::Win32::System::Com::{
+            CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED,
+        };
+        use windows::Win32::UI::Shell::{IContextMenu, IShellFolder, SHBindToParent};
+        use windows::Win32::UI::WindowsAndMessaging::{
+            CreateWindowExW, DestroyWindow, SendMessageW, WINDOW_EX_STYLE, WS_OVERLAPPED,
+        };
+        let init = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+        assert!(init.is_ok(), "COM STA: {init:?}");
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("menu.txt");
+        std::fs::write(&file, b"x").unwrap();
+        let pidls = ShellPidls::resolve(std::slice::from_ref(&file)).unwrap();
+        unsafe {
+            let mut child = std::ptr::null_mut();
+            let parent: IShellFolder = SHBindToParent(pidls.0[0], Some(&mut child)).unwrap();
+            let menu: IContextMenu = parent
+                .GetUIObjectOf(
+                    windows::Win32::Foundation::HWND(std::ptr::null_mut()),
+                    &[child.cast_const()],
+                    None,
+                )
+                .unwrap();
+            let handler = MenuMsgHandler::from_menu(&menu)
+                .expect("el menú de archivos del Shell implementa IContextMenu2/3");
+            // Ventana real del hilo (clase de sistema "STATIC"), nunca visible.
+            let hwnd = CreateWindowExW(
+                WINDOW_EX_STYLE(0),
+                w!("STATIC"),
+                w!("naygo-test"),
+                WS_OVERLAPPED,
+                0,
+                0,
+                10,
+                10,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+            let comctl = Comctl32Subclass::get().expect("subclases de comctl32 por ordinal");
+            let mut data = 0usize;
+            {
+                let guard = MenuSubclass::install(hwnd, &handler).expect("subclase instalada");
+                assert!(
+                    (comctl.get)(hwnd, Some(menu_subclass_proc), guard.id, &mut data).as_bool()
+                );
+                assert_eq!(data, &handler as *const MenuMsgHandler as usize);
+                // Un mensaje ajeno al menú atraviesa la subclase hasta DefSubclassProc.
+                let _ = SendMessageW(hwnd, 0x0000, Some(WPARAM(0)), Some(LPARAM(0)));
+                // Owner-draw que no es de menú (wParam != 0) tampoco se reenvía.
+                let _ = SendMessageW(hwnd, WM_MEASUREITEM, Some(WPARAM(5)), Some(LPARAM(0)));
+            }
+            let id = &handler as *const MenuMsgHandler as usize;
+            assert!(
+                !(comctl.get)(hwnd, Some(menu_subclass_proc), id, &mut data).as_bool(),
+                "el guard quitó la subclase"
+            );
+            let _ = DestroyWindow(hwnd);
+            drop(handler);
+            drop(menu);
+        }
+        drop(pidls);
+        unsafe { CoUninitialize() };
+    }
 
     #[cfg(not(windows))]
     #[test]

@@ -230,6 +230,20 @@ pub fn run_plan_with_no_replace_rename(
             }
         }
         let original_step = &plan.steps[idx];
+        // La planificación ya sabe que este paso falla (p. ej. una subcarpeta ilegible): se
+        // reporta sin tocar el disco. No se crea el destino ni se retira el origen; en Move la
+        // carpeta padre conserva este hijo y `remove_empty_move_source` no puede retirarla.
+        // Levanta la barrera del journal igual que cualquier otro fallo.
+        if let Some(reason) = &original_step.planned_failure {
+            step_item_indices.push(Some(summary.items.len()));
+            summary.items.push(OpItem {
+                dest: original_step.to.clone(),
+                outcome: OpOutcome::Failed(reason.clone()),
+                src: original_step.from.clone(),
+            });
+            barrier_hit = true;
+            continue;
+        }
         let staged = replacements.iter().any(|replacement| {
             super::plan::path_starts_with_ci(&original_step.to, &replacement.destination)
         });
@@ -465,8 +479,10 @@ fn local_move_trees(plan: &OpPlan) -> Vec<std::ops::Range<usize>> {
     let mut end = plan.steps.len();
     while end > 0 {
         let root = &plan.steps[end - 1];
+        // Un paso fallido nunca es raíz de un rename de árbol: su carpeta no se enumeró entera.
         let Some(from) = root.from.as_deref().filter(|from| {
             root.is_dir
+                && root.planned_failure.is_none()
                 && from.file_name() == root.to.file_name()
                 && from
                     .parent()
@@ -551,6 +567,8 @@ fn prepare_tree_replacements(
         let source_root = plan
             .steps
             .iter()
+            // Un paso fallido de la raíz (enumeración cortada) también sirve: su origen es el
+            // mismo. El árbol se prepara y, como hay un fallo, nunca se publica.
             .find(|step| step.is_dir && super::plan::paths_eq_ci(&step.to, target))
             .and_then(|step| step.from.as_ref());
         let unsafe_target = plan.steps.iter().any(|step| {
@@ -798,6 +816,22 @@ fn publish_tree_replacement(
     replacement: &mut TreeReplacementStage,
     no_replace_rename: &dyn NoReplaceRename,
 ) -> Result<TreePublication, String> {
+    // El marcador identifica el staging como de ESTA transacción. Si desapareció, otro proceso
+    // pudo tomar el Replace por interrumpido y descartar (o recrear) el staging: no se publica.
+    match marker_matches(&replacement.marker, &replacement.transaction_id) {
+        Ok(true) => {}
+        Ok(false) => {
+            return Err(
+                "el árbol temporal perdió su marca de Naygo antes de publicar; no se publicó"
+                    .to_owned(),
+            )
+        }
+        Err(error) => {
+            return Err(format!(
+                "no se pudo confirmar el árbol temporal antes de publicar: {error}"
+            ))
+        }
+    }
     let backup = &replacement.backup;
     let had_destination = match std::fs::symlink_metadata(&replacement.destination) {
         Ok(_) => {
@@ -1034,10 +1068,44 @@ fn is_tree_replacement_active(id: &str) -> bool {
 /// Recupera Replace interrumpidos en el padre antes de listar sus contenidos o reintentar la op.
 /// La consulta y los renames corren en un worker, validan registros/sentinels y nunca pisan una ruta
 /// que apareció después. Los registros activos del mismo proceso no se consumen ni se duplican.
+///
+/// Con [`disable_tree_replacement_recovery`] (modo multi-instancia de depuración) no recupera
+/// nada: solo informa como activos los destinos con registro, para no reemplazar encima.
 pub fn recover_tree_replacements_in_parent(
     parent: &Path,
     token: &CancellationToken,
     no_replace_rename: &dyn NoReplaceRename,
+) -> std::io::Result<Vec<PathBuf>> {
+    scan_tree_replacements_in_parent(
+        parent,
+        token,
+        no_replace_rename,
+        tree_replacement_recovery_enabled(),
+    )
+}
+
+static TREE_RECOVERY_DISABLED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Desactiva, para todo el proceso, la recuperación de Replace interrumpidos. La usa la UI cuando
+/// corre en modo multi-instancia (`NAYGO_DEBUG_MULTI_INSTANCE=1`): los Replace "activos" son un
+/// conjunto en memoria de cada proceso, así que una segunda instancia tomaría la transacción viva
+/// de la primera como interrumpida y borraría su staging. No hay forma de reactivarla.
+pub fn disable_tree_replacement_recovery() {
+    TREE_RECOVERY_DISABLED.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+fn tree_replacement_recovery_enabled() -> bool {
+    !TREE_RECOVERY_DISABLED.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// Recorre los registros de Replace del padre. Con `recover = false` no modifica nada en disco y
+/// devuelve como activos todos los destinos con registro válido (propios o de otro proceso).
+fn scan_tree_replacements_in_parent(
+    parent: &Path,
+    token: &CancellationToken,
+    no_replace_rename: &dyn NoReplaceRename,
+    recover: bool,
 ) -> std::io::Result<Vec<PathBuf>> {
     let recovery_dir = tree_recovery_dir(parent);
     let metadata = match std::fs::symlink_metadata(&recovery_dir) {
@@ -1076,7 +1144,7 @@ pub fn recover_tree_replacements_in_parent(
                     "nombre de temporal de recuperación inválido; no se modificó",
                 ));
             }
-            if is_tree_replacement_active(id) {
+            if !recover || is_tree_replacement_active(id) {
                 continue;
             }
             let metadata = std::fs::symlink_metadata(entry.path())?;
@@ -1103,14 +1171,16 @@ pub fn recover_tree_replacements_in_parent(
             serde_json::from_slice(&std::fs::read(entry.path())?)
                 .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
         validate_tree_replacement_record(name, &record)?;
-        if is_tree_replacement_active(&record.id) {
+        if !recover || is_tree_replacement_active(&record.id) {
             active_targets.push(record.destination_name);
             continue;
         }
         recover_tree_replacement_record(parent, &record, token, no_replace_rename)?;
     }
 
-    remove_empty_tree_recovery_dir(parent)?;
+    if recover {
+        remove_empty_tree_recovery_dir(parent)?;
+    }
     Ok(active_targets)
 }
 
@@ -1704,11 +1774,57 @@ fn exec_copy_step(
         }
     };
 
+    // Los enlaces (symlink/junction) nunca se copian por contenido ni se borran a través de ellos:
+    // un Move los renombra como enlace y, si no se puede (otro volumen), el paso falla y el
+    // enlace queda en el origen. Un Copy no recrea enlaces (backlog): falla el paso.
+    // Excepción: en Copy, un enlace a ARCHIVO (p. ej. el origen seleccionado, que se sigue una vez)
+    // se copia leyendo su contenido: leer a través de él no puede borrar nada.
+    if let Ok(meta) = std::fs::symlink_metadata(&from) {
+        let copia_de_enlace_a_archivo = !is_move
+            && std::fs::metadata(&from)
+                .map(|m| m.is_file())
+                .unwrap_or(false);
+        if super::plan::is_link_like(&meta) && !copia_de_enlace_a_archivo {
+            let outcome = if is_move {
+                if let Some(parent) = step.to.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                match no_replace_rename.rename_noreplace(&from, &step.to) {
+                    Ok(()) => OpOutcome::Done,
+                    Err(error) => {
+                        OpOutcome::Failed(super::link_not_moved_failure(&from, &error.to_string()))
+                    }
+                }
+            } else {
+                OpOutcome::Failed(super::link_not_copied_failure(&from))
+            };
+            return (step.to.clone(), outcome, 0, true);
+        }
+    }
+
     // Resolver el destino según la política de conflictos. Con `Ask` (ops-B), si el
     // destino existe se consulta a la UI por ítem: emite `OpMsg::Conflict` y bloquea
     // esperando una `ConflictDecision` por `conflict_rx`. Con "aplicar a todos", la acción
     // elegida se memoriza en `applied_all` y los choques siguientes no vuelven a preguntar.
     let mut overwrite_destination = false;
+    // Identidad real: si destino y origen son el mismo archivo (hard link, `\?\`, unidad
+    // mapeada vs UNC, nombre 8.3), publicar y luego borrar el origen destruiría el único contenido.
+    // Fail-closed: si el destino existe y no se puede saber si es el mismo archivo, el paso falla
+    // en vez de arriesgarse a sobrescribirlo o a borrar el origen.
+    if step.to.exists() {
+        match super::same_identity(&from, &step.to) {
+            Ok(true) => return (step.to.clone(), OpOutcome::Skipped, 0, true),
+            Ok(false) => {}
+            Err(error) => {
+                return (
+                    step.to.clone(),
+                    OpOutcome::Failed(super::identity_unknown_failure(&error.to_string())),
+                    0,
+                    true,
+                )
+            }
+        }
+    }
     let to = if step.to.exists() {
         let effective: ConflictAction = resolve_action(
             conflict,
@@ -1793,7 +1909,7 @@ fn exec_copy_step(
     // Closure que arma y envía el progreso por bytes durante la copia. `this_file`
     // son los bytes de ESTE archivo copiados hasta ahora; se suman a los bytes de
     // los archivos ya terminados (`prev_bytes`) para el total acumulado de la op.
-    let on_bytes = |this_file: u64| {
+    let mut on_bytes = |this_file: u64| {
         let _ = tx.send(OpMsg::Progress(OpProgress {
             bytes_done: progress.prev_bytes + this_file,
             bytes_total: progress.bytes_total,
@@ -1803,10 +1919,19 @@ fn exec_copy_step(
         }));
     };
 
-    match copy_buffered(&from, &to, overwrite_destination, token, on_bytes, || {}) {
+    // Un Move entre volúmenes borra el origen justo después de publicar: la copia debe ser
+    // durable (en disco) antes de eso, o un corte de luz perdería ambos lados.
+    match no_replace_rename.copy_and_publish(
+        &from,
+        &to,
+        overwrite_destination,
+        is_move,
+        token,
+        &mut on_bytes,
+    ) {
         Ok(true) => {
             if is_move {
-                // Borrar el origen tras una copia exitosa (fin del move cross-volume).
+                // Borrar el origen solo tras una copia publicada (fin del move cross-volume).
                 if let Err(e) = std::fs::remove_file(&from) {
                     return (
                         to,
@@ -1864,16 +1989,23 @@ fn remove_empty_move_source(from: &Path) -> std::io::Result<()> {
 /// con throttle (cada ~100 ms, no por bloque) durante la copia y una vez al final
 /// con el total del archivo; así una copia larga emite progreso en vivo sin inundar
 /// el canal. El llamador arma el `OpProgress` sumando los bytes de archivos previos.
+///
+/// Antes de publicar copia las fechas del origen (modificación y acceso; creación en Windows)
+/// y, si `durable`, fuerza el contenido a disco (`sync_all`). Los permisos se aplican antes de
+/// publicar en Unix (modo POSIX) y después en Windows, porque `persist` de tempfile resetea los
+/// atributos del temporal a `NORMAL` y borraría el solo lectura.
 fn copy_buffered(
     from: &Path,
     to: &Path,
     overwrite: bool,
+    durable: bool,
     token: &CancellationToken,
     mut on_bytes: impl FnMut(u64),
     mut after_chunk: impl FnMut(),
 ) -> std::io::Result<bool> {
     let mut reader = std::fs::File::open(from)?;
-    let source_permissions = std::fs::metadata(from)?.permissions();
+    let source_metadata = reader.metadata()?;
+    let source_permissions = source_metadata.permissions();
     let parent = to
         .parent()
         .filter(|path| !path.as_os_str().is_empty())
@@ -1906,21 +2038,103 @@ fn copy_buffered(
     if token.is_cancelled() {
         return Ok(false);
     }
+    // Fechas después de la última escritura (escribir actualiza la de modificación).
+    writer.as_file().set_times(source_times(&source_metadata))?;
+    if durable {
+        writer.as_file().sync_all()?;
+    }
+    #[cfg(not(windows))]
     std::fs::set_permissions(writer.path(), source_permissions)?;
-    // Publicar sólo después de copiar y aplicar permisos: persist reemplaza atómicamente cuando
+    // Publicar sólo después de copiar y aplicar metadatos: persist reemplaza atómicamente cuando
     // se autorizó Overwrite; persist_noclobber vuelve a validar el destino al final y no puede
     // pisar una ruta que apareció durante la copia. El temporal comparte filesystem con `to`.
     let persisted = if overwrite {
-        writer.persist(to)
+        match writer.persist(to) {
+            // Sobrescribir autorizado sobre un destino de solo lectura: `persist` (rename con
+            // reemplazo) da acceso denegado. Se quita el atributo y se reintenta una vez.
+            Err(error) if error.error.kind() == std::io::ErrorKind::PermissionDenied => {
+                let mut pending = Some(error.file);
+                let mut published = None;
+                super::retry_over_readonly_destination(to, error.error, || {
+                    let file = pending
+                        .take()
+                        .ok_or_else(|| std::io::Error::other("temporal ya consumido"))?;
+                    match file.persist(to) {
+                        Ok(file) => {
+                            published = Some(file);
+                            Ok(())
+                        }
+                        Err(error) => {
+                            pending = Some(error.file);
+                            Err(error.error)
+                        }
+                    }
+                })
+                .map(|()| published.expect("persist devolvió Ok"))
+            }
+            other => other.map_err(|error| error.error),
+        }
     } else {
-        writer.persist_noclobber(to)
+        writer.persist_noclobber(to).map_err(|error| error.error)
     };
-    if let Err(error) = persisted {
-        return Err(error.error);
+    let published = match persisted {
+        Ok(file) => file,
+        Err(error) => {
+            return Err(std::io::Error::new(
+                error.kind(),
+                super::publish_failed_failure(&error.to_string()),
+            ));
+        }
+    };
+    if durable {
+        sync_parent_dir(to);
     }
+    drop(published);
+    // Windows: persist dejó el archivo con atributos NORMAL. `Permissions` de Windows guarda los
+    // atributos del origen (solo lectura, oculto, sistema, archivo) y `set_permissions` los
+    // reaplica todos con SetFileAttributesW.
+    #[cfg(windows)]
+    std::fs::set_permissions(to, source_permissions).map_err(|error| {
+        std::io::Error::new(
+            error.kind(),
+            format!("copiado pero no se aplicaron los atributos del origen: {error}"),
+        )
+    })?;
     // Emisión final sólo después de que la publicación tuvo éxito.
     on_bytes(copied);
     Ok(true)
+}
+
+/// Fechas del origen a aplicar a la copia. Las que la plataforma no informa se omiten (el
+/// filesystem deja la actual) en vez de fallar la copia entera.
+fn source_times(metadata: &std::fs::Metadata) -> std::fs::FileTimes {
+    let mut times = std::fs::FileTimes::new();
+    if let Ok(modified) = metadata.modified() {
+        times = times.set_modified(modified);
+    }
+    if let Ok(accessed) = metadata.accessed() {
+        times = times.set_accessed(accessed);
+    }
+    #[cfg(windows)]
+    if let Ok(created) = metadata.created() {
+        use std::os::windows::fs::FileTimesExt;
+        times = times.set_created(created);
+    }
+    times
+}
+
+/// Unix: tras el rename, sincroniza el directorio para que la entrada nueva también sea durable
+/// antes de que un Move borre el origen. Best-effort: algunos filesystems no lo admiten. En
+/// Windows NTFS registra el rename en su journal; no hay equivalente portable vía `std`.
+fn sync_parent_dir(to: &Path) {
+    #[cfg(unix)]
+    if let Some(parent) = to.parent().filter(|p| !p.as_os_str().is_empty()) {
+        if let Ok(dir) = std::fs::File::open(parent) {
+            let _ = dir.sync_all();
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = to;
 }
 
 /// Abstrae la operación de renombrado rápido de Move para mantener Win32 fuera de `core`.
@@ -1928,6 +2142,33 @@ fn copy_buffered(
 /// de `core` queda para consumidores autónomos; en Windows la UI inyecta el adaptador de `platform`.
 pub trait NoReplaceRename: Send + Sync {
     fn rename_noreplace(&self, from: &Path, to: &Path) -> std::io::Result<()>;
+
+    /// Copia `from` a un temporal junto a `to` y lo publica en `to` solo al terminar.
+    ///
+    /// - `overwrite`: la publicación reemplaza un `to` existente; si es `false`, un destino que
+    ///   aparezca durante la copia hace fallar la publicación (`AlreadyExists`) sin pisarlo.
+    /// - `durable`: el contenido llega a disco antes de publicar (lo pide un Move entre
+    ///   volúmenes, que borra el origen justo después).
+    /// - `on_bytes`: bytes de ESTE archivo copiados hasta ahora, con throttle (~100 ms) y una
+    ///   emisión final tras publicar.
+    ///
+    /// Devuelve `Ok(true)` si publicó, `Ok(false)` si se canceló (sin parcial ni temporal) y
+    /// `Err` ante un error de I/O (el temporal se borra; un destino previo queda intacto).
+    ///
+    /// La implementación por defecto es la copia por buffers de `core` (fechas, permisos y
+    /// solo lectura preservados); `platform` la reemplaza en Windows por `CopyFile2`, que además
+    /// preserva atributos y flujos alternativos (ADS).
+    fn copy_and_publish(
+        &self,
+        from: &Path,
+        to: &Path,
+        overwrite: bool,
+        durable: bool,
+        token: &CancellationToken,
+        on_bytes: &mut dyn FnMut(u64),
+    ) -> std::io::Result<bool> {
+        copy_buffered(from, to, overwrite, durable, token, on_bytes, || {})
+    }
 }
 
 /// Implementación autónoma del core: atómica en Linux y best-effort en Windows/otros targets.
@@ -2223,6 +2464,50 @@ mod tests {
         drop(tx);
         let msgs: Vec<OpMsg> = rx.into_iter().collect();
         (msgs, summary)
+    }
+
+    #[test]
+    fn move_entre_volumenes_no_borra_a_traves_de_junction() {
+        struct SiempreOtroVolumen;
+        impl NoReplaceRename for SiempreOtroVolumen {
+            fn rename_noreplace(&self, _from: &Path, _to: &Path) -> std::io::Result<()> {
+                Err(std::io::Error::from(std::io::ErrorKind::CrossesDevices))
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let t = dir.path().join("T");
+        fs::create_dir(&t).unwrap();
+        fs::write(t.join("f.txt"), b"real").unwrap();
+        let a = dir.path().join("A");
+        fs::create_dir(&a).unwrap();
+        fs::write(a.join("propio.txt"), b"mio").unwrap();
+        let j = a.join("j");
+        if !super::super::make_junction(&j, &t) {
+            return;
+        }
+        let dest = dir.path().join("dest");
+        fs::create_dir(&dest).unwrap();
+        let request = super::super::transfer(true, vec![a.clone()], dest);
+        let plan = plan(&request).unwrap();
+        let token = CancellationToken::new();
+        let (tx, _rx) = mpsc::channel();
+        let (_ctx, crx) = mpsc::channel::<ConflictDecision>();
+        let summary = run_plan_with_no_replace_rename(
+            &plan,
+            &request.kind,
+            request.conflict,
+            &token,
+            &tx,
+            &crx,
+            None,
+            &SiempreOtroVolumen,
+        );
+        assert_eq!(fs::read(t.join("f.txt")).unwrap(), b"real");
+        assert!(
+            fs::symlink_metadata(&j).is_ok(),
+            "el enlace sigue en el origen"
+        );
+        assert_eq!(summary.count_failed(), 1, "{summary:?}");
     }
 
     #[test]
@@ -3128,6 +3413,113 @@ mod tests {
         assert!(staging.exists());
     }
 
+    /// Modo multi-instancia (depuración): un registro de OTRO proceso no se recupera ni se
+    /// borra; su destino se informa como activo para que esta instancia no lo reemplace encima.
+    #[test]
+    fn sin_recuperacion_no_toca_un_replace_ajeno_y_lo_informa_activo() {
+        let parent = tempfile::tempdir().unwrap();
+        let destination = parent.path().join("dest");
+        let staging = parent.path().join(".naygo-replace-ajeno");
+        let backup = parent.path().join(".naygo-backup-dest-21-3");
+        fs::create_dir(&destination).unwrap();
+        fs::write(destination.join("old.txt"), b"old tree").unwrap();
+        fs::create_dir(&staging).unwrap();
+        add_interrupted_replace_marker(&staging, "d4-e5-f6");
+        fs::rename(&destination, &backup).unwrap();
+        let record = write_interrupted_replace_record(
+            parent.path(),
+            "d4-e5-f6",
+            "dest",
+            ".naygo-replace-ajeno",
+            ".naygo-backup-dest-21-3",
+        );
+        let temporary = tree_recovery_dir(parent.path()).join("tmp-a7.json");
+        fs::write(&temporary, b"{}").unwrap();
+
+        let active = scan_tree_replacements_in_parent(
+            parent.path(),
+            &CancellationToken::new(),
+            &NativeNoReplaceRename,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(active, vec![PathBuf::from("dest")]);
+        assert!(!destination.exists(), "no se restauró nada");
+        assert_eq!(fs::read(backup.join("old.txt")).unwrap(), b"old tree");
+        assert!(staging.exists(), "el staging ajeno se conserva");
+        assert!(record.exists(), "el registro ajeno se conserva");
+        assert!(temporary.exists(), "el temporal ajeno se conserva");
+    }
+
+    /// Endurecimiento: si el marcador del staging desapareció antes de publicar (otra instancia
+    /// lo tomó por interrumpido), no se publica y el destino anterior queda intacto.
+    #[test]
+    fn replace_no_publica_si_el_marcador_del_staging_desaparecio() {
+        use crate::ops::{apply_folder_decision, folder_conflicts, FolderDecision};
+        struct RemoveMarkerAfterCopy;
+        impl NoReplaceRename for RemoveMarkerAfterCopy {
+            fn rename_noreplace(&self, from: &Path, to: &Path) -> std::io::Result<()> {
+                NativeNoReplaceRename.rename_noreplace(from, to)
+            }
+            fn copy_and_publish(
+                &self,
+                from: &Path,
+                to: &Path,
+                overwrite: bool,
+                durable: bool,
+                token: &CancellationToken,
+                on_bytes: &mut dyn FnMut(u64),
+            ) -> std::io::Result<bool> {
+                let published = NativeNoReplaceRename
+                    .copy_and_publish(from, to, overwrite, durable, token, on_bytes)?;
+                let staging = to.parent().unwrap();
+                for entry in fs::read_dir(staging).unwrap().flatten() {
+                    if entry
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with(TREE_MARKER_PREFIX)
+                    {
+                        fs::remove_file(entry.path()).unwrap();
+                    }
+                }
+                Ok(published)
+            }
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("folder");
+        fs::create_dir(&src).unwrap();
+        fs::write(src.join("new.txt"), b"new").unwrap();
+        let dest_parent = dir.path().join("dest");
+        fs::create_dir(&dest_parent).unwrap();
+        let dest_root = dest_parent.join("folder");
+        fs::create_dir(&dest_root).unwrap();
+        fs::write(dest_root.join("old.txt"), b"old").unwrap();
+        let req = super::super::transfer(false, vec![src.clone()], dest_parent.clone());
+        let conflict = folder_conflicts(&req).pop().unwrap();
+        let mut plan = plan(&req).unwrap();
+        apply_folder_decision(&mut plan, &conflict.dest_root, FolderDecision::Replace);
+        let token = CancellationToken::new();
+        let (tx, _rx) = mpsc::channel::<OpMsg>();
+        let (_ctx, conflict_rx) = mpsc::channel::<ConflictDecision>();
+        let summary = super::run_plan_with_no_replace_rename(
+            &plan,
+            &req.kind,
+            req.conflict,
+            &token,
+            &tx,
+            &conflict_rx,
+            None,
+            &RemoveMarkerAfterCopy,
+        );
+
+        assert!(summary.count_failed() > 0, "{summary:?}");
+        assert_eq!(fs::read(dest_root.join("old.txt")).unwrap(), b"old");
+        assert!(!dest_root.join("new.txt").exists());
+        assert_eq!(fs::read(src.join("new.txt")).unwrap(), b"new");
+    }
+
     #[test]
     fn replace_cancelado_antes_de_empezar_conserva_ambos_arboles() {
         use crate::ops::{apply_folder_decision, folder_conflicts, FolderDecision};
@@ -3192,12 +3584,14 @@ mod tests {
                     to: dest_root.clone(),
                     bytes: 0,
                     is_dir: true,
+                    planned_failure: None,
                 },
                 OpStep {
                     from: Some(origen.join("a.txt")),
                     to: dest_root.join("a.txt"),
                     bytes: 17,
                     is_dir: false,
+                    planned_failure: None,
                 },
             ],
             total_bytes: 17,
@@ -3236,6 +3630,81 @@ mod tests {
         );
     }
 
+    /// Ejecuta un único paso de archivo con `Overwrite` y devuelve el resumen.
+    fn run_single_overwrite_step(kind: OpKind, from: PathBuf, to: PathBuf) -> OpSummary {
+        let plan = OpPlan {
+            steps: vec![OpStep {
+                from: Some(from),
+                to,
+                bytes: 1,
+                is_dir: false,
+                planned_failure: None,
+            }],
+            total_bytes: 1,
+            total_files: 1,
+            allow_directory_rename: false,
+            pre_delete: vec![],
+        };
+        let token = CancellationToken::new();
+        let (tx, _rx) = mpsc::channel::<OpMsg>();
+        let (_ctx, crx) = mpsc::channel::<ConflictDecision>();
+        run_plan(
+            &plan,
+            &kind,
+            ConflictPolicy::Overwrite,
+            &token,
+            &tx,
+            &crx,
+            None,
+        )
+    }
+
+    #[test]
+    fn mover_sobre_hard_link_del_mismo_archivo_no_pierde_datos() {
+        let dir = tempfile::tempdir().unwrap();
+        let a_dir = dir.path().join("a");
+        let b_dir = dir.path().join("b");
+        fs::create_dir_all(&a_dir).unwrap();
+        fs::create_dir_all(&b_dir).unwrap();
+        let a = a_dir.join("a.txt");
+        let b = b_dir.join("b.txt");
+        fs::write(&a, b"contenido-unico").unwrap();
+        fs::hard_link(&a, &b).unwrap();
+
+        let summary = run_single_overwrite_step(OpKind::Move, a.clone(), b.clone());
+
+        assert_eq!(summary.items.len(), 1);
+        assert_eq!(summary.items[0].outcome, OpOutcome::Skipped);
+        assert_eq!(fs::read(&b).unwrap(), b"contenido-unico");
+        assert!(
+            a.exists(),
+            "el origen no debe borrarse: es el mismo archivo"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn copiar_sobre_si_mismo_con_otra_ortografia_es_noop() {
+        let dir = tempfile::tempdir().unwrap();
+        let src_dir = dir.path().join("src");
+        fs::create_dir_all(&src_dir).unwrap();
+        let a = src_dir.join("a.txt");
+        fs::write(&a, b"intacto").unwrap();
+        let abs = fs::canonicalize(&a).unwrap();
+        // `canonicalize` ya devuelve `\\?\C:\...`; se normaliza a la forma verbatim explícita.
+        let plain = abs
+            .to_string_lossy()
+            .trim_start_matches(r"\\?\")
+            .to_string();
+        let verbatim = PathBuf::from(format!(r"\\?\{plain}"));
+
+        let summary = run_single_overwrite_step(OpKind::Copy, a.clone(), verbatim);
+
+        assert_eq!(summary.items.len(), 1);
+        assert_eq!(summary.items[0].outcome, OpOutcome::Skipped);
+        assert_eq!(fs::read(&a).unwrap(), b"intacto");
+    }
+
     #[test]
     fn pre_delete_no_borra_un_ancestro_de_un_origen() {
         // Variante: pre_delete apunta a un ANCESTRO de un `step.from` (no al from exacto). El motor
@@ -3255,6 +3724,7 @@ mod tests {
                 to: dest.join("a.txt"),
                 bytes: 1,
                 is_dir: false,
+                planned_failure: None,
             }],
             total_bytes: 1,
             total_files: 1,
@@ -3307,12 +3777,14 @@ mod tests {
                     to: dest_root.clone(),
                     bytes: 0,
                     is_dir: true,
+                    planned_failure: None,
                 },
                 OpStep {
                     from: Some(origen.join("a.txt")),
                     to: dest_root.join("a.txt"),
                     bytes: 17,
                     is_dir: false,
+                    planned_failure: None,
                 },
             ],
             total_bytes: 17,
@@ -3460,6 +3932,317 @@ mod tests {
         let (_m, _s) = run(req);
         assert!(!src.exists());
         assert!(dest.join("a.txt").exists());
+    }
+
+    /// raiz/{a.txt, mid/{b.txt, secreta/{s.txt}}}: `secreta` es la subcarpeta ilegible.
+    fn unreadable_tree(dir: &Path) -> (PathBuf, PathBuf) {
+        let root = dir.join("origen").join("raiz");
+        let secret = root.join("mid").join("secreta");
+        fs::create_dir_all(&secret).unwrap();
+        fs::write(root.join("a.txt"), b"a").unwrap();
+        fs::write(root.join("mid").join("b.txt"), b"bb").unwrap();
+        fs::write(secret.join("s.txt"), b"dato unico").unwrap();
+        (root, secret)
+    }
+
+    fn run_with_unreadable(
+        kind: OpKind,
+        root: &Path,
+        dest: &Path,
+        secret: &Path,
+        rename: &dyn NoReplaceRename,
+    ) -> OpSummary {
+        let reader = super::super::plan::FakeDirReader {
+            unreadable: Some(secret.to_path_buf()),
+            ..Default::default()
+        };
+        run_with_reader(kind, root, dest, &reader, None, rename)
+    }
+
+    /// Planifica con un lector falso y ejecuta el plan; `replace` marca ese destino de carpeta
+    /// como "Reemplazar" (igual que la decisión de conflicto de la UI).
+    fn run_with_reader(
+        kind: OpKind,
+        root: &Path,
+        dest: &Path,
+        reader: &super::super::plan::FakeDirReader,
+        replace: Option<&Path>,
+        rename: &dyn NoReplaceRename,
+    ) -> OpSummary {
+        let request = OpRequest {
+            kind,
+            sources: vec![root.to_path_buf()],
+            dest_dir: Some(dest.to_path_buf()),
+            conflict: ConflictPolicy::Overwrite,
+        };
+        let mut plan = super::super::plan::plan_transfer_with_reader(
+            &request,
+            &mut |_, _| {},
+            &|| false,
+            reader,
+        )
+        .expect("una subcarpeta ilegible no aborta el plan");
+        if let Some(target) = replace {
+            super::super::apply_folder_decision(
+                &mut plan,
+                target,
+                super::super::FolderDecision::Replace,
+            );
+        }
+        let token = CancellationToken::new();
+        let (tx, _rx) = mpsc::channel();
+        let (_ctx, crx) = mpsc::channel::<ConflictDecision>();
+        run_plan_with_no_replace_rename(
+            &plan,
+            &request.kind,
+            request.conflict,
+            &token,
+            &tx,
+            &crx,
+            None,
+            rename,
+        )
+    }
+
+    /// Ítems del resumen cuyo origen es `src`.
+    fn items_for<'a>(summary: &'a OpSummary, src: &Path) -> Vec<&'a OpOutcome> {
+        summary
+            .items
+            .iter()
+            .filter(|item| item.src.as_deref() == Some(src))
+            .map(|item| &item.outcome)
+            .collect()
+    }
+
+    #[test]
+    fn enumeracion_cortada_deja_la_carpeta_solo_como_fallida_y_move_la_conserva() {
+        for kind in [OpKind::Copy, OpKind::Move] {
+            let dir = tempfile::tempdir().unwrap();
+            let (root, _) = unreadable_tree(dir.path());
+            let mid = root.join("mid");
+            fs::write(mid.join("c.txt"), b"ccc").unwrap();
+            let dest = dir.path().join("dest");
+            fs::create_dir(&dest).unwrap();
+            let reader = super::super::plan::FakeDirReader {
+                broken_listing: Some(mid.clone()),
+                ..Default::default()
+            };
+            let summary = run_with_reader(
+                kind.clone(),
+                &root,
+                &dest,
+                &reader,
+                None,
+                &NativeNoReplaceRename,
+            );
+            let outcomes = items_for(&summary, &mid);
+            assert_eq!(outcomes.len(), 1, "{kind:?}: {summary:?}");
+            assert!(matches!(outcomes[0], OpOutcome::Failed(_)));
+            assert_eq!(summary.count_failed(), 1, "{summary:?}");
+            let copied = dest.join("raiz").join("mid");
+            // `b.txt` se enumeró antes del corte; `c.txt` y `secreta` no.
+            assert_eq!(fs::read(copied.join("b.txt")).unwrap(), b"bb");
+            assert!(!copied.join("c.txt").exists());
+            assert_eq!(fs::read(mid.join("c.txt")).unwrap(), b"ccc");
+            assert_eq!(
+                fs::read(mid.join("secreta").join("s.txt")).unwrap(),
+                b"dato unico"
+            );
+            if matches!(kind, OpKind::Move) {
+                assert!(!mid.join("b.txt").exists(), "lo enumerado se movió");
+                assert!(mid.is_dir() && root.is_dir());
+            }
+        }
+    }
+
+    #[test]
+    fn replace_con_subcarpeta_ilegible_no_publica_y_conserva_destino_y_origen() {
+        for kind in [OpKind::Copy, OpKind::Move] {
+            let dir = tempfile::tempdir().unwrap();
+            let (root, secret) = unreadable_tree(dir.path());
+            let dest = dir.path().join("dest");
+            let previous = dest.join("raiz");
+            fs::create_dir_all(&previous).unwrap();
+            fs::write(previous.join("viejo.txt"), b"contenido anterior").unwrap();
+            let reader = super::super::plan::FakeDirReader {
+                unreadable: Some(secret.clone()),
+                ..Default::default()
+            };
+            let summary = run_with_reader(
+                kind.clone(),
+                &root,
+                &dest,
+                &reader,
+                Some(&previous),
+                &NativeNoReplaceRename,
+            );
+            assert_only_secret_failed(&summary, &secret);
+            assert!(
+                !summary
+                    .items
+                    .iter()
+                    .any(|item| matches!(item.outcome, OpOutcome::Done)),
+                "{kind:?}: nada se da por hecho sin publicar: {summary:?}"
+            );
+            // El destino anterior sigue tal cual y el árbol nuevo no se publicó.
+            assert_eq!(
+                fs::read(previous.join("viejo.txt")).unwrap(),
+                b"contenido anterior"
+            );
+            assert!(!previous.join("a.txt").exists());
+            assert!(!previous.join("mid").exists());
+            let names: Vec<_> = fs::read_dir(&dest)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name())
+                .collect();
+            assert_eq!(names, ["raiz"], "sin staging ni respaldo sobrantes");
+            // El origen queda completo, también en Move.
+            assert_eq!(fs::read(root.join("a.txt")).unwrap(), b"a");
+            assert_eq!(fs::read(root.join("mid").join("b.txt")).unwrap(), b"bb");
+            assert_eq!(fs::read(secret.join("s.txt")).unwrap(), b"dato unico");
+        }
+    }
+
+    fn assert_only_secret_failed(summary: &OpSummary, secret: &Path) {
+        let failed: Vec<_> = summary
+            .items
+            .iter()
+            .filter(|item| matches!(item.outcome, OpOutcome::Failed(_)))
+            .collect();
+        assert_eq!(failed.len(), 1, "{summary:?}");
+        assert_eq!(failed[0].src.as_deref(), Some(secret));
+    }
+
+    #[test]
+    fn copia_con_subcarpeta_ilegible_copia_el_resto_y_reporta_la_subcarpeta() {
+        let dir = tempfile::tempdir().unwrap();
+        let (root, secret) = unreadable_tree(dir.path());
+        let dest = dir.path().join("dest");
+        fs::create_dir(&dest).unwrap();
+        let summary =
+            run_with_unreadable(OpKind::Copy, &root, &dest, &secret, &NativeNoReplaceRename);
+        assert_only_secret_failed(&summary, &secret);
+        let copied = dest.join("raiz");
+        assert_eq!(fs::read(copied.join("a.txt")).unwrap(), b"a");
+        assert_eq!(fs::read(copied.join("mid").join("b.txt")).unwrap(), b"bb");
+        assert!(
+            !copied.join("mid").join("secreta").exists(),
+            "el paso fallido no crea el destino"
+        );
+        assert_eq!(fs::read(secret.join("s.txt")).unwrap(), b"dato unico");
+    }
+
+    fn assert_move_kept_unreadable_branch(root: &Path, secret: &Path, dest: &Path) {
+        let moved = dest.join("raiz");
+        assert_eq!(fs::read(moved.join("a.txt")).unwrap(), b"a");
+        assert_eq!(fs::read(moved.join("mid").join("b.txt")).unwrap(), b"bb");
+        assert!(!moved.join("mid").join("secreta").exists());
+        assert!(!root.join("a.txt").exists(), "lo legible se movió");
+        assert!(!root.join("mid").join("b.txt").exists());
+        // La subcarpeta y sus ancestros siguen en el origen, con su contenido intacto.
+        assert!(root.is_dir() && root.join("mid").is_dir());
+        assert_eq!(fs::read(secret.join("s.txt")).unwrap(), b"dato unico");
+    }
+
+    #[test]
+    fn move_con_subcarpeta_ilegible_mueve_el_resto_y_conserva_la_rama_en_el_origen() {
+        let dir = tempfile::tempdir().unwrap();
+        let (root, secret) = unreadable_tree(dir.path());
+        let dest = dir.path().join("dest");
+        fs::create_dir(&dest).unwrap();
+        let summary =
+            run_with_unreadable(OpKind::Move, &root, &dest, &secret, &NativeNoReplaceRename);
+        assert_only_secret_failed(&summary, &secret);
+        assert_move_kept_unreadable_branch(&root, &secret, &dest);
+    }
+
+    #[test]
+    fn move_entre_volumenes_con_subcarpeta_ilegible_conserva_la_rama_en_el_origen() {
+        struct SiempreOtroVolumen;
+        impl NoReplaceRename for SiempreOtroVolumen {
+            fn rename_noreplace(&self, _from: &Path, _to: &Path) -> std::io::Result<()> {
+                Err(std::io::Error::from(std::io::ErrorKind::CrossesDevices))
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (root, secret) = unreadable_tree(dir.path());
+        let dest = dir.path().join("dest");
+        fs::create_dir(&dest).unwrap();
+        let summary = run_with_unreadable(OpKind::Move, &root, &dest, &secret, &SiempreOtroVolumen);
+        assert_only_secret_failed(&summary, &secret);
+        assert_move_kept_unreadable_branch(&root, &secret, &dest);
+    }
+
+    /// Mover una carpeta a una subcarpeta hermana usa el rename del árbol completo: la rama
+    /// ilegible viaja dentro de ese rename atómico, sin enumerarla ni borrar nada.
+    #[test]
+    fn move_por_rename_de_arbol_lleva_la_rama_ilegible_intacta() {
+        let dir = tempfile::tempdir().unwrap();
+        let (root, secret) = unreadable_tree(dir.path());
+        let dest = dir.path().join("origen").join("hermana");
+        fs::create_dir(&dest).unwrap();
+        let summary =
+            run_with_unreadable(OpKind::Move, &root, &dest, &secret, &NativeNoReplaceRename);
+        assert_eq!(summary.count_failed(), 0, "{summary:?}");
+        assert!(!root.exists());
+        let moved = dest.join("raiz");
+        assert_eq!(fs::read(moved.join("a.txt")).unwrap(), b"a");
+        assert_eq!(
+            fs::read(moved.join("mid").join("secreta").join("s.txt")).unwrap(),
+            b"dato unico"
+        );
+    }
+
+    /// Lo mismo con una carpeta realmente sin permiso de listado (ACL de denegación).
+    #[cfg(windows)]
+    #[test]
+    fn move_con_carpeta_sin_permiso_real_conserva_la_rama_en_el_origen() {
+        struct DenyList(PathBuf);
+        impl Drop for DenyList {
+            fn drop(&mut self) {
+                let _ = std::process::Command::new("icacls")
+                    .arg(&self.0)
+                    .args(["/remove:d", "*S-1-1-0"])
+                    .output();
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (root, secret) = unreadable_tree(dir.path());
+        let dest = dir.path().join("dest");
+        fs::create_dir(&dest).unwrap();
+        let denied = std::process::Command::new("icacls")
+            .arg(&secret)
+            .args(["/deny", "*S-1-1-0:(RD)"])
+            .output()
+            .is_ok_and(|output| output.status.success());
+        let guard = DenyList(secret.clone());
+        if !denied || fs::read_dir(&secret).is_ok() {
+            // Sin icacls o con privilegio de respaldo: la ACL no aplica a este proceso.
+            eprintln!("omitido: no se pudo quitar el permiso de listado con icacls");
+            return;
+        }
+        let request = OpRequest {
+            kind: OpKind::Move,
+            sources: vec![root.clone()],
+            dest_dir: Some(dest.clone()),
+            conflict: ConflictPolicy::Overwrite,
+        };
+        let plan = plan(&request).expect("la subcarpeta sin permiso no aborta el plan");
+        let token = CancellationToken::new();
+        let (tx, _rx) = mpsc::channel();
+        let (_ctx, crx) = mpsc::channel::<ConflictDecision>();
+        let summary = run_plan(
+            &plan,
+            &request.kind,
+            request.conflict,
+            &token,
+            &tx,
+            &crx,
+            None,
+        );
+        drop(guard);
+        assert_only_secret_failed(&summary, &secret);
+        assert_move_kept_unreadable_branch(&root, &secret, &dest);
     }
 
     #[test]
@@ -3709,6 +4492,7 @@ mod tests {
             to: dest.join(n),
             bytes: b,
             is_dir: false,
+            planned_failure: None,
         };
         let p = OpPlan {
             steps: vec![mk("a", 2), mk("b", 3), mk("c", 4)],
@@ -3844,6 +4628,7 @@ mod tests {
             to: target.clone(),
             bytes: 0,
             is_dir: true,
+            planned_failure: None,
         };
         let token = CancellationToken::new();
         token.cancel();
@@ -3921,6 +4706,7 @@ mod tests {
             &source,
             &destination,
             true,
+            false,
             &token,
             |_| {},
             || {
@@ -3957,6 +4743,7 @@ mod tests {
         let result = copy_buffered(
             &source,
             &destination,
+            false,
             false,
             &token,
             |_| {},
@@ -4098,6 +4885,7 @@ mod tests {
             &source,
             &destination,
             false,
+            false,
             &CancellationToken::new(),
             |_| {},
             || {},
@@ -4109,6 +4897,320 @@ mod tests {
             fs::metadata(destination).unwrap().permissions().mode() & 0o777,
             0o751
         );
+    }
+
+    /// Fecha fija y antigua (2023-11-14) para que una copia que la pierda sea evidente.
+    fn fecha_antigua() -> std::time::SystemTime {
+        std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000)
+    }
+
+    fn fijar_modificacion(path: &Path, t: std::time::SystemTime) {
+        fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(t)
+            .unwrap();
+    }
+
+    #[test]
+    fn copia_preserva_fecha_de_modificacion() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("fecha.txt");
+        fs::write(&source, b"contenido con fecha").unwrap();
+        fijar_modificacion(&source, fecha_antigua());
+        let dest = dir.path().join("dst");
+        fs::create_dir(&dest).unwrap();
+
+        let (_messages, summary) = run(super::super::transfer(
+            false,
+            vec![source.clone()],
+            dest.clone(),
+        ));
+
+        assert_eq!(summary.count_done(), 1);
+        assert_eq!(
+            fs::metadata(dest.join("fecha.txt"))
+                .unwrap()
+                .modified()
+                .unwrap(),
+            fecha_antigua(),
+            "la copia conserva la fecha de modificación del origen"
+        );
+    }
+
+    #[test]
+    fn copia_preserva_solo_lectura() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("protegido.txt");
+        fs::write(&source, b"no tocar").unwrap();
+        let mut permissions = fs::metadata(&source).unwrap().permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(&source, permissions).unwrap();
+        let dest = dir.path().join("dst");
+        fs::create_dir(&dest).unwrap();
+
+        let (_messages, summary) = run(super::super::transfer(
+            false,
+            vec![source.clone()],
+            dest.clone(),
+        ));
+
+        let copied = dest.join("protegido.txt");
+        let copied_readonly = fs::metadata(&copied)
+            .map(|m| m.permissions().readonly())
+            .unwrap_or(false);
+        // Limpiar el solo-lectura antes de afirmar: en Windows un archivo de solo lectura no se
+        // puede borrar y el TempDir quedaría con basura si el test falla.
+        for path in [&source, &copied] {
+            if let Ok(meta) = fs::metadata(path) {
+                let mut p = meta.permissions();
+                #[allow(clippy::permissions_set_readonly_false)]
+                p.set_readonly(false);
+                let _ = fs::set_permissions(path, p);
+            }
+        }
+        assert_eq!(summary.count_done(), 1);
+        assert!(
+            copied_readonly,
+            "la copia conserva el atributo solo lectura"
+        );
+    }
+
+    /// Comprobación de mismo archivo fail-closed: si el destino existe y su identidad no se puede
+    /// determinar, el paso falla (código estructurado) y no se sobrescribe ni se mueve nada.
+    #[test]
+    fn identidad_indeterminable_con_destino_existente_falla_sin_tocar_nada() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("a.txt");
+        fs::write(&source, b"nuevo").unwrap();
+        let dest = dir.path().join("dst");
+        fs::create_dir(&dest).unwrap();
+        fs::write(dest.join("a.txt"), b"viejo").unwrap();
+        let mut request = super::super::transfer(true, vec![source.clone()], dest.clone());
+        request.conflict = ConflictPolicy::Overwrite;
+        let p = plan(&request).unwrap();
+
+        let _forced = crate::ops::force_identity_error_for_tests();
+        let token = CancellationToken::new();
+        let (tx, _rx) = mpsc::channel();
+        let (_ctx, crx) = mpsc::channel::<ConflictDecision>();
+        let summary = run_plan(&p, &request.kind, request.conflict, &token, &tx, &crx, None);
+
+        assert_eq!(summary.count_failed(), 1, "{summary:?}");
+        let OpOutcome::Failed(detail) = &summary.items[0].outcome else {
+            unreachable!()
+        };
+        assert!(
+            matches!(
+                crate::ops::parse_failure(detail),
+                Some(crate::ops::OpFailure::IdentityUnknown { .. })
+            ),
+            "{detail}"
+        );
+        assert_eq!(fs::read(dest.join("a.txt")).unwrap(), b"viejo");
+        assert_eq!(fs::read(&source).unwrap(), b"nuevo");
+    }
+
+    /// Si el destino no existe no hace falta la identidad: la copia sigue como siempre.
+    #[test]
+    fn identidad_indeterminable_sin_destino_copia_igual() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("a.txt");
+        fs::write(&source, b"nuevo").unwrap();
+        let dest = dir.path().join("dst");
+        fs::create_dir(&dest).unwrap();
+        let request = super::super::transfer(false, vec![source.clone()], dest.clone());
+        let p = plan(&request).unwrap();
+
+        let _forced = crate::ops::force_identity_error_for_tests();
+        let token = CancellationToken::new();
+        let (tx, _rx) = mpsc::channel();
+        let (_ctx, crx) = mpsc::channel::<ConflictDecision>();
+        let summary = run_plan(&p, &request.kind, request.conflict, &token, &tx, &crx, None);
+
+        assert_eq!(summary.count_done(), 1, "{summary:?}");
+        assert_eq!(fs::read(dest.join("a.txt")).unwrap(), b"nuevo");
+    }
+
+    fn set_readonly(path: &Path, readonly: bool) {
+        let mut permissions = fs::metadata(path).unwrap().permissions();
+        #[allow(clippy::permissions_set_readonly_false)]
+        permissions.set_readonly(readonly);
+        fs::set_permissions(path, permissions).unwrap();
+    }
+
+    /// Copiar dos veces con Sobrescribir un origen de solo lectura: la primera copia conserva el
+    /// atributo, así que la segunda publica sobre un destino de solo lectura. El usuario autorizó
+    /// sobrescribir: el motor reemplaza el archivo (y la copia vuelve a quedar de solo lectura).
+    #[test]
+    fn copiar_dos_veces_con_sobrescribir_origen_solo_lectura() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("objeto.pack");
+        fs::write(&source, b"v1").unwrap();
+        set_readonly(&source, true);
+        let dest = dir.path().join("dst");
+        fs::create_dir(&dest).unwrap();
+        let copied = dest.join("objeto.pack");
+
+        let mut request = super::super::transfer(false, vec![source.clone()], dest.clone());
+        request.conflict = ConflictPolicy::Overwrite;
+        let (_m, first) = run(request.clone());
+        set_readonly(&source, false);
+        fs::write(&source, b"v2").unwrap();
+        set_readonly(&source, true);
+        let (_m, second) = run(request);
+
+        let content = fs::read(&copied).ok();
+        let still_readonly = fs::metadata(&copied)
+            .map(|m| m.permissions().readonly())
+            .unwrap_or(false);
+        for path in [&source, &copied] {
+            if path.exists() {
+                set_readonly(path, false);
+            }
+        }
+        assert_eq!(first.count_done(), 1, "{first:?}");
+        assert_eq!(second.count_failed(), 0, "{second:?}");
+        assert_eq!(second.count_done(), 1, "{second:?}");
+        assert_eq!(content.as_deref(), Some(&b"v2"[..]));
+        assert!(still_readonly, "la copia nueva conserva el solo lectura");
+    }
+
+    /// Sin autorización de sobrescribir no cambia nada: el destino de solo lectura no se toca.
+    #[test]
+    fn sin_sobrescribir_un_destino_de_solo_lectura_no_se_toca() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("a.txt");
+        fs::write(&source, b"nuevo").unwrap();
+        let dest = dir.path().join("dst");
+        fs::create_dir(&dest).unwrap();
+        let existing = dest.join("a.txt");
+        fs::write(&existing, b"viejo").unwrap();
+        set_readonly(&existing, true);
+
+        let mut request = super::super::transfer(false, vec![source.clone()], dest.clone());
+        request.conflict = ConflictPolicy::Skip;
+        let (_m, summary) = run(request);
+
+        let content = fs::read(&existing).unwrap();
+        let readonly = fs::metadata(&existing).unwrap().permissions().readonly();
+        set_readonly(&existing, false);
+        assert_eq!(summary.count_skipped(), 1, "{summary:?}");
+        assert_eq!(content, b"viejo");
+        assert!(readonly);
+    }
+
+    #[test]
+    fn copiar_dos_veces_con_saltar_identicos_salta_todo() {
+        let dir = tempfile::tempdir().unwrap();
+        let sources: Vec<_> = (0..3)
+            .map(|i| {
+                let path = dir.path().join(format!("f{i}.txt"));
+                fs::write(&path, format!("contenido {i}")).unwrap();
+                // Fecha antigua: si la copia no la preserva, la segunda pasada ve fechas distintas.
+                fijar_modificacion(&path, fecha_antigua());
+                path
+            })
+            .collect();
+        let dest = dir.path().join("dst");
+        fs::create_dir(&dest).unwrap();
+
+        // Primera pasada: destino vacío, sin conflictos.
+        let (_messages, first) = run(super::super::transfer(false, sources.clone(), dest.clone()));
+        assert_eq!(first.count_done(), 3);
+
+        // Segunda pasada con Ask: el primer conflicto responde "Saltar idénticos" para todos; si
+        // algún par difiere el motor vuelve a preguntar y el test responde Overwrite (→ Done).
+        let req = super::super::transfer(false, sources, dest.clone());
+        let p = plan(&req).unwrap();
+        let token = CancellationToken::new();
+        let (tx, rx) = mpsc::channel::<OpMsg>();
+        let (ctx, crx) = mpsc::channel::<ConflictDecision>();
+        let prompts = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let prompts2 = prompts.clone();
+        let resp = std::thread::spawn(move || {
+            while let Ok(msg) = rx.recv() {
+                if let OpMsg::Conflict(_) = msg {
+                    let n = prompts2.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    let action = if n == 0 {
+                        ConflictAction::SkipIdentical
+                    } else {
+                        ConflictAction::Overwrite
+                    };
+                    let _ = ctx.send(ConflictDecision {
+                        action,
+                        apply_all: n == 0,
+                    });
+                }
+            }
+        });
+        let second = run_plan(&p, &req.kind, ConflictPolicy::Ask, &token, &tx, &crx, None);
+        drop(tx);
+        let _ = resp.join();
+
+        assert_eq!(second.count_done(), 0, "nada se recopia");
+        assert_eq!(second.count_skipped(), 3, "todos idénticos → Skipped");
+        assert_eq!(
+            prompts.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "solo el primer conflicto pregunta"
+        );
+    }
+
+    #[test]
+    fn move_cross_volume_pide_copia_durable() {
+        struct OtroVolumenRegistraDurable(std::sync::Mutex<Vec<bool>>);
+        impl NoReplaceRename for OtroVolumenRegistraDurable {
+            fn rename_noreplace(&self, _from: &Path, _to: &Path) -> std::io::Result<()> {
+                Err(std::io::Error::from(std::io::ErrorKind::CrossesDevices))
+            }
+            fn copy_and_publish(
+                &self,
+                from: &Path,
+                to: &Path,
+                overwrite: bool,
+                durable: bool,
+                token: &CancellationToken,
+                on_bytes: &mut dyn FnMut(u64),
+            ) -> std::io::Result<bool> {
+                self.0.lock().unwrap().push(durable);
+                NativeNoReplaceRename
+                    .copy_and_publish(from, to, overwrite, durable, token, on_bytes)
+            }
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.txt");
+        let dest = dir.path().join("dest");
+        fs::write(&source, b"payload").unwrap();
+        fs::create_dir(&dest).unwrap();
+        let request = super::super::transfer(true, vec![source.clone()], dest.clone());
+        let plan = plan(&request).unwrap();
+        let token = CancellationToken::new();
+        let (tx, _rx) = mpsc::channel();
+        let (_conflict_tx, conflict_rx) = mpsc::channel();
+        let copier = OtroVolumenRegistraDurable(std::sync::Mutex::new(Vec::new()));
+
+        let summary = run_plan_with_no_replace_rename(
+            &plan,
+            &request.kind,
+            request.conflict,
+            &token,
+            &tx,
+            &conflict_rx,
+            None,
+            &copier,
+        );
+
+        assert_eq!(summary.count_done(), 1);
+        assert_eq!(
+            *copier.0.lock().unwrap(),
+            vec![true],
+            "el move entre volúmenes copia en modo durable antes de borrar el origen"
+        );
+        assert!(!source.exists(), "se retira el origen tras publicar");
+        assert_eq!(fs::read(dest.join("source.txt")).unwrap(), b"payload");
     }
 
     // Confirma la causa raíz del bug "pegar+sobrescribir copió solo unos MB de un archivo

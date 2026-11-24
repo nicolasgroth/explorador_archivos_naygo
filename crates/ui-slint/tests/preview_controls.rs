@@ -10,8 +10,8 @@ use slint::{
 };
 use std::{cell::Cell, rc::Rc};
 slint::slint! {
-    import { PreviewPanel } from "../ui/preview-panel.slint";
-    export { Theme } from "../ui/theme.slint";
+    import { PreviewPanel } from "../../ui-gen/ui/preview-panel.slint";
+    export { Theme } from "../../ui-gen/ui/theme.slint";
     export component PreviewProbe inherits Window {
         width: 420px; height: 240px;
         in property <bool> retry;

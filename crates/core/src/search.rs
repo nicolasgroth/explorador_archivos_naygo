@@ -18,7 +18,7 @@
 
 use crate::cancel::CancellationToken;
 use crate::fs_model::{Entry, EntryKind};
-use crate::listing::entry_from_path;
+use crate::listing::entry_at;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread::{self, JoinHandle};
@@ -261,7 +261,10 @@ fn file_contains_text(path: &Path, needle: &str, ignore_case: bool) -> bool {
     let Ok(meta) = std::fs::metadata(path) else {
         return false;
     };
-    if !meta.is_file() || meta.len() > MAX_CONTENT_FILE_BYTES {
+    if !meta.is_file()
+        || meta.len() > MAX_CONTENT_FILE_BYTES
+        || crate::listing::is_cloud_placeholder_offline(&meta)
+    {
         return false;
     }
     let Ok(bytes) = std::fs::read(path) else {
@@ -283,9 +286,10 @@ fn file_contains_text(path: &Path, needle: &str, ignore_case: bool) -> bool {
 /// Construye el `Entry` de una coincidencia leyendo su metadata real (tamaño/fechas). Si la
 /// metadata no se puede leer, cae a un `Entry` mínimo con el tipo ya conocido del walk.
 fn make_entry(path: &Path, is_dir: bool) -> Entry {
-    match std::fs::metadata(path) {
-        Ok(m) => entry_from_path(path, Some(&m)),
-        Err(_) => Entry {
+    // Metadata del propio enlace, como el listado (no se sigue el destino).
+    match entry_at(path) {
+        Some(entry) => entry,
+        None => Entry {
             name: path
                 .file_name()
                 .map(crate::path_display::display_os_str)
@@ -305,33 +309,16 @@ fn make_entry(path: &Path, is_dir: bool) -> Entry {
     }
 }
 
-/// ¿La metadata corresponde a un reparse point de Windows (symlink O junction)? Igual criterio
-/// que `sizing`: en Windows miramos `FILE_ATTRIBUTE_REPARSE_POINT`; en otras plataformas
-/// `is_symlink()` ya cubre los enlaces.
-#[cfg(windows)]
-fn is_reparse_point(meta: &std::fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt;
-    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-    meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-}
-
-#[cfg(not(windows))]
-fn is_reparse_point(_meta: &std::fs::Metadata) -> bool {
-    false
-}
-
 /// Lista un directorio del FS real para la búsqueda. `None` si no se puede leer (parcial).
-/// Usa `symlink_metadata` (no sigue enlaces) y marca symlinks/junctions como no-descendibles.
+/// Usa `symlink_metadata` (no sigue enlaces) y marca symlinks/junctions como no-descendibles
+/// (los placeholders de nube no son enlaces: se recorren).
 pub(crate) fn fs_lister(dir: &Path) -> ListResult {
     let rd = std::fs::read_dir(dir).ok()?;
     let mut out = Vec::new();
     for ent in rd.flatten() {
         let path = ent.path();
         let (is_dir, is_symlink) = match std::fs::symlink_metadata(&path) {
-            Ok(m) => (
-                m.is_dir(),
-                m.file_type().is_symlink() || is_reparse_point(&m),
-            ),
+            Ok(m) => (m.is_dir(), m.file_type().is_symlink()),
             // Entrada ilegible: la representamos como archivo no-symlink (no descenderá y se
             // intentará emparejar su nombre igual; su metadata se resolverá en make_entry).
             Err(_) => (false, false),

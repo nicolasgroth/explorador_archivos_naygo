@@ -180,9 +180,12 @@ pub struct WorkspaceCtrl {
     startup_pending_theme: Option<String>,
     /// Un listado en curso por panel (la carpeta de cada panel se lista por separado).
     pub listings: HashMap<PaneId, Listing>,
-    /// Admisión común para listados de Files y árbol. El máximo inicial evita un hilo por cada
-    /// expansión rápida; los permisos viven en los workers hasta su salida real.
-    pub(crate) listing_admission: naygo_core::listing::ListingAdmission,
+    /// Admisiones de listados de Files, árbol y sondeo de carpetas ausentes: un cupo local (8) y
+    /// otro remoto (4) para que los shares colgados nunca dejen sin plaza a los discos locales.
+    /// Los máximos evitan un hilo por cada expansión rápida; los permisos viven en los workers
+    /// hasta su salida real. Elegir el cupo usa `drive_snapshot` (sin I/O): ver
+    /// `listing_admission_for`.
+    pub(crate) listing_admissions: naygo_core::listing::ListingAdmissions,
     /// Última navegación pendiente por panel cuando no hay plaza; una tecla rápida reemplaza la
     /// ruta pendiente en vez de acumular un worker por cada destino intermedio.
     pub(crate) pending_file_listings: HashMap<PaneId, PathBuf>,
@@ -267,6 +270,8 @@ pub struct WorkspaceCtrl {
     /// Asistente de sincronización en curso (planificación/preview). Todo el recorrido vive en
     /// su worker y se cancela al cerrar o cambiar opciones.
     pub sync_assistant: Option<sync_assistant::SyncAssistantState>,
+    /// Contador de planificaciones del asistente (ver `SyncAssistantState::generation`).
+    sync_generation: u64,
     /// Modal/job de transformación de texto. El diagnóstico y la escritura corren en workers.
     pub text_transform: Option<text_transform::TextTransformState>,
     /// Worker cancelado al cerrar el diálogo, conservado hasta su mensaje terminal.
@@ -410,9 +415,9 @@ pub struct WorkspaceCtrl {
     pub toolbar_menu_requested: Option<ToolbarMenuRequest>,
     /// Error pendiente de una operación Shell; el tick lo convierte en toast localizado.
     pub pending_shell_error: Option<String>,
-    /// Una sola solicitud Shell de carpeta; una llamada del SO bloqueada conserva la plaza.
-    folder_shell_rx: Option<Receiver<Result<(), naygo_platform::open::ShellError>>>,
-    folder_shell_waker: Option<naygo_platform::dir_watch::Waker>,
+    /// Ejecutor único de acciones Shell (abrir, abrir con, runas, carpeta/terminal) en un hilo
+    /// propio: el hilo de UI solo encola y recoge resultados.
+    shell: crate::shell_exec::ShellExecutor,
     /// Error de listado (puede indicar resultados parciales). El tick lo muestra sin modal.
     pub pending_listing_error: Option<String>,
     /// Marcas persistentes de la última comparación de dos paneles. El valor distingue
@@ -810,6 +815,7 @@ mod basket;
 mod columns;
 mod comparison_points;
 mod context;
+pub(crate) use context::start_terminal_tools_probe;
 mod deep_selection;
 mod deep_view;
 mod delivery;
@@ -915,7 +921,7 @@ impl WorkspaceCtrl {
             startup_warnings: Vec::new(),
             startup_pending_theme: None,
             listings: HashMap::new(),
-            listing_admission: naygo_core::listing::ListingAdmission::new(8),
+            listing_admissions: naygo_core::listing::ListingAdmissions::default(),
             pending_file_listings: HashMap::new(),
             automatic_listings: HashMap::new(),
             file_listing_cursor: 0,
@@ -958,6 +964,7 @@ impl WorkspaceCtrl {
             search_context: false,
             delivery_results: Default::default(),
             sync_assistant: None,
+            sync_generation: 0,
             text_transform: None,
             retired_text_transform: None,
             pending_pick: None,
@@ -1016,8 +1023,7 @@ impl WorkspaceCtrl {
             open_config_requested: false,
             toolbar_menu_requested: None,
             pending_shell_error: None,
-            folder_shell_rx: None,
-            folder_shell_waker: None,
+            shell: crate::shell_exec::ShellExecutor::spawn_system(),
             pending_listing_error: None,
             comparison: HashMap::new(),
             comparison_pair: None,
@@ -1252,6 +1258,21 @@ impl WorkspaceCtrl {
         }
     }
 
+    /// Encola una acción Shell sin bloquear; el resultado (y el aviso de error) llegan por
+    /// `pump_folder_shell` cuando el worker termina.
+    pub(super) fn submit_shell(&mut self, job: naygo_platform::open::ShellJob) {
+        if let Err(error) = self.shell.submit(job, true) {
+            self.report_shell_result(Err(error));
+        }
+    }
+
+    /// Como `submit_shell` pero el error no se muestra (botones que históricamente lo ignoraban).
+    pub fn submit_shell_silent(&mut self, job: naygo_platform::open::ShellJob) {
+        if let Err(error) = self.shell.submit(job, false) {
+            crate::logging::log_line(&format!("operación Shell falló: {error}"));
+        }
+    }
+
     pub(super) fn report_shell_result(
         &mut self,
         result: Result<(), naygo_platform::open::ShellError>,
@@ -1296,7 +1317,7 @@ fn footer_inputs_of(
     files: &FilePaneState,
 ) -> (naygo_core::footer::FooterData, Option<std::path::PathBuf>) {
     // Selección: `files.selected` son posiciones de VISTA; se mapean a `entries` vía la vista.
-    let view = files.view_indices();
+    let view = files.view_indices_shared();
     let sel_count = files.selected.len();
     let total_count = view.len();
     let marked_bytes: u64 = files
@@ -1307,7 +1328,7 @@ fn footer_inputs_of(
         .filter_map(|e| e.size)
         .sum();
     // Conteo de archivos/carpetas sobre TODO el listado (no solo la vista filtrada).
-    let dir_count = files.entries.iter().filter(|e| e.is_dir()).count();
+    let dir_count = files.dir_count();
     let file_count = files.entries.len() - dir_count;
     let item_count = file_count + dir_count;
     // Windows obtiene la raíz de unidad (p. ej. `C:\`). En Linux se pasa la carpeta actual:

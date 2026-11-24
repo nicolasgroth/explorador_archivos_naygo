@@ -58,4 +58,4 @@ Build Release 0.5.2 supervisado e instalado in-place:
 
 Falta aceptación visual del menú y del gestor, además de probar el flujo real con rutas ausentes o
 remotas. El conector de UI de esta sesión no expone ventanas nativas, por lo que no permite afirmar
-aceptación visual. Evidencia anterior del primer selector: `docs/VALIDACION-E4-SELECTOR-2026-10-18.md`.
+aceptación visual. Evidencia anterior del primer selector: `docs/evidencia/VALIDACION-E4-SELECTOR-2026-10-18.md`.

@@ -81,7 +81,7 @@ Los binarios se regeneran con el mismo número 0.5.1 y un identificador de build
 - Operaciones: filtro de fallidos tanto en historial como en detalle, señal de error y acceso al
   detalle aunque haya cero éxitos. Revisión/reintento de archivos fallidos de copiar/mover con
   origen conocido, destinos exactos, comprobación de cambios y consulta de conflictos. No undo,
-  explícito en el diálogo. Limitaciones detalladas en [REINTENTOS.md](REINTENTOS.md).
+  explícito en el diálogo. Limitaciones detalladas en [REINTENTOS.md](../REINTENTOS.md).
 - Tests nuevos: selección de candidatos, cambios de origen/destino, cancelación sin ejecutar,
   copia/movimiento confirmado conservando otros archivos y recientes sin aplicación implícita.
   El render por software cubre también bandeja con etiquetas a 900/200 px.

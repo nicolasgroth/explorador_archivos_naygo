@@ -372,26 +372,12 @@ pub(crate) fn code_lang_label(lang: naygo_core::preview::CodeLang) -> &'static s
     }
 }
 
-pub(crate) fn current_preview_vm(c: &WorkspaceCtrl) -> PreviewVm {
-    // Ruta del archivo enfocado (para "abrir con el programa del sistema"); usar `wanted`
-    // primero evita que durante una carga larga se vea el path del archivo anterior.
-    let path: SharedString = c
-        .preview
-        .wanted
-        .as_ref()
-        .or(c.preview.loaded.as_ref())
-        .map(|p| SharedString::from(p.to_string_lossy().as_ref()))
-        .unwrap_or_default();
-    // Metadata por tipo del archivo enfocado (compartida por todos los modos de vista).
-    let meta = meta_fields_model(c);
-    let meta_loading = c.meta_loading();
-    let mesh_interactive = c.preview.mesh_interactive();
-    let mesh_busy = c.preview.busy() && mesh_interactive;
-    let (mesh_color, mesh_surface) = c.preview.mesh_appearance_indices();
-    let loading = c.preview.loading();
-    let can_cancel = c.preview.can_cancel(std::time::Instant::now());
-    let can_retry = c.preview.can_retry();
-    let animation_state = c.preview.animation_state();
+/// Parte pesada del `PreviewVm` (texto, imagen, mensaje y líneas resaltadas) derivada de la
+/// última vista entregada. `PreviewVmCache` la arma una vez por revisión; los campos de estado
+/// los completa `fill_preview_state`. `hl_lines` es SIEMPRE un modelo nuevo (aunque esté vacío):
+/// su puntero identifica la base en `preview_vm_eq`.
+pub(crate) fn preview_base_vm(c: &WorkspaceCtrl) -> PreviewVm {
+    let empty_lines = || ModelRc::from(Rc::new(VecModel::<HlLineVm>::default()));
     match c.preview.last_view() {
         Some(preview::ViewCache::Text {
             text,
@@ -440,97 +426,80 @@ pub(crate) fn current_preview_vm(c: &WorkspaceCtrl) -> PreviewVm {
                 text: SharedString::from(text.as_str()),
                 truncated: *truncated,
                 text_info: SharedString::from(text_info.as_str()),
-                image: slint::Image::default(),
-                message: SharedString::new(),
                 highlighted: is_hl,
                 hl_lines: ModelRc::from(Rc::new(VecModel::from(hl_lines))),
-                path,
-                meta,
-                meta_loading,
-                mesh_interactive,
-                mesh_busy,
-                mesh_color,
-                mesh_surface,
-                loading,
-                can_cancel,
-                can_retry,
-                animation_state,
+                ..PreviewVm::default()
             }
         }
         Some(preview::ViewCache::Image { image, .. }) => PreviewVm {
             mode: 2,
-            text: SharedString::new(),
-            truncated: false,
-            text_info: SharedString::new(),
             image: image.clone(),
-            message: SharedString::new(),
-            highlighted: false,
-            hl_lines: ModelRc::default(),
-            path,
-            meta,
-            meta_loading,
-            mesh_interactive,
-            mesh_busy,
-            mesh_color,
-            mesh_surface,
-            loading,
-            can_cancel,
-            can_retry,
-            animation_state,
+            hl_lines: empty_lines(),
+            ..PreviewVm::default()
         },
         Some(preview::ViewCache::Message(m)) => PreviewVm {
             mode: 3,
-            text: SharedString::new(),
-            truncated: false,
-            text_info: SharedString::new(),
-            image: slint::Image::default(),
             message: SharedString::from(m.as_str()),
-            highlighted: false,
-            hl_lines: ModelRc::default(),
-            path,
-            meta,
-            meta_loading,
-            mesh_interactive,
-            mesh_busy,
-            mesh_color,
-            mesh_surface,
-            loading,
-            can_cancel,
-            can_retry,
-            animation_state,
+            hl_lines: empty_lines(),
+            ..PreviewVm::default()
         },
         None => PreviewVm {
             mode: 0,
-            text: SharedString::new(),
-            truncated: false,
-            text_info: SharedString::new(),
-            image: slint::Image::default(),
-            message: SharedString::new(),
-            highlighted: false,
-            hl_lines: ModelRc::default(),
-            path,
-            meta,
-            meta_loading,
-            mesh_interactive: false,
-            mesh_busy: false,
-            mesh_color,
-            mesh_surface,
-            loading,
-            can_cancel,
-            can_retry,
-            animation_state,
+            hl_lines: empty_lines(),
+            ..PreviewVm::default()
         },
     }
 }
 
+/// Completa los campos baratos del `PreviewVm` (ruta, metadata y estado de carga/3D/animación)
+/// sobre una base de `preview_base_vm`. `meta` es el modelo persistente de metadata.
+pub(crate) fn fill_preview_state(
+    vm: &mut PreviewVm,
+    c: &WorkspaceCtrl,
+    meta: ModelRc<MetaFieldVm>,
+) {
+    // Ruta del archivo enfocado (para "abrir con el programa del sistema"); usar `wanted`
+    // primero evita que durante una carga larga se vea el path del archivo anterior.
+    vm.path = c
+        .preview
+        .wanted
+        .as_ref()
+        .or(c.preview.loaded.as_ref())
+        .map(|p| SharedString::from(p.to_string_lossy().as_ref()))
+        .unwrap_or_default();
+    // Metadata por tipo del archivo enfocado (compartida por todos los modos de vista).
+    vm.meta = meta;
+    vm.meta_loading = c.meta_loading();
+    // Sin vista cargada no hay escena 3D que girar.
+    let mesh_interactive = vm.mode != 0 && c.preview.mesh_interactive();
+    vm.mesh_interactive = mesh_interactive;
+    vm.mesh_busy = c.preview.busy() && mesh_interactive;
+    let (mesh_color, mesh_surface) = c.preview.mesh_appearance_indices();
+    vm.mesh_color = mesh_color;
+    vm.mesh_surface = mesh_surface;
+    vm.loading = c.preview.loading();
+    vm.can_cancel = c.preview.can_cancel(std::time::Instant::now());
+    vm.can_retry = c.preview.can_retry();
+    vm.animation_state = c.preview.animation_state();
+}
+
 pub(crate) fn to_row_data(r: bridge::PlainRow) -> RowData {
+    let name = SharedString::from(r.name.as_str());
+    // La celda de la columna Nombre repite el nombre: compartir el mismo `SharedString`
+    // (contador de referencias) ahorra una asignación por fila.
     let cells: Vec<SharedString> = r
         .cells
         .iter()
-        .map(|c| SharedString::from(c.as_str()))
+        .map(|c| {
+            if *c == r.name {
+                name.clone()
+            } else {
+                SharedString::from(c.as_str())
+            }
+        })
         .collect();
     RowData {
-        name: SharedString::from(r.name.as_str()),
+        name,
         cells: ModelRc::from(Rc::new(VecModel::from(cells))),
         is_dir: r.is_dir,
         drop_folder: r.drop_folder.into(),
@@ -630,18 +599,86 @@ pub(crate) fn to_op_row_vm(r: ops_ctrl::OpRowData) -> OpRowVm {
     }
 }
 
-pub(crate) fn to_op_file_vm(e: ops_ctrl::OpFileEntry, trash_unconfirmed: &str) -> OpFileVm {
-    let detail = if e.detail == naygo_platform::trash::TRASH_UNCONFIRMED_IDENTITY {
-        trash_unconfirmed
-    } else {
-        e.detail.as_str()
-    };
+/// Textos traducidos con los que se reemplazan los códigos estables que core/platform dejan en el
+/// detalle de un ítem fallido (ellos no conocen i18n). Se arma una vez por apertura del popup.
+pub(crate) struct OpDetailTexts {
+    pub trash_unconfirmed: String,
+    pub trash_not_supported: String,
+    /// Plantilla con `{original}` y `{restored}`.
+    pub trash_restored_elsewhere: String,
+    /// Plantilla con `{reason}`.
+    pub unreadable_folder: String,
+    /// Plantilla con `{path}`.
+    pub link_not_copied: String,
+    /// Plantilla con `{path}` y `{reason}`.
+    pub link_not_moved: String,
+    /// Plantilla con `{reason}`.
+    pub publish_failed: String,
+    /// Plantilla con `{reason}`.
+    pub identity_unknown: String,
+}
+
+impl OpDetailTexts {
+    pub(crate) fn from_config(config: &crate::config_ctrl::ConfigCtrl) -> Self {
+        Self {
+            trash_unconfirmed: config.t("ops.trash_unconfirmed"),
+            trash_not_supported: config.t("ops.err.trash_not_supported"),
+            trash_restored_elsewhere: config.t("ops.err.trash_restored_elsewhere"),
+            unreadable_folder: config.t("ops.failed.unreadable_folder"),
+            link_not_copied: config.t("ops.failed.link_not_copied"),
+            link_not_moved: config.t("ops.failed.link_not_moved"),
+            publish_failed: config.t("ops.failed.publish"),
+            identity_unknown: config.t("ops.failed.identity_unknown"),
+        }
+    }
+
+    /// Detalle listo para mostrar: traduce los códigos estables conocidos y deja pasar el resto
+    /// (texto del sistema operativo) tal cual.
+    pub(crate) fn localize(&self, detail: &str) -> String {
+        use naygo_platform::trash::{
+            parse_restored_elsewhere, TRASH_NOT_SUPPORTED, TRASH_UNCONFIRMED_IDENTITY,
+        };
+        if detail == TRASH_UNCONFIRMED_IDENTITY {
+            return self.trash_unconfirmed.clone();
+        }
+        if detail == TRASH_NOT_SUPPORTED {
+            return self.trash_not_supported.clone();
+        }
+        if let Some((original, restored)) = parse_restored_elsewhere(detail) {
+            return self
+                .trash_restored_elsewhere
+                .replace("{original}", original)
+                .replace("{restored}", restored);
+        }
+        use naygo_core::ops::OpFailure;
+        match naygo_core::ops::parse_failure(detail) {
+            Some(OpFailure::UnreadableFolder { reason }) => {
+                self.unreadable_folder.replace("{reason}", reason)
+            }
+            Some(OpFailure::LinkNotCopied { path }) => self.link_not_copied.replace("{path}", path),
+            Some(OpFailure::LinkNotMoved { path, reason }) => self
+                .link_not_moved
+                .replace("{path}", path)
+                .replace("{reason}", reason),
+            Some(OpFailure::PublishFailed { reason }) => {
+                self.publish_failed.replace("{reason}", reason)
+            }
+            Some(OpFailure::IdentityUnknown { reason }) => {
+                self.identity_unknown.replace("{reason}", reason)
+            }
+            None => detail.to_string(),
+        }
+    }
+}
+
+pub(crate) fn to_op_file_vm(e: ops_ctrl::OpFileEntry, texts: &OpDetailTexts) -> OpFileVm {
+    let detail = texts.localize(&e.detail);
     OpFileVm {
         name: SharedString::from(e.name.as_str()),
         rel_path: SharedString::from(e.rel_path.as_str()),
         size: SharedString::from(e.size.as_str()),
         status: e.status,
-        detail: SharedString::from(detail),
+        detail: SharedString::from(detail.as_str()),
     }
 }
 
@@ -818,18 +855,16 @@ pub(crate) fn to_inspector_vm(i: bridge::InspectorInfo) -> InspectorVm {
     }
 }
 
-/// Construye el modelo de campos de metadata para un VM, traduciendo cada clave i18n de etiqueta
-/// con `config.t`. Los pares vienen del worker como (clave_i18n, valor_formateado).
-pub(crate) fn meta_fields_model(c: &WorkspaceCtrl) -> ModelRc<MetaFieldVm> {
-    let fields: Vec<MetaFieldVm> = c
-        .meta_fields()
+/// Campos de metadata del archivo enfocado, traduciendo cada clave i18n de etiqueta con
+/// `config.t`. Los pares vienen del worker como (clave_i18n, valor_formateado).
+pub(crate) fn meta_fields(c: &WorkspaceCtrl) -> Vec<MetaFieldVm> {
+    c.meta_fields()
         .iter()
         .map(|(label_key, value)| MetaFieldVm {
             label: SharedString::from(c.config.t(label_key)),
             value: SharedString::from(value.as_str()),
         })
-        .collect();
-    ModelRc::from(Rc::new(VecModel::from(fields)))
+        .collect()
 }
 
 #[cfg(test)]
@@ -838,28 +873,109 @@ mod tests {
     use naygo_core::palette::{Command, CommandCategory, CommandMatch, CommandPayload};
     use std::path::PathBuf;
 
+    fn detail_texts() -> OpDetailTexts {
+        OpDetailTexts {
+            trash_unconfirmed: "T-UNCONFIRMED".into(),
+            trash_not_supported: "T-UNSUPPORTED".into(),
+            trash_restored_elsewhere: "T-ELSEWHERE {original} -> {restored}".into(),
+            unreadable_folder: "T-UNREADABLE {reason}".into(),
+            link_not_copied: "T-LINK {path}".into(),
+            link_not_moved: "T-LINKMOVE {path} {reason}".into(),
+            publish_failed: "T-PUBLISH {reason}".into(),
+            identity_unknown: "T-IDENTITY {reason}".into(),
+        }
+    }
+
+    fn entry_with_detail(detail: &str) -> ops_ctrl::OpFileEntry {
+        ops_ctrl::OpFileEntry {
+            name: "file".into(),
+            rel_path: "file".into(),
+            size: String::new(),
+            status: 2,
+            detail: detail.into(),
+        }
+    }
+
     #[test]
-    fn unconfirmed_trash_identity_is_translated_in_operation_details() {
-        let entry = ops_ctrl::OpFileEntry {
-            name: "file".into(),
-            rel_path: "file".into(),
-            size: String::new(),
-            status: 2,
-            detail: naygo_platform::trash::TRASH_UNCONFIRMED_IDENTITY.into(),
-        };
-        let view = to_op_file_vm(entry, "Check the Recycle Bin");
-        assert_eq!(view.detail.as_str(), "Check the Recycle Bin");
-        let ordinary = ops_ctrl::OpFileEntry {
-            name: "file".into(),
-            rel_path: "file".into(),
-            size: String::new(),
-            status: 2,
-            detail: "access denied".into(),
+    fn stable_failure_codes_are_translated_in_operation_details() {
+        let texts = detail_texts();
+        let detail_of = |detail: &str| {
+            to_op_file_vm(entry_with_detail(detail), &texts)
+                .detail
+                .to_string()
         };
         assert_eq!(
-            to_op_file_vm(ordinary, "translated").detail.as_str(),
-            "access denied"
+            detail_of(naygo_platform::trash::TRASH_UNCONFIRMED_IDENTITY),
+            "T-UNCONFIRMED"
         );
+        assert_eq!(
+            detail_of(naygo_platform::trash::TRASH_NOT_SUPPORTED),
+            "T-UNSUPPORTED"
+        );
+        let elsewhere = format!(
+            "{}\u{1f}C:\\a\\x.txt\u{1f}C:\\a\\x (2).txt",
+            naygo_platform::trash::TRASH_RESTORED_ELSEWHERE
+        );
+        assert_eq!(
+            detail_of(&elsewhere),
+            "T-ELSEWHERE C:\\a\\x.txt -> C:\\a\\x (2).txt"
+        );
+        let unreadable = format!(
+            "{}\u{1f}access denied",
+            naygo_core::ops::UNREADABLE_FOLDER_FAILURE
+        );
+        assert_eq!(detail_of(&unreadable), "T-UNREADABLE access denied");
+        assert_eq!(
+            detail_of(&naygo_core::ops::link_not_copied_failure(
+                std::path::Path::new("l")
+            )),
+            "T-LINK l"
+        );
+        assert_eq!(
+            detail_of(&naygo_core::ops::link_not_moved_failure(
+                std::path::Path::new("l"),
+                "otro volumen"
+            )),
+            "T-LINKMOVE l otro volumen"
+        );
+        assert_eq!(
+            detail_of(&naygo_core::ops::publish_failed_failure("denied")),
+            "T-PUBLISH denied"
+        );
+        assert_eq!(
+            detail_of(&naygo_core::ops::identity_unknown_failure("io")),
+            "T-IDENTITY io"
+        );
+        // Un texto previo sin código (journal viejo) se muestra sin cambios.
+        assert_eq!(
+            detail_of("enlace no copiado: C:\\l"),
+            "enlace no copiado: C:\\l"
+        );
+        // Un detalle ordinario (texto del sistema) pasa sin cambios.
+        assert_eq!(detail_of("access denied"), "access denied");
+    }
+
+    #[test]
+    fn operation_detail_texts_use_existing_i18n_keys() {
+        // Las cuatro claves existen en el catálogo: si faltara una, `t` devolvería la clave.
+        let dir = tempfile::tempdir().unwrap();
+        let config = crate::config_ctrl::ConfigCtrl::new(dir.path().to_path_buf());
+        let texts = OpDetailTexts::from_config(&config);
+        for (key, text) in [
+            ("ops.trash_unconfirmed", &texts.trash_unconfirmed),
+            ("ops.err.trash_not_supported", &texts.trash_not_supported),
+            (
+                "ops.err.trash_restored_elsewhere",
+                &texts.trash_restored_elsewhere,
+            ),
+            ("ops.failed.unreadable_folder", &texts.unreadable_folder),
+            ("ops.failed.link_not_copied", &texts.link_not_copied),
+            ("ops.failed.link_not_moved", &texts.link_not_moved),
+            ("ops.failed.publish", &texts.publish_failed),
+            ("ops.failed.identity_unknown", &texts.identity_unknown),
+        ] {
+            assert_ne!(text, key, "falta la clave {key}");
+        }
     }
 
     #[test]

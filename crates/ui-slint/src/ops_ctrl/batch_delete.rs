@@ -67,7 +67,7 @@ impl OpsCtrl {
                     }));
                 }
                 Err(error) => {
-                    let _ = tx.send(OpMsg::Failed(format!("{error:?}")));
+                    let _ = tx.send(OpMsg::Failed(error.to_string()));
                 }
             },
         );
@@ -190,7 +190,7 @@ impl OpsCtrl {
                         (receipts, items, succeeded, Some(detail))
                     }
                     Err(error) => {
-                        let detail = format!("{error:?}");
+                        let detail = error.to_string();
                         (Vec::new(), failed_items(&detail), 0, Some(detail))
                     }
                 };

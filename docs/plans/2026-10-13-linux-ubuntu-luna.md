@@ -109,7 +109,7 @@ GLib 2.88 y AppIndicator GLib 2.0.1. Se ajustaron `GIOCondition`/`GConnectFlags`
 signo y se fijó el callback de `g_unix_fd_add_full` al tipo `GUnixFDSourceFunc`. Pasaron el check y
 Clippy cruzados de todos los targets Linux y el gate completo Windows (1.464 pruebas, 8 ignoradas).
 El runtime, D-Bus y comportamiento de bandeja siguen requiriendo ejecución en Ubuntu nativo; la
-evidencia está en [`../VALIDACION-L03-CROSS-2026-10-17.md`](../VALIDACION-L03-CROSS-2026-10-17.md).
+evidencia está en [`../evidencia/VALIDACION-L03-CROSS-2026-10-17.md`](../evidencia/VALIDACION-L03-CROSS-2026-10-17.md).
 
 ## Arquitectura y contratos
 
@@ -296,7 +296,7 @@ También valida el `InRelease` de Resolute con la clave Ubuntu 2018; su SHA-256 
 metadatos del repositorio y autentica desde ahí el paquete, en vez de añadir firma OpenPGP individual
 al `.deb`. La verificación usó PGPy aislado en `target/agent-out`; el parser no verifica
 autosignaturas ni revocaciones, limitación registrada en
-[`VALIDACION-L00-AUDITORIA-2026-10-17.md`](../VALIDACION-L00-AUDITORIA-2026-10-17.md). Permanecen
+[`VALIDACION-L00-AUDITORIA-2026-10-17.md`](../evidencia/VALIDACION-L00-AUDITORIA-2026-10-17.md). Permanecen
 pendientes source correspondiente/notices del artefacto final y la comprobación del runtime en
 Ubuntu 26.04 nativo.
 
@@ -390,7 +390,7 @@ El harness no valida ABI FFI, carga de bibliotecas ni comunicación con el host 
 **Revisión estática de AppIndicator (2026-10-18):** las firmas FFI de sus siete funciones usadas se
 compararon con `ayatana-appindicator.h` upstream; también coincide el prefijo de acciones `indicator.`
 con el ejemplo C upstream. Alcance y limitaciones en
-[`VALIDACION-L03-CROSS-2026-10-17.md`](../VALIDACION-L03-CROSS-2026-10-17.md). Esto no valida los
+[`VALIDACION-L03-CROSS-2026-10-17.md`](../evidencia/VALIDACION-L03-CROSS-2026-10-17.md). Esto no valida los
 prototipos GLib/Gio restantes, ABI/runtime, D-Bus ni integración del menú con el escritorio.
 
 **Check cruzado de UI (2026-10-18):** `naygo-ui-slint` ya pasa `cargo check --all-targets` y Clippy
@@ -425,7 +425,7 @@ ni obligaciones de dependencias. `cargo license --json --avoid-build-deps --avoi
 se debe volver a generar el inventario para comprobar si MPL-2.0 deja de formar parte del grafo Linux;
 si sigue presente, conservar su aviso y las obligaciones sobre modificaciones a archivos MPL. Este
 grafo Cargo no incluye las bibliotecas runtime del sistema. La evidencia reproducible y sus límites
-están en `docs/VALIDACION-L00-AUDITORIA-2026-10-17.md`. La fuente correspondiente GPL-3, notices
+están en `docs/evidencia/VALIDACION-L00-AUDITORIA-2026-10-17.md`. La fuente correspondiente GPL-3, notices
 finales y revisión de runtime siguen abiertos antes de cualquier distribución Linux.
 
 ## L-01A — identidad y rutas
@@ -439,7 +439,7 @@ en las brechas y el validador detecta segmentos `.`/`..` en los bytes originales
 su formato anterior. Los 944 tests core y 22 flujos pasaron en Windows; `cargo check --tests` y
 Clippy Linux cruzados compilan las rutas/tests POSIX. El gate de workspace/Clippy pasó (pico 8,53 GiB)
 y el portable/setup Windows se regeneraron bajo supervisor (pico 10,48 GiB); los detalles y hashes
-están en `docs/VALIDACION-BUILD-2026-10-17-L01A-JSON.md`. Falta ejecución nativa Linux, por lo que
+están en `docs/evidencia/VALIDACION-BUILD-2026-10-17-L01A-JSON.md`. Falta ejecución nativa Linux, por lo que
 esto no cierra L-01A.
 
 - [x] Subpaso names POSIX: validar sólo separadores/caracteres prohibidos en POSIX, tratar backslash
@@ -460,7 +460,7 @@ esto no cierra L-01A.
   siendo UTF-8. Pasaron 19 tests CLI Windows, `cargo check` de UI y check/Clippy cruzados Linux del
   core con tests POSIX. Las rutas POSIX no UTF-8 compilan como test, pero aún requieren ejecución
   Linux nativa. El gate completo y la distribución Windows supervisada pasaron; hashes en
-  `docs/VALIDACION-BUILD-2026-10-15.md`.
+  `docs/evidencia/VALIDACION-BUILD-2026-10-15.md`.
 - [x] Subpaso sesión JSON: `FilePanePersist.current_dir` conserva la cadena histórica para rutas
   UTF-8 y codifica rutas POSIX no UTF-8 como objeto etiquetado `unix-bytes-v1` con bytes hexadecimales.
   El lector sigue aceptando strings antiguos; bytes mal formados o etiquetas desconocidas se rechazan.
@@ -478,7 +478,7 @@ esto no cierra L-01A.
   tests POSIX del helper aún requieren ejecución Linux nativa. El gate de workspace actualizado pasó
   1.404 tests (8 ignorados), Clippy y formato; la distribución Windows se regeneró bajo supervisor
   con pico Job 10,45 GiB. Se verificaron el manifiesto, el ZIP y la identidad del EXE, pero esta
-  regeneración no se instaló. Ver `docs/VALIDACION-BUILD-2026-10-16.md`.
+  regeneración no se instaló. Ver `docs/evidencia/VALIDACION-BUILD-2026-10-16.md`.
 
 **Archivos:** `core/path_input.rs`, `fs_model.rs`, `ops/names.rs`, `ops/plan.rs`, `ops/undo.rs`,
 `batch_rename.rs`, listados, config/formats de espacios/consultas/recetas y bridge.
@@ -573,7 +573,7 @@ durante la copia. En movimientos cross-volume se retira el origen sólo tras pub
 `RENAME_NOREPLACE` para el movimiento rápido y se conserva el modo POSIX. Pasaron 916 tests del
 core, los 22 flujos Windows, el gate de 1.408 tests, Clippy, formato y check Linux cruzado del
 core con tests. La build Windows 0.5.2 fue regenerada el 16-10; hashes en
-`docs/VALIDACION-BUILD-2026-10-16.md`.
+`docs/evidencia/VALIDACION-BUILD-2026-10-16.md`.
 Con autorización previa, esa build se instaló in-place con símbolos desmarcados; el PDB antiguo
 se conservó y Naygo quedó abierto y respondiendo.
 
@@ -591,7 +591,7 @@ adaptador, y `platform` llama `MoveFileExW` sin `MOVEFILE_REPLACE_EXISTING` ni
 archivos; el error de volumen distinto vuelve al fallback cancelable de copia/retirada. Pasan dos
 tests Win32, dos regresiones de flujos UI y las pruebas del motor con destino concurrente y fallback
 cross-volume. Gate workspace 1.417/8, Clippy, formato, diff check, check/Clippy cruzados Linux y
-distribución supervisada 0.5.2 pasaron; hashes y alcance en `docs/VALIDACION-BUILD-2026-10-16.md`.
+distribución supervisada 0.5.2 pasaron; hashes y alcance en `docs/evidencia/VALIDACION-BUILD-2026-10-16.md`.
 La build no se instaló.
 
 **Recuperación de Replace Windows, 2026-10-16:** `Replace`
@@ -609,7 +609,7 @@ de tocar el filesystem. Un proceso hijo terminó inmediatamente después de cada
 la recuperación en el proceso padre; también se probaron caída durante staging, colisión y operación
 activa. El gate protegido pasó con 1.433 pruebas, 8 ignoradas, Clippy, formato y diff check; los
 checks y Clippy cruzados Linux de core/platform pasan. La distribución Windows 0.5.2 se regeneró bajo
-supervisor (pico 10,45 GiB); hashes y verificación en `docs/VALIDACION-BUILD-2026-10-16.md`. No se instaló.
+supervisor (pico 10,45 GiB); hashes y verificación en `docs/evidencia/VALIDACION-BUILD-2026-10-16.md`. No se instaló.
 No se ha probado pérdida de energía. Windows no tiene un intercambio
 atómico de directorios mediante estas APIs: puede haber una ventana breve sin la ruta entre los dos
 renames; la recuperación se inicia al listar el padre después de reiniciar Naygo.
@@ -629,7 +629,7 @@ misma conversión. La prueba inyecta `PermissionDenied` en una entrada y verific
 Pasaron las 20 pruebas de `ops::plan`, el gate workspace (1.453 aprobadas, 8 ignoradas), Clippy,
 formato y checks/Clippy cruzados Linux de core/platform. La distribución Windows se regeneró bajo
 supervisor; ZIP/setup se verificaron y no se instalaron. Evidencia:
-`docs/VALIDACION-READDIR-2026-10-18.md`. L-01B continúa parcial por pruebas manuales de permisos,
+`docs/evidencia/VALIDACION-READDIR-2026-10-18.md`. L-01B continúa parcial por pruebas manuales de permisos,
 energía y volúmenes, además de aceptación Linux nativa.
 
 **Cobertura adicional, 2026-10-18:** se añadió una regresión Unix para asegurar que reorientar un
@@ -645,7 +645,7 @@ por la UI y el rename `RENAME_NOREPLACE` de Linux. Un conflicto concurrente deja
 original, la fuente nueva y el archivo externo. La regresión dirigida pasó en Windows; falta la
 ejecución nativa Linux. El gate workspace del 2026-10-18 pasó con 1.456 pruebas aprobadas y 8
 ignoradas, Clippy sin avisos y formato correcto. El build supervisado del mismo día terminó con pico
-10,53 GiB y hashes verificados; no se instaló. Evidencia: `docs/VALIDACION-L01B-RENAME-2026-10-18.md`.
+10,53 GiB y hashes verificados; no se instaló. Evidencia: `docs/evidencia/VALIDACION-L01B-RENAME-2026-10-18.md`.
 
 ## L-02 — ubicación de datos
 
@@ -673,7 +673,7 @@ de ambas ubicaciones con la misma precedencia. No se mueven ni borran archivos a
 `data_dir == config_dir`, así que se conservan las rutas portables existentes. Tests dirigidos del
 core (13) y packs UI (8) pasan; el check y Clippy cruzados del core Linux con `-D warnings` pasan.
 Se regeneró la distribución Windows y se actualizó la instalación local; hashes y límites están en
-`docs/VALIDACION-BUILD-2026-10-16.md`. Validación UI Linux nativa sigue pendiente. L-02 continúa
+`docs/evidencia/VALIDACION-BUILD-2026-10-16.md`. Validación UI Linux nativa sigue pendiente. L-02 continúa
 abierto hasta validar el arranque/flujo completo en Linux y revisar los demás consumidores XDG.
 
 **Auditoría estática de consumidores, 2026-10-18:** la búsqueda en código de producción no halló
@@ -811,7 +811,7 @@ overflow y recuperación ante líneas corruptas; pasaron el gate workspace (1.47
 Clippy/formato y check/Clippy cruzados Linux de platform. El parser es puro y aún no se conecta a
 `drives()` ni a la interfaz: leer `/proc/self/mountinfo` debe hacerse desde un worker para respetar
 la regla de no I/O en UI. No se afirma enumeración Linux disponible ni validación nativa. Registro:
-[`VALIDACION-L06-MOUNTINFO-2026-10-19.md`](../VALIDACION-L06-MOUNTINFO-2026-10-19.md).
+[`VALIDACION-L06-MOUNTINFO-2026-10-19.md`](../evidencia/VALIDACION-L06-MOUNTINFO-2026-10-19.md).
 
 **Enumeración local L-06, 2026-10-19:** `platform::drives::drives()` lee y parsea
 `/proc/self/mountinfo`; el refresco ya existente la ejecuta en un worker. Se omiten pseudofs de la
@@ -822,7 +822,7 @@ medio es removible. Gate Windows: 1.477 tests aprobados/8 ignorados, Clippy y fo
 probada en Windows, y check/Clippy cruzados Linux de platform aprobados. Esto no valida `/proc` ni el
 comportamiento de la barra en Ubuntu: runtime, clasificación de removibles, watchers e invalidación
 siguen pendientes. Detalle en
-[`VALIDACION-L06-MOUNTINFO-2026-10-19.md`](../VALIDACION-L06-MOUNTINFO-2026-10-19.md).
+[`VALIDACION-L06-MOUNTINFO-2026-10-19.md`](../evidencia/VALIDACION-L06-MOUNTINFO-2026-10-19.md).
 
 ## L-07 — papelera
 
@@ -880,7 +880,7 @@ aprobados, 8 ignorados, Clippy y formato verdes. Checks cruzados Linux de `naygo
 10,66 GiB, bajo el límite de 12 GiB. Se regeneraron ZIP y setup 0.5.3. La instalación autorizada
 se actualizó y se dejó abierta/respondiendo como PID 50260; el EXE instalado coincide con Release.
 Los cuatro JSON de usuario y `naygo.pdb` conservaron sus hashes. Checksums y límites en
-[`../VALIDACION-L08-INSTANCE-2026-10-19.md`](../VALIDACION-L08-INSTANCE-2026-10-19.md). La ejecución
+[`../evidencia/VALIDACION-L08-INSTANCE-2026-10-19.md`](../evidencia/VALIDACION-L08-INSTANCE-2026-10-19.md). La ejecución
 nativa de los tests y validación del IPC siguen pendientes; la compilación cruzada no las sustituye.
 
 ## L-09A/B — clipboard y arrastre
@@ -903,7 +903,7 @@ el estado copy/cut; L-09A/B sigue incompleto y no se anuncia como función dispo
 ejecutar las pruebas nativas aquí. Revalidación 2026-10-20: gate completo Windows **1.492 aprobadas,
 8 ignoradas**, Clippy y formato verdes; `cargo check -p naygo-core --target
 x86_64-unknown-linux-gnu --locked` pasa. Esto demuestra compilación cruzada del codec, no ejecución
-nativa; evidencia en [`../VALIDACION-L09A-URI-LIST-2026-10-20.md`](../VALIDACION-L09A-URI-LIST-2026-10-20.md).
+nativa; evidencia en [`../evidencia/VALIDACION-L09A-URI-LIST-2026-10-20.md`](../evidencia/VALIDACION-L09A-URI-LIST-2026-10-20.md).
 
 **Segundo subpaso local, 2026-10-20:** `core::clipboard::desktop_formats` añade los formatos
 copy/cut de Nautilus (`copy|cut\n` + URI(s), sin LF final) y el estado de corte de Dolphin
@@ -911,7 +911,7 @@ copy/cut de Nautilus (`copy|cut\n` + URI(s), sin LF final) y el estado de corte 
 acciones inválidas y payloads ambiguos; el codec además limita la lista a 16 MiB, 100.000 rutas y
 64 KiB por ruta. Pasan las 34 pruebas focalizadas, `cargo check --tests` y
 Clippy cruzados Linux del core con `-D warnings`; no se ejecutaron en escritorio nativo. Evidencia
-en [`../VALIDACION-L09A-FORMATOS-2026-10-20.md`](../VALIDACION-L09A-FORMATOS-2026-10-20.md).
+en [`../evidencia/VALIDACION-L09A-FORMATOS-2026-10-20.md`](../evidencia/VALIDACION-L09A-FORMATOS-2026-10-20.md).
 El transporte, la vida del propietario del clipboard y el consumo de corte tras éxito siguen
 pendientes; no se habilita todavía una función visible ni se cierra L-09A.
 

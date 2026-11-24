@@ -11,8 +11,8 @@ use slint::{
 use std::{cell::Cell, rc::Rc};
 
 slint::slint! {
-    import { TabBar } from "../ui/tab-bar.slint";
-    import { TabVm } from "../ui/types.slint";
+    import { TabBar } from "../../ui-gen/ui/tab-bar.slint";
+    import { TabVm } from "../../ui-gen/ui/types.slint";
 
     export component TabBarProbe inherits Window {
         callback selected(int);

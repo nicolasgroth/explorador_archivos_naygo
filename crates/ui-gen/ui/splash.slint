@@ -3,6 +3,7 @@
 // Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
 // SPDX-License-Identifier: MIT
 import { Theme } from "theme.slint";
+import { Tr } from "i18n.slint";
 
 export component Splash inherits Window {
     no-frame: true;
@@ -37,10 +38,9 @@ export component Splash inherits Window {
                 font-weight: 800;
                 horizontal-alignment: center;
             }
-            // Subtítulo del splash (visible ~1s antes de que cargue i18n): texto fijo a propósito;
-            // cablear Tr a esta ventana efímera no compensa.
+            // Subtítulo del splash: `Tr.splash-subtitle` (lo rellena `i18n_keys::apply_splash`).
             Text {
-                text: "Explorador de archivos";
+                text: Tr.splash-subtitle;
                 color: Theme.text-dim;
                 font-size: 13px;
                 horizontal-alignment: center;

@@ -8,7 +8,7 @@ Fecha: 2026-11-09. **Diagnóstico estático y propuesta para revisión; no autor
 
 ## Base y límites
 
-Rama `codex/avance-0.5.4-20261031`, documentación `b6120ae1`, producto `af2c64f3`; 0.5.5 instalada según [estado actual](../ESTADO-ACTUAL.md). CI Windows registró 1.575 pruebas aprobadas, 9 ignoradas, Clippy y formato; no se ejecutaron pruebas ni builds para este diagnóstico. La distribución y preferencias no se tocaron. [0.5.2](../VALIDACION-0.5.2.md) ya documentó selección tras crear, preservación al navegar y reconciliación de watchers; su aceptación instalada completa quedó pendiente. Los síntomas nuevos no demuestran por sí solos una regresión.
+Rama `codex/avance-0.5.4-20261031`, documentación `b6120ae1`, producto `af2c64f3`; 0.5.5 instalada según [estado actual](../ESTADO-ACTUAL.md). CI Windows registró 1.575 pruebas aprobadas, 9 ignoradas, Clippy y formato; no se ejecutaron pruebas ni builds para este diagnóstico. La distribución y preferencias no se tocaron. [0.5.2](../evidencia/VALIDACION-0.5.2.md) ya documentó selección tras crear, preservación al navegar y reconciliación de watchers; su aceptación instalada completa quedó pendiente. Los síntomas nuevos no demuestran por sí solos una regresión.
 
 Este plan complementa [rutas/preview](2026-09-09-rutas-preview-y-configuracion.md) y [cierre Windows/OLE](2026-11-02-cierre-windows-arrastre-y-validacion.md), sin reabrir cierres ni sustituir sus pendientes. Windows primero; UI sin I/O, streaming, cancelación, bajo consumo y filesystem hostil siguen siendo invariantes.
 

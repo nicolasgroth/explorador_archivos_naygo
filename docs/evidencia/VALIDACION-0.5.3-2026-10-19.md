@@ -40,7 +40,7 @@ Los hashes de ZIP y setup coinciden con `dist/SHA256SUMS.txt`.
   76,9 MiB working set, 45,3 MiB privados, 385 handles, 26 hilos y CPU delta 0/0/0,063 s; un
   proceso observado y sin SMB. No se controló inactividad ni se midió input, latencia o presentación.
   JSON: `target/agent-out/w07-0.5.3-installed-passive-20261019.json`; detalle en
-  [`BENCHMARKS.md`](BENCHMARKS.md).
+  [`BENCHMARKS.md`](../BENCHMARKS.md).
 - `settings.json`, `workspace.json`, `favorites.json` y `templates.json` parsean como JSON.
 - El `naygo.pdb` previo, de **289.722.368 bytes**, se conservó porque no se seleccionaron símbolos.
 

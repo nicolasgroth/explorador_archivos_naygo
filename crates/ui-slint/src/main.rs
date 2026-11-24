@@ -52,8 +52,11 @@ mod ops_ctrl;
 mod packs;
 mod path_validation;
 mod path_window_events;
+mod persistent_models;
 mod preview;
 mod preview_animation_tick;
+mod rows_model;
+mod shell_exec;
 mod startup_load;
 mod sync;
 mod theme_apply;
@@ -82,22 +85,23 @@ use workspace_ctrl::WorkspaceCtrl;
 /// Callback compartido que se instala después de construir todos los controladores.
 pub(crate) type DeferredCallback = Rc<RefCell<Option<Rc<dyn Fn()>>>>;
 
-slint::include_modules!();
+// Código generado desde los .slint (crate naygo-ui-gen): re-exportado para que `crate::AppWindow`
+// y demás rutas sigan iguales.
+pub use naygo_ui_gen::*;
 
 /// CHANGELOG embebido en build time: fuente de la sección "Novedades" del Acerca de.
 /// Ruta relativa desde este archivo (crates/ui-slint/src/) hasta la raíz del repo.
 const CHANGELOG: &str = include_str!("../../../CHANGELOG.md");
 
-/// Versión completa mostrada al usuario: `X.Y.Z+build.YYYYMMDDHHMM`. El sufijo `+build.<id>` es el
-/// metadato de build de semver (no altera la versión semver base); lo estampa `build.rs` en
-/// `NAYGO_BUILD_ID` en cada compilación, así cada build es identificable sin ambigüedad al probar.
-/// Si el id es "unknown" (no se pudo leer la hora en el build), se muestra solo la versión base.
+/// Versión completa mostrada al usuario: `X.Y.Z+build.<id>`. El sufijo `+build.<id>` es el
+/// metadato de build de semver (no altera la versión semver base). `build.rs` estampa
+/// `NAYGO_BUILD_ID`: el empaquetador (`scripts/build-release.ps1`) lo fija a la fecha-hora
+/// `YYYYMMDDHHMM`, así cada distribución es identificable; los builds de desarrollo muestran
+/// `X.Y.Z+build.dev`.
 fn naygo_full_version() -> String {
     let base = env!("CARGO_PKG_VERSION");
-    match option_env!("NAYGO_BUILD_ID") {
-        Some(id) if id != "unknown" && !id.is_empty() => format!("{base}+build.{id}"),
-        _ => base.to_string(),
-    }
+    let id = option_env!("NAYGO_BUILD_ID").unwrap_or("dev");
+    format!("{base}+build.{id}")
 }
 
 /// Offset del huso local en minutos (positivo al este de UTC). Delega en
@@ -209,17 +213,43 @@ fn main() -> Result<(), slint::PlatformError> {
     // crear cualquier ventana (ni el splash ni la AppWindow deben llegar a parpadear). El guard
     // vive hasta el final de main(); su hilo vigilante se arranca más abajo, cuando existe el
     // waker del loop de UI (`si_guard.watch`).
-    let si_guard = match naygo_platform::single_instance::acquire() {
-        naygo_platform::single_instance::Instance::AlreadyRunning => {
-            logging::log_line("instancia única: ya hay un Naygo corriendo; se le avisa y salimos");
-            if cli_args.shutdown {
-                naygo_platform::single_instance::notify_shutdown();
-            } else {
-                naygo_platform::single_instance::notify_running(cli_args.dir.as_deref());
-            }
+    //
+    // Excepción de depuración/medición: con `NAYGO_DEBUG_MULTI_INSTANCE=1` esta instancia NO
+    // participa de la instancia única (sin mutex, evento, watcher ni spool). Sirve para correr un
+    // exe de prueba junto a un Naygo ya vivo sin que se reenvíe a ese y salga. Sin la variable
+    // el comportamiento no cambia.
+    let multi_instance =
+        multi_instance_override(std::env::var_os("NAYGO_DEBUG_MULTI_INSTANCE").as_deref());
+    let si_guard = if multi_instance {
+        logging::log_line(
+            "NAYGO_DEBUG_MULTI_INSTANCE=1: se omite la instancia única (modo depuración)",
+        );
+        // Los Replace "en curso" y los journals son de cada proceso: esta instancia no recupera
+        // reemplazos de árbol ni ofrece retomar operaciones, que pueden ser de otra viva.
+        naygo_core::ops::disable_tree_replacement_recovery();
+        if cli_args.shutdown {
+            // `--shutdown` apuntaría a la instancia viva de OTRO proceso: no se toca.
+            logging::log_line(
+                "--shutdown ignorado: no se apaga otra instancia en modo multi-instancia",
+            );
             return Ok(());
         }
-        naygo_platform::single_instance::Instance::Primary(guard) => guard,
+        None
+    } else {
+        match naygo_platform::single_instance::acquire() {
+            naygo_platform::single_instance::Instance::AlreadyRunning => {
+                logging::log_line(
+                    "instancia única: ya hay un Naygo corriendo; se le avisa y salimos",
+                );
+                if cli_args.shutdown {
+                    naygo_platform::single_instance::notify_shutdown();
+                } else {
+                    naygo_platform::single_instance::notify_running(cli_args.dir.as_deref());
+                }
+                return Ok(());
+            }
+            naygo_platform::single_instance::Instance::Primary(guard) => Some(guard),
+        }
     };
     // Si no había una instancia primaria, `--shutdown` ya cumplió su objetivo: no abrir una nueva.
     if cli_args.shutdown {
@@ -318,10 +348,9 @@ fn main() -> Result<(), slint::PlatformError> {
         ctrl.borrow_mut().apply_first_run_layout();
     }
     ctrl.borrow_mut().mark_startup_session_baseline();
-    // Disponibilidad de terminales opcionales (Windows Terminal / WSL): se consulta una vez al
-    // arranque (escanea el PATH) para decidir qué entradas mostrar en el combo de la toolbar.
-    ui.set_has_wt(ctrl.borrow().windows_terminal_available());
-    ui.set_has_wsl(ctrl.borrow().wsl_available());
+    // Disponibilidad de terminales opcionales (Windows Terminal / WSL): el sondeo del PATH corre
+    // en un worker (`start_terminal_tools_probe`, más abajo, cuando existe el waker) y
+    // `sync_rows` publica `has-wt`/`has-wsl` en cuanto termina. Hasta entonces quedan ocultas.
     // Volcar los textos del idioma activo al global Tr (la UI arranca traducida).
     i18n_keys::apply(&ui, &ctrl.borrow().config);
     // Inicializar las etiquetas y mensajes de error del preview con el idioma activo al arranque.
@@ -436,6 +465,7 @@ fn main() -> Result<(), slint::PlatformError> {
             Ok(splash) => {
                 // Muestra el id de build al pie del splash (misma fuente que el Acerca de).
                 splash.set_build_version(naygo_full_version().into());
+                i18n_keys::apply_splash(&splash, &ctrl.borrow().config);
                 let _ = splash.show();
                 // Centrar en la pantalla primaria: una Window suelta de Slint abre por defecto
                 // arriba a la izquierda. Tamaño del splash (de splash.slint): 360x220 lógicos.
@@ -546,6 +576,7 @@ fn main() -> Result<(), slint::PlatformError> {
         })
     };
     ctrl.borrow_mut().start_startup_load(waker.clone());
+    workspace_ctrl::start_terminal_tools_probe(waker.clone());
     ctrl.borrow_mut().set_folder_shell_waker(waker.clone());
     ctrl.borrow_mut().icons.set_waker(waker.clone());
     let pack_io = Rc::new(RefCell::new(packs::PackIo::new(waker.clone())));
@@ -557,11 +588,13 @@ fn main() -> Result<(), slint::PlatformError> {
     // Naygo" con la app ya corriendo), la abre en un panel nuevo.
     let si_show_requested = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let si_shutdown_requested = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    si_guard.watch(
-        si_show_requested.clone(),
-        si_shutdown_requested.clone(),
-        waker.clone(),
-    );
+    if let Some(guard) = &si_guard {
+        guard.watch(
+            si_show_requested.clone(),
+            si_shutdown_requested.clone(),
+            waker.clone(),
+        );
+    }
 
     // Hotkey global: handler que despierta el loop de UI en cada pulsación. Sin esto, con la app
     // dormida (reposo/bajo consumo) la pulsación quedaba encolada hasta el próximo wake por otra
@@ -1109,6 +1142,10 @@ fn main() -> Result<(), slint::PlatformError> {
     }
 
     // Al arrancar: si hay operaciones interrumpidas (journal), ofrecer retomarlas.
+    if multi_instance {
+        ctrl.borrow_mut().ops.disable_journal_resume();
+        logging::log_line("modo multi-instancia: no se ofrecen operaciones interrumpidas");
+    }
     ctrl.borrow_mut().ops.scan_resume();
     sync_layout();
     // Línea de entorno para el log (versión/OS/ventana). Se fija aquí, tras sync_layout(),
@@ -1163,6 +1200,31 @@ pub(crate) fn theme_text_rgb(
     }
     let t = themes.get(&settings.theme);
     (t.text.r, t.text.g, t.text.b)
+}
+
+/// `true` solo si `NAYGO_DEBUG_MULTI_INSTANCE` vale exactamente `"1"`. Función pura para poder
+/// testear la decisión sin tocar el entorno del proceso.
+fn multi_instance_override(value: Option<&std::ffi::OsStr>) -> bool {
+    value == Some(std::ffi::OsStr::new("1"))
+}
+
+#[cfg(test)]
+mod multi_instance_tests {
+    use super::multi_instance_override;
+    use std::ffi::OsStr;
+
+    #[test]
+    fn solo_el_valor_uno_exacto_activa_el_modo() {
+        assert!(multi_instance_override(Some(OsStr::new("1"))));
+    }
+
+    #[test]
+    fn ausente_o_cualquier_otro_valor_no_lo_activa() {
+        assert!(!multi_instance_override(None));
+        for v in ["0", "", "true", " 1", "11"] {
+            assert!(!multi_instance_override(Some(OsStr::new(v))), "{v:?}");
+        }
+    }
 }
 
 #[cfg(test)]

@@ -87,6 +87,40 @@ pub type CancelProbe = std::sync::Arc<dyn Fn() -> bool + Send + Sync>;
 /// La UI lo traduce; no es una instrucción para reintentar ni una garantía de recuperación.
 pub const TRASH_UNCONFIRMED_IDENTITY: &str = "naygo:trash-unconfirmed-identity";
 
+/// Código estable para "la Papelera no está disponible en esta plataforma". La UI lo traduce.
+pub const TRASH_NOT_SUPPORTED: &str = "naygo:trash-not-supported";
+
+/// Prefijo estable del detalle "el destino apareció durante la restauración y el elemento quedó
+/// con otro nombre". Le siguen, separadas por `DETAIL_SEPARATOR`, la ruta original y la ruta
+/// donde quedó. La UI lo traduce con [`parse_restored_elsewhere`].
+pub const TRASH_RESTORED_ELSEWHERE: &str = "naygo:trash-restored-elsewhere";
+
+/// Separador (US, no imprimible) entre los campos de un detalle estructurado: una ruta de
+/// Windows nunca lo contiene.
+const DETAIL_SEPARATOR: char = '\u{1f}';
+
+/// Arma el detalle estructurado de una restauración que cayó con otro nombre.
+#[cfg(any(windows, test))]
+fn restored_elsewhere_detail(original: &std::path::Path, restored: &std::path::Path) -> String {
+    format!(
+        "{TRASH_RESTORED_ELSEWHERE}{DETAIL_SEPARATOR}{}{DETAIL_SEPARATOR}{}",
+        original.display(),
+        restored.display()
+    )
+}
+
+/// Si `detail` es el detalle de [`TRASH_RESTORED_ELSEWHERE`], devuelve (ruta original, ruta donde
+/// quedó el elemento) para que la UI componga el texto traducido.
+pub fn parse_restored_elsewhere(detail: &str) -> Option<(&str, &str)> {
+    let mut parts = detail.split(DETAIL_SEPARATOR);
+    if parts.next()? != TRASH_RESTORED_ELSEWHERE {
+        return None;
+    }
+    let original = parts.next()?;
+    let restored = parts.next()?;
+    parts.next().is_none().then_some((original, restored))
+}
+
 /// Error al enviar a papelera.
 #[derive(Debug)]
 pub enum TrashError {
@@ -100,6 +134,26 @@ pub enum TrashError {
         receipts: Vec<TrashReceipt>,
         failures: Vec<TrashItemFailure>,
     },
+}
+
+impl std::fmt::Display for TrashError {
+    /// Texto de diagnóstico sin el formato de depuración. Los casos que el usuario ve llevan un
+    /// código estable (`TRASH_NOT_SUPPORTED`, `TRASH_RESTORED_ELSEWHERE`) que la UI traduce.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TrashError::NotSupported => f.write_str(TRASH_NOT_SUPPORTED),
+            TrashError::Failed(message) => f.write_str(message),
+            TrashError::Partial { failures, .. } => {
+                for (index, failure) in failures.iter().enumerate() {
+                    if index > 0 {
+                        f.write_str("; ")?;
+                    }
+                    write!(f, "{}: {}", failure.original.display(), failure.detail)?;
+                }
+                Ok(())
+            }
+        }
+    }
 }
 
 /// Fallo asociado a un origen: puede seguir presente o haber salido sin identidad confirmada.
@@ -764,9 +818,9 @@ fn restore_from_trash_with_enumerator(
         CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_APARTMENTTHREADED,
     };
     use windows::Win32::UI::Shell::{
-        BHID_SFUIObject, FileOperation, IContextMenu, IFileOperation, IShellItem, IShellItem2,
-        SHCreateItemFromParsingName, CMF_NORMAL, CMINVOKECOMMANDINFO, FOF_NOCONFIRMATION,
-        FOF_NOERRORUI, FOF_SILENT, SIGDN_NORMALDISPLAY,
+        BHID_SFUIObject, FileOperation, IContextMenu, IFileOperation, IFileOperationProgressSink,
+        IShellItem, IShellItem2, SHCreateItemFromParsingName, CMF_NORMAL, CMINVOKECOMMANDINFO,
+        FOF_NOCONFIRMATION, FOF_NOERRORUI, FOF_RENAMEONCOLLISION, FOF_SILENT, SIGDN_NORMALDISPLAY,
     };
     use windows::Win32::UI::WindowsAndMessaging::{CreatePopupMenu, DestroyMenu};
 
@@ -863,13 +917,24 @@ fn restore_from_trash_with_enumerator(
                 // Mover el IShellItem virtual de la Papelera conserva su identidad y permite
                 // restaurarlo sin depender de la vista de Explorer ni de una asociación de
                 // menú contextual (ausentes en runners Windows no interactivos).
+                let landed_at = Arc::new(Mutex::new(None::<PathBuf>));
                 let restored = (|| -> Result<(), String> {
                     let operation: IFileOperation =
                         CoCreateInstance(&FileOperation, None, CLSCTX_ALL)
                             .map_err(|error| error.to_string())?;
+                    // FOF_NOCONFIRMATION equivale a «sí a todo»: sin FOF_RENAMEONCOLLISION, un
+                    // destino que aparezca entre el chequeo previo y PerformOperations se
+                    // REEMPLAZARÍA en silencio. Con él, una colisión nunca pisa nada.
                     operation
-                        .SetOperationFlags(FOF_NOCONFIRMATION | FOF_NOERRORUI | FOF_SILENT)
+                        .SetOperationFlags(
+                            FOF_NOCONFIRMATION | FOF_NOERRORUI | FOF_SILENT | FOF_RENAMEONCOLLISION,
+                        )
                         .map_err(|error| error.to_string())?;
+                    let sink: IFileOperationProgressSink = RestoreSink {
+                        landed_at: landed_at.clone(),
+                    }
+                    .into();
+                    let cookie = operation.Advise(&sink).map_err(|error| error.to_string())?;
                     let parent_wide: Vec<u16> = original_parent
                         .as_os_str()
                         .encode_wide()
@@ -882,9 +947,17 @@ fn restore_from_trash_with_enumerator(
                     operation
                         .MoveItem(&item, &parent, PCWSTR(name_wide.as_ptr()), None)
                         .map_err(|error| error.to_string())?;
-                    operation
+                    #[cfg(test)]
+                    RESTORE_RACE_HOOK.with(|hook| {
+                        if let Some(hook) = hook.get() {
+                            hook(&receipt.original);
+                        }
+                    });
+                    let performed = operation
                         .PerformOperations()
-                        .map_err(|error| error.to_string())?;
+                        .map_err(|error| error.to_string());
+                    let _ = operation.Unadvise(cookie);
+                    performed?;
                     if operation
                         .GetAnyOperationsAborted()
                         .map_err(|error| error.to_string())?
@@ -905,6 +978,18 @@ fn restore_from_trash_with_enumerator(
                     }
                     Ok(())
                 })();
+
+                // Si el Shell resolvió una colisión renombrando, el ítem NO quedó en su ruta
+                // original (la ocupa algo nuevo, que se conservó intacto): no es un éxito.
+                let landed = landed_at.lock().ok().and_then(|slot| slot.clone());
+                if let Some(landed) = landed {
+                    if !windows_paths_equal(&landed, &receipt.original) {
+                        return Err(TrashError::Failed(restored_elsewhere_detail(
+                            &receipt.original,
+                            &landed,
+                        )));
+                    }
+                }
 
                 if let Err(move_error) = restored {
                     match path_entry_exists(&receipt.original) {
@@ -966,6 +1051,146 @@ fn restore_from_trash_with_enumerator(
             CoUninitialize();
         }
         result
+    }
+}
+
+// Hook solo de tests: se invoca entre el chequeo previo de destino ocupado y
+// `PerformOperations`, para simular que algo aparece en la ruta original justo en esa ventana.
+#[cfg(all(windows, test))]
+thread_local! {
+    static RESTORE_RACE_HOOK: std::cell::Cell<Option<fn(&std::path::Path)>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Sink de la restauración: solo registra dónde aterrizó realmente el ítem movido (si el Shell
+/// resolvió una colisión renombrando, la ruta difiere de la original).
+#[cfg(windows)]
+#[windows::core::implement(windows::Win32::UI::Shell::IFileOperationProgressSink)]
+struct RestoreSink {
+    landed_at: Arc<Mutex<Option<PathBuf>>>,
+}
+
+#[cfg(windows)]
+#[allow(non_snake_case)]
+impl windows::Win32::UI::Shell::IFileOperationProgressSink_Impl for RestoreSink_Impl {
+    fn StartOperations(&self) -> windows_core::Result<()> {
+        Ok(())
+    }
+    fn FinishOperations(&self, _: windows_core::HRESULT) -> windows_core::Result<()> {
+        Ok(())
+    }
+    fn PreRenameItem(
+        &self,
+        _: u32,
+        _: windows_core::Ref<windows::Win32::UI::Shell::IShellItem>,
+        _: &windows_core::PCWSTR,
+    ) -> windows_core::Result<()> {
+        Ok(())
+    }
+    fn PostRenameItem(
+        &self,
+        _: u32,
+        _: windows_core::Ref<windows::Win32::UI::Shell::IShellItem>,
+        _: &windows_core::PCWSTR,
+        _: windows_core::HRESULT,
+        _: windows_core::Ref<windows::Win32::UI::Shell::IShellItem>,
+    ) -> windows_core::Result<()> {
+        Ok(())
+    }
+    fn PreMoveItem(
+        &self,
+        _: u32,
+        _: windows_core::Ref<windows::Win32::UI::Shell::IShellItem>,
+        _: windows_core::Ref<windows::Win32::UI::Shell::IShellItem>,
+        _: &windows_core::PCWSTR,
+    ) -> windows_core::Result<()> {
+        Ok(())
+    }
+    fn PostMoveItem(
+        &self,
+        _: u32,
+        _: windows_core::Ref<windows::Win32::UI::Shell::IShellItem>,
+        _: windows_core::Ref<windows::Win32::UI::Shell::IShellItem>,
+        _: &windows_core::PCWSTR,
+        _: windows_core::HRESULT,
+        newly_created: windows_core::Ref<windows::Win32::UI::Shell::IShellItem>,
+    ) -> windows_core::Result<()> {
+        let path = newly_created
+            .as_ref()
+            .and_then(|item| shell_display_name(item, windows::Win32::UI::Shell::SIGDN_FILESYSPATH))
+            .map(PathBuf::from);
+        if let (Some(path), Ok(mut slot)) = (path, self.landed_at.lock()) {
+            *slot = Some(path);
+        }
+        Ok(())
+    }
+    fn PreCopyItem(
+        &self,
+        _: u32,
+        _: windows_core::Ref<windows::Win32::UI::Shell::IShellItem>,
+        _: windows_core::Ref<windows::Win32::UI::Shell::IShellItem>,
+        _: &windows_core::PCWSTR,
+    ) -> windows_core::Result<()> {
+        Ok(())
+    }
+    fn PostCopyItem(
+        &self,
+        _: u32,
+        _: windows_core::Ref<windows::Win32::UI::Shell::IShellItem>,
+        _: windows_core::Ref<windows::Win32::UI::Shell::IShellItem>,
+        _: &windows_core::PCWSTR,
+        _: windows_core::HRESULT,
+        _: windows_core::Ref<windows::Win32::UI::Shell::IShellItem>,
+    ) -> windows_core::Result<()> {
+        Ok(())
+    }
+    fn PreDeleteItem(
+        &self,
+        _: u32,
+        _: windows_core::Ref<windows::Win32::UI::Shell::IShellItem>,
+    ) -> windows_core::Result<()> {
+        Ok(())
+    }
+    fn PostDeleteItem(
+        &self,
+        _: u32,
+        _: windows_core::Ref<windows::Win32::UI::Shell::IShellItem>,
+        _: windows_core::HRESULT,
+        _: windows_core::Ref<windows::Win32::UI::Shell::IShellItem>,
+    ) -> windows_core::Result<()> {
+        Ok(())
+    }
+    fn PreNewItem(
+        &self,
+        _: u32,
+        _: windows_core::Ref<windows::Win32::UI::Shell::IShellItem>,
+        _: &windows_core::PCWSTR,
+    ) -> windows_core::Result<()> {
+        Ok(())
+    }
+    fn PostNewItem(
+        &self,
+        _: u32,
+        _: windows_core::Ref<windows::Win32::UI::Shell::IShellItem>,
+        _: &windows_core::PCWSTR,
+        _: &windows_core::PCWSTR,
+        _: u32,
+        _: windows_core::HRESULT,
+        _: windows_core::Ref<windows::Win32::UI::Shell::IShellItem>,
+    ) -> windows_core::Result<()> {
+        Ok(())
+    }
+    fn UpdateProgress(&self, _: u32, _: u32) -> windows_core::Result<()> {
+        Ok(())
+    }
+    fn ResetTimer(&self) -> windows_core::Result<()> {
+        Ok(())
+    }
+    fn PauseTimer(&self) -> windows_core::Result<()> {
+        Ok(())
+    }
+    fn ResumeTimer(&self) -> windows_core::Result<()> {
+        Ok(())
     }
 }
 
@@ -1318,6 +1543,52 @@ mod tests {
         assert!(message.contains("el destino está ocupado"), "{message}");
         assert_eq!(enumeration_calls, 0);
         assert!(path_entry_exists(&junction).unwrap());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn restore_no_pisa_un_destino_que_aparece_durante_la_operacion() {
+        let dir = tempfile::tempdir().unwrap();
+        let original = dir.path().join("carrera.txt");
+        std::fs::write(&original, b"contenido original").unwrap();
+        let receipts = move_to_trash(std::slice::from_ref(&original)).expect("reciclar el fixture");
+        assert!(!original.exists());
+
+        RESTORE_RACE_HOOK.with(|hook| {
+            hook.set(Some(|path| {
+                std::fs::write(path, b"recien llegado").unwrap();
+            }));
+        });
+        let result = restore_from_trash_with_enumerator(&receipts, || {
+            Err("el test no debe necesitar enumeración".to_string())
+        });
+        RESTORE_RACE_HOOK.with(|hook| hook.set(None));
+
+        assert_eq!(
+            std::fs::read(&original).unwrap(),
+            b"recien llegado",
+            "el recién llegado no puede ser reemplazado"
+        );
+        let Err(TrashError::Failed(message)) = result else {
+            panic!("restaurar con colisión debe reportar fallo, no éxito");
+        };
+        let (reported_original, reported_landed) = parse_restored_elsewhere(&message)
+            .unwrap_or_else(|| panic!("detalle estructurado esperado: {message}"));
+        assert_eq!(std::path::Path::new(reported_original), original.as_path());
+        assert_ne!(std::path::Path::new(reported_landed), original.as_path());
+        // El ítem se conservó con un nombre alternativo en la misma carpeta.
+        let copies: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| *path != original)
+            .collect();
+        assert_eq!(
+            copies.len(),
+            1,
+            "debe existir la copia restaurada renombrada"
+        );
+        assert_eq!(std::fs::read(&copies[0]).unwrap(), b"contenido original");
+        std::fs::remove_file(&copies[0]).unwrap();
     }
 
     #[cfg(windows)]

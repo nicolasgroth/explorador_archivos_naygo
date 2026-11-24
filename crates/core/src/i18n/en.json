@@ -1265,5 +1265,16 @@
   "slint.cfg.tip.icon_custom": "Import or export a full icon set (.naygoset), or reset all icons to the base set.",
   "listing.incomplete": "Listing incomplete; some items could not be read",
   "slint.cfg.system_file_icons": "Use system icons for files",
-  "slint.cfg.tip.system_file_icons": "Use the Windows-associated icon for each extension. Lookups run in the background and are capped at 512 types; off by default."
+  "slint.cfg.tip.system_file_icons": "Use the Windows-associated icon for each extension. Lookups run in the background and are capped at 512 types; off by default.",
+  "splash.subtitle": "File explorer",
+  "packs.err.save_theme": "Could not save the theme: {error}",
+  "packs.err.delete_theme": "Could not delete the theme: {error}",
+  "packs.err.create_zip": "Could not create the zip: {error}",
+  "ops.err.trash_not_supported": "The Recycle Bin is not available on this system.",
+  "ops.err.trash_restored_elsewhere": "The destination appeared during the restore and was not overwritten: {original}. The item was restored under another name at {restored}.",
+  "ops.failed.unreadable_folder": "Could not read the folder: {reason}",
+  "ops.failed.link_not_copied": "Link not copied (links are not recreated at the destination): {path}",
+  "ops.failed.link_not_moved": "Could not move the link; it stayed at the source: {path} ({reason})",
+  "ops.failed.publish": "Could not save the copy to its destination: {reason}",
+  "ops.failed.identity_unknown": "Could not check whether the source and the destination are the same file; nothing was changed: {reason}"
 }

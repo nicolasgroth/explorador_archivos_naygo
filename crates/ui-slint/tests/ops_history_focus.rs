@@ -12,8 +12,8 @@ use slint::{
 use std::{cell::Cell, rc::Rc, time::Duration};
 
 slint::slint! {
-    import { OpsPanel } from "../ui/ops-panel.slint";
-    import { OpFileListModal } from "../ui/op-file-list-modal.slint";
+    import { OpsPanel } from "../../ui-gen/ui/ops-panel.slint";
+    import { OpFileListModal } from "../../ui-gen/ui/op-file-list-modal.slint";
     export component HistoryProbe inherits Window {
         width: 500px; height: 350px;
         in-out property <bool> modal;

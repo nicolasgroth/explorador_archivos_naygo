@@ -152,7 +152,9 @@ if ($SkipBuild) {
     Write-Host "Reutilizando ejecutable existente: $exe"
 } else {
     Write-Host "Compilando release..."
-    $env:NAYGO_BUILD_NONCE = [guid]::NewGuid().ToString()
+    # ID de build de la distribución (YYYYMMDDHHMM, hora local). build.rs lo estampa en el .exe
+    # (versión X.Y.Z+build.<id>); sin esta variable el binario queda X.Y.Z+build.dev.
+    $env:NAYGO_BUILD_ID = Get-Date -Format yyyyMMddHHmm
     # Un único trabajo también al invocar directamente este script; el supervisor añade
     # límites de memoria/prioridad. --locked evita cambiar dependencias al empaquetar.
     & cargo build --release --locked --jobs 1 -p naygo-ui-slint

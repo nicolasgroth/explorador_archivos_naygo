@@ -10,6 +10,9 @@ use super::*;
 impl OpsCtrl {
     /// Al arrancar la app: si hay journals pendientes, abre el modal de retomar.
     pub fn scan_resume(&mut self) {
+        if !self.journal_resume_enabled {
+            return;
+        }
         let pend = journal::scan(&self.config_dir);
         if !pend.is_empty() {
             self.pending_dialog = Some(OpDialog::Resume { items: pend });
@@ -19,6 +22,9 @@ impl OpsCtrl {
     /// Retoma la operación journaleada `id`: replanifica los pasos pendientes y la lanza
     /// con un journal nuevo que reusa el id. Devuelve true si arrancó algo.
     pub fn resume(&mut self, id: &str) -> bool {
+        if !self.journal_resume_enabled {
+            return false;
+        }
         // Tomar el journal del modal (si está ahí) o del disco.
         let journal = match &self.pending_dialog {
             Some(OpDialog::Resume { items }) => items.iter().find(|j| j.id == id).cloned(),

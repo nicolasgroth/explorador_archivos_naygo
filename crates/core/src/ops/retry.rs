@@ -85,6 +85,7 @@ impl RetryReview {
                     to: f.destination.clone(),
                     bytes: s.bytes,
                     is_dir: false,
+                    planned_failure: None,
                 })
                 .collect(),
             total_bytes: self.sources.iter().map(|s| s.bytes).sum(),

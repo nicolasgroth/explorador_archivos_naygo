@@ -261,10 +261,7 @@ pub fn prepare(
                 return Err(SpaceError::Invalid.into());
             }
             let metadata = std::fs::symlink_metadata(&path).map_err(SpaceError::Io)?;
-            if !metadata.is_file()
-                || metadata.file_type().is_symlink()
-                || crate::search_many::reparse(&metadata)
-            {
+            if !metadata.is_file() || metadata.file_type().is_symlink() {
                 return Err(RecipeError::SelectionFilesOnly);
             }
             examined += 1;

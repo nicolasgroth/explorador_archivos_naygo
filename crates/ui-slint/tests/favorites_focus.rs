@@ -12,7 +12,7 @@ use slint::{
 use std::{cell::RefCell, rc::Rc, time::Duration};
 
 slint::slint! {
-    import { FavoritesPanel } from "../ui/favorites-panel.slint";
+    import { FavoritesPanel } from "../../ui-gen/ui/favorites-panel.slint";
     export component FavoritesFocusProbe inherits Window {
         width: 600px; height: 400px;
         callback created(string, string);

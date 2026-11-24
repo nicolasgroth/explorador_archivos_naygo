@@ -15,24 +15,24 @@ use std::{
 };
 
 slint::slint! {
-    import { FilePanel } from "../ui/file-panel.slint";
-    import { DropViewport } from "../ui/types.slint";
+    import { FilePanel } from "../../ui-gen/ui/file-panel.slint";
+    import { DropViewport } from "../../ui-gen/ui/types.slint";
     export { DropViewport }
-    import { NewFolder } from "../ui/new-folder.slint";
-    import { TreePanel } from "../ui/tree-panel.slint";
-    import { OpDialogs } from "../ui/op-dialogs.slint";
-    import { MessageModal } from "../ui/message-modal.slint";
-    import { RetryDialog } from "../ui/retry-dialog.slint";
-    import { CommandPalette } from "../ui/command-palette.slint";
-    import { DestinationRadar } from "../ui/destination-radar.slint";
-    import { TaskSpacesDialog } from "../ui/task-spaces-dialog.slint";
-    import { SavedQueryDialog } from "../ui/saved-query-dialog.slint";
-    import { RecipeDialog } from "../ui/recipe-dialog.slint";
-    import { ComparisonPointsDialog } from "../ui/comparison-points-dialog.slint";
-    import { DeliveryDialog } from "../ui/delivery-dialog.slint";
-    import { OpFileListModal } from "../ui/op-file-list-modal.slint";
-    import { ToolbarPath } from "../ui/toolbar-path.slint";
-    import { ListingExportDialog } from "../ui/listing-export-dialog.slint";
+    import { NewFolder } from "../../ui-gen/ui/new-folder.slint";
+    import { TreePanel } from "../../ui-gen/ui/tree-panel.slint";
+    import { OpDialogs } from "../../ui-gen/ui/op-dialogs.slint";
+    import { MessageModal } from "../../ui-gen/ui/message-modal.slint";
+    import { RetryDialog } from "../../ui-gen/ui/retry-dialog.slint";
+    import { CommandPalette } from "../../ui-gen/ui/command-palette.slint";
+    import { DestinationRadar } from "../../ui-gen/ui/destination-radar.slint";
+    import { TaskSpacesDialog } from "../../ui-gen/ui/task-spaces-dialog.slint";
+    import { SavedQueryDialog } from "../../ui-gen/ui/saved-query-dialog.slint";
+    import { RecipeDialog } from "../../ui-gen/ui/recipe-dialog.slint";
+    import { ComparisonPointsDialog } from "../../ui-gen/ui/comparison-points-dialog.slint";
+    import { DeliveryDialog } from "../../ui-gen/ui/delivery-dialog.slint";
+    import { OpFileListModal } from "../../ui-gen/ui/op-file-list-modal.slint";
+    import { ToolbarPath } from "../../ui-gen/ui/toolbar-path.slint";
+    import { ListingExportDialog } from "../../ui-gen/ui/listing-export-dialog.slint";
     export component FolderFocusProbe inherits Window {
         width: 800px; height: 600px;
         in property <length> panel-height: 600px;

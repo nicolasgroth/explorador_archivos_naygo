@@ -23,6 +23,46 @@ cargo run -p naygo-ui-slint    # corre Naygo (binario `naygo`)
 cargo test --workspace --locked # tests reproducibles desde Cargo.lock
 ```
 
+Los builds de desarrollo muestran la versión `X.Y.Z+build.dev`: el build ID sólo lo estampa el
+empaquetador. Para simular uno, exporta `NAYGO_BUILD_ID` con 12 dígitos (`YYYYMMDDHHMM`); cualquier
+otro valor cuenta como `dev`. Los `.slint` viven en `crates/ui-gen/ui/` (crate `naygo-ui-gen`):
+tocarlos recompila el código generado; tocar un `.rs` de `ui-slint`, `core` o `platform`, no.
+
+## Perfiles de compilación
+
+Definidos en el `Cargo.toml` raíz:
+
+| Perfil | Ajustes | Uso |
+|---|---|---|
+| `dev` | por defecto; `[profile.dev.package.naygo-ui-gen] debug = false` | desarrollo y tests |
+| `release` | `opt-level = "s"`, `lto = "thin"`, `codegen-units = 16`, `debug = "line-tables-only"` | distribución |
+| `diag` | hereda de `release`, sin LTO | reproducir una caída sin esperar el release completo |
+
+Cifras medidas en el PC de desarrollo (`scripts/measure-build.ps1`, `CARGO_BUILD_JOBS=1`; detalle en
+[BENCHMARKS.md](BENCHMARKS.md), secciones de compilación):
+
+| Medida | Antes | Después |
+|---|---|---|
+| Pico de RAM del build release | 10,9 GiB | 6,7 GiB |
+| Tamaño del PDB | 473 MB | 177 MB |
+| Recompilar tras tocar un `.rs` de UI (dev) | 1 min 01 s | 18,9 s |
+| `cargo check` tras tocar un `.rs` de UI | 41 s | 4,4 s |
+
+Salvedades:
+
+- Tocar un `.slint` en dev quedó más lento (1 min 02 s → 1 min 27 s): se recompilan `naygo-ui-gen`
+  y luego `naygo-ui-slint`. Los `.rs` se tocan mucho más seguido.
+- El build release completo tardó 39m33s, ~10 min más que la línea base anterior (29m18s), sin
+  causa confirmada: la línea base es de otro commit y otra sesión.
+- El pico "antes" (10,9 GiB) viene del build supervisado de 0.5.6, probablemente medido como
+  compromiso del Job y no como working set. El "después" es 6,68 GiB de working set y 7,20 GiB de
+  memoria privada.
+- Con `naygo-ui-gen` sin debuginfo, recompilar tras tocar `keys.rs` midió 13,6 s (pico 4,49 GiB WS);
+  el 18,9 s de la tabla es la medición con debuginfo completa justo tras separar el crate.
+- El `cargo check` de 4,4 s es con la caché de check caliente; el primero tras tocar un `.slint`
+  regenera `naygo-ui-gen` en modo check (2m13s).
+- `CARGO_BUILD_JOBS=2` no se probó: con un trabajo el pico ya supera 6 GiB.
+
 ## Estado del port Linux
 
 El código de arranque ya resuelve XDG para Linux sin consultar el filesystem: la configuración va
@@ -68,9 +108,16 @@ powershell -ExecutionPolicy Bypass -File scripts\build-release-guarded.ps1
 ```
 
 Invoca el mismo `build-release.ps1`, sin sobreescribir el perfil declarado en Cargo.toml.
-Desde el ajuste del 14 de septiembre, release usa ThinLTO/16 unidades, conserva símbolos
-completos y optimización de tamaño. Validado en build 202609142135: pico contable 10,44 GiB
-bajo límite de 12 GiB, con instalador y portable verificados. No es un techo de memoria
+Release usa ThinLTO/16 unidades, `debug = "line-tables-only"` y optimización de tamaño. El
+`.pdb` debería conservar nombres de función y archivo:línea para el backtrace del panic handler,
+según la documentación de rustc; esto es lo esperado, no se verificó con un panic real en el
+perfil `diag`. Medido con este perfil (2026-11-21): 39m33s, pico 6,68 GiB WS / 7,20 GiB
+privada (ver `BENCHMARKS.md`). Los builds que no pasan por `scripts/build-release.ps1` (dev,
+`diag`, `cargo build --release` manual) muestran `+build.dev`: solo el empaquetador fija
+`NAYGO_BUILD_ID`. En dev, `naygo-ui-gen` se compila sin debuginfo para bajar el pico del enlazado.
+
+Histórico, medido con `debug = true`: build 202609142135, pico contable 10,44 GiB bajo límite
+de 12 GiB, con instalador y portable verificados. No es un techo de memoria
 de Naygo ni garantiza igual consumo en otros equipos/toolchains; conservar la supervisión.
 Usa un solo trabajo, prioridad baja y un Job Windows que limita la memoria comprometida
 del árbol de compilación a 12 GiB. Comprueba cada dos segundos que queden al menos
@@ -90,8 +137,8 @@ para compilar RP-4B2 con fat LTO/una unidad. Ambos intentos terminaron antes del
 empaquetado; RP-5B quedó respaldado. El perfil ThinLTO autorizado después completó el build
 con 12 GiB. No reintentar automáticamente aumentando límites si otro build falla: revisar
 las condiciones y validar sus trade-offs antes de generar una entrega.
-Ver [evidencia de recuperación](VALIDACION-RP4B2-2026-09-14.md) y
-[ajuste autorizado/auditoría de espacio](VALIDACION-BUILD-2026-09-14.md).
+Ver [evidencia de recuperación](evidencia/VALIDACION-RP4B2-2026-09-14.md) y
+[ajuste autorizado/auditoría de espacio](evidencia/VALIDACION-BUILD-2026-09-14.md).
 
 Modos de comprobación sin empaquetar:
 
@@ -109,7 +156,8 @@ powershell -ExecutionPolicy Bypass -File scripts\build-release-guarded.ps1 -W07I
 ## Artefactos (en `dist\`, no versionado)
 
 Ejecutar el empaquetador SOLO, sin otra compilación pesada: release usa ThinLTO, 16 unidades
-y un solo trabajo Cargo. El build ID se renueva mediante un nonce del script. Se genera `naygo.pdb`
+y un solo trabajo Cargo. El script fija `NAYGO_BUILD_ID` con la fecha-hora local
+(`YYYYMMDDHHMM`), así cada distribución muestra `X.Y.Z+build.<id>`. Se genera `naygo.pdb`
 junto al EXE; el instalador lo ofrece opcional/desmarcado y el ZIP no lo incluye (T-3).
 El script genera `SHA256SUMS.txt`. Si se configura un certificado Authenticode autorizado,
 firma y verifica `naygo.exe` antes de incluirlo en el ZIP/instalador, y firma/verifica el instalador
@@ -117,7 +165,7 @@ al terminar. `-ExecutableOnly` permite detenerse tras compilar para una firma re
 empaqueta el ejecutable ya firmado sin recompilar. Ver [distribución](DISTRIBUTION.md).
 
 La distribución 0.5.2 del 14 de octubre está registrada en
-[validación del build](VALIDACION-BUILD-2026-10-14.md). Comprobar fecha, versión/build, hashes,
+[validación del build](evidencia/VALIDACION-BUILD-2026-10-14.md). Comprobar fecha, versión/build, hashes,
 integridad ZIP y coincidencia del EXE empaquetado
 con el release. Si falta Inno o falla el instalador, no anunciar una entrega completa.
 Cambios sólo documentales no requieren nueva versión ni EXE; las guías empaquetadas se
@@ -127,6 +175,28 @@ actualizan al producir la siguiente distribución funcional.
 |---|---|
 | `Naygo-<versión>-portable.zip` | Versión portable: descomprimir y ejecutar, sin instalar. |
 | `Naygo-<versión>-setup.exe` | Instalador (asistente, accesos directos, desinstalador). |
+
+## Pruebas con varias instancias (solo desarrollo)
+
+Naygo es de instancia única: un segundo arranque avisa a la instancia viva y sale. Para lanzar un
+exe de prueba junto a un Naygo ya abierto (smoke, repro, mediciones), define la variable de
+entorno con el valor exacto `1`:
+
+```powershell
+$env:NAYGO_DEBUG_MULTI_INSTANCE = "1"
+& .\target\debug\naygo.exe
+```
+
+Con la variable activa, esa instancia no usa el mutex, el evento ni el spool de la instancia
+única, y lo deja escrito en el log. `--shutdown` no apaga la instancia de otro proceso: se
+registra y sale. Tampoco recupera reemplazos de carpeta interrumpidos ni ofrece retomar
+operaciones pendientes, para no interferir con una operación en curso de la otra instancia; un
+reemplazo que una instancia de prueba deje a medias lo recupera después una instancia normal.
+Los journals siguen compartiendo carpeta y nombres (`op-1.json`, …) con la instancia normal si
+ambas usan la misma carpeta de configuración: lanza siempre las pruebas desde una copia del exe
+en su propia carpeta. Cualquier otro valor (`0`, `true`, vacío) se ignora. Si el atajo global ya lo
+tiene la otra instancia, la de prueba solo lo registra en el log y sigue. Lo usan
+`scripts/repro-scroll.ps1` y `scripts/repro-rename.ps1`. No es una opción para usuarios.
 
 ## Troubleshooting
 

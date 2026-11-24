@@ -3558,6 +3558,7 @@ dependencies = [
  "regex",
  "resvg",
  "rustix 1.1.4",
+ "same-file",
  "serde",
  "serde_json",
  "sha2",
@@ -3588,6 +3589,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "naygo-ui-gen"
+version = "0.5.6"
+dependencies = [
+ "slint",
+ "slint-build",
+]
+
+[[package]]
 name = "naygo-ui-slint"
 version = "0.5.6"
 dependencies = [
@@ -3600,6 +3609,7 @@ dependencies = [
  "lopdf 0.41.0",
  "naygo-core",
  "naygo-platform",
+ "naygo-ui-gen",
  "pdf-extract",
  "png 0.18.1",
  "raw-window-handle",
@@ -3608,7 +3618,6 @@ dependencies = [
  "serde",
  "serde_json",
  "slint",
- "slint-build",
  "tar",
  "tempfile",
  "tiny-skia 0.12.0",

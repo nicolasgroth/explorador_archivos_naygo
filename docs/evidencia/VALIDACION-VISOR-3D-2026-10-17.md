@@ -13,7 +13,7 @@ SPDX-License-Identifier: MIT
 - El rasterizador actualiza los pesos de cada triángulo por incrementos horizontales y verticales;
   evita tres divisiones por píxel. El benchmark sintético release bajó de 29,771 ms a una mediana de
   20,846 ms para 96.800 triángulos a 1024×768 (-30,0 % en este equipo). El método y sus límites están
-  en [BENCHMARKS](BENCHMARKS.md).
+  en [BENCHMARKS](../BENCHMARKS.md).
 - Se conservan carga aislada, geometría retenida, cancelación y coalescencia de gestos.
 - El visor actual de geometría usa un solo color celeste con sombreado por normales. El lector 3MF
   presenta primero una miniatura incrustada cuando existe; el primer gesto intenta cargar el modelo

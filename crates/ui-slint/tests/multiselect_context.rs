@@ -11,7 +11,7 @@ use slint::{
 use std::{cell::RefCell, rc::Rc};
 
 slint::slint! {
-    import { FilePanel } from "../ui/file-panel.slint";
+    import { FilePanel } from "../../ui-gen/ui/file-panel.slint";
     export component Probe inherits Window {
         width: 700px; height: 500px;
         callback row-clicked(int);

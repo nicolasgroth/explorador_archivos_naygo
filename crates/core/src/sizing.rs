@@ -88,21 +88,8 @@ pub fn dir_size_walk(
 
 /// Lista un directorio del FS real para `dir_size_walk`. `None` si no se puede leer.
 /// Usa `symlink_metadata` (NO sigue symlinks). Los archivos aportan su `len()`.
-/// ¿La metadata corresponde a un reparse point de Windows (symlink O junction)? En
-/// Windows usamos los atributos del archivo (`FILE_ATTRIBUTE_REPARSE_POINT = 0x400`); en
-/// otras plataformas siempre `false` (allí `is_symlink()` ya cubre los enlaces).
-#[cfg(windows)]
-fn is_reparse_point(meta: &std::fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt;
-    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-    meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-}
-
-#[cfg(not(windows))]
-fn is_reparse_point(_meta: &std::fs::Metadata) -> bool {
-    false
-}
-
+/// Lista un directorio del FS real para `dir_size_walk`. `None` si no se puede leer.
+/// Usa `symlink_metadata` (NO sigue symlinks). Los archivos aportan su `len()`.
 fn fs_lister(dir: &std::path::Path) -> ListResult {
     let rd = std::fs::read_dir(dir).ok()?;
     let mut out = Vec::new();
@@ -121,11 +108,11 @@ fn fs_lister(dir: &std::path::Path) -> ListResult {
                 continue;
             }
         };
-        // "No seguir": tanto los symlinks como los JUNCTIONS de Windows. `is_symlink()` NO
-        // detecta junctions (son reparse points de tipo mount-point, no name-surrogate), así
-        // que en Windows tratamos cualquier reparse point como no-descendible para evitar
-        // loops y doble conteo (requisito del diseño).
-        let is_symlink = meta.file_type().is_symlink() || is_reparse_point(&meta);
+        // "No seguir": symlinks y JUNCTIONS. En Windows `is_symlink()` cubre las etiquetas de
+        // reanálisis "name surrogate" (symlink y mount point/junction). NO se mira el atributo
+        // REPARSE_POINT a secas: los placeholders de nube (OneDrive/Dropbox) lo llevan y no son
+        // enlaces, así que deben recorrerse y contarse normalmente.
+        let is_symlink = meta.file_type().is_symlink();
         let is_dir = meta.is_dir();
         let size = if !is_dir && !is_symlink {
             Some(meta.len())
@@ -283,6 +270,38 @@ mod tests {
             &mut prog,
         );
         assert_eq!(total, 10);
+    }
+
+    #[test]
+    fn sizing_no_entra_en_junction() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("root");
+        let target = tmp.path().join("target");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(root.join("a.bin"), vec![0u8; 10]).unwrap();
+        std::fs::write(target.join("big.bin"), vec![0u8; 9999]).unwrap();
+        if !crate::ops::make_junction(&root.join("link"), &target) {
+            return;
+        }
+        let token = CancellationToken::new();
+        let mut prog = |_| {};
+        let (total, _, _) = dir_size_walk(&root, true, &fs_lister, &token, &mut prog);
+        assert_eq!(total, 10);
+    }
+
+    #[test]
+    fn sizing_cuenta_carpeta_normal() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("root");
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::write(root.join("a.bin"), vec![0u8; 10]).unwrap();
+        std::fs::write(root.join("sub").join("b.bin"), vec![0u8; 20]).unwrap();
+        let token = CancellationToken::new();
+        let mut prog = |_| {};
+        let (total, partial, cancelled) = dir_size_walk(&root, true, &fs_lister, &token, &mut prog);
+        assert_eq!(total, 30);
+        assert!(!partial && !cancelled);
     }
 
     #[test]

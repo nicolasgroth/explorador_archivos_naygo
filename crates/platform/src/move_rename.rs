@@ -25,6 +25,22 @@ impl naygo_core::ops::NoReplaceRename for PlatformNoReplaceRename {
             naygo_core::ops::NativeNoReplaceRename.rename_noreplace(from, to)
         }
     }
+
+    /// Windows: `CopyFile2` preserva fechas, atributos y flujos alternativos (incluida la marca
+    /// de la web) y aprovecha el offload de copia en SMB. Fuera de Windows rige la copia por
+    /// defecto de `core`.
+    #[cfg(windows)]
+    fn copy_and_publish(
+        &self,
+        from: &Path,
+        to: &Path,
+        overwrite: bool,
+        durable: bool,
+        token: &naygo_core::cancel::CancellationToken,
+        on_bytes: &mut dyn FnMut(u64),
+    ) -> std::io::Result<bool> {
+        crate::copy_file::copy_and_publish(from, to, overwrite, durable, token, on_bytes)
+    }
 }
 
 #[cfg(windows)]
@@ -33,6 +49,9 @@ fn rename_noreplace_windows(from: &Path, to: &Path) -> std::io::Result<()> {
     use windows::core::PCWSTR;
     use windows::Win32::Storage::FileSystem::{MoveFileExW, MOVE_FILE_FLAGS};
 
+    // Prefijo `\\?\` para que rutas de más de MAX_PATH funcionen aunque `LongPathsEnabled` esté apagado.
+    let from = crate::long_path::to_verbatim(from);
+    let to = crate::long_path::to_verbatim(to);
     let from_wide: Vec<u16> = from.as_os_str().encode_wide().chain(Some(0)).collect();
     let to_wide: Vec<u16> = to.as_os_str().encode_wide().chain(Some(0)).collect();
 
@@ -58,7 +77,7 @@ fn rename_noreplace_windows(from: &Path, to: &Path) -> std::io::Result<()> {
 }
 
 #[cfg(windows)]
-fn windows_error_to_io(error: windows::core::Error) -> std::io::Error {
+pub(crate) fn windows_error_to_io(error: windows::core::Error) -> std::io::Error {
     // Win32 APIs return HRESULT_FROM_WIN32(GetLastError()); keep the underlying Win32 code so
     // `ERROR_NOT_SAME_DEVICE` is recognized by core as CrossesDevices and triggers its fallback.
     let code = error.code().0 as u32;
@@ -123,6 +142,31 @@ mod tests {
 
         assert!(!source.exists());
         assert_eq!(fs::read(&destination).unwrap(), b"payload");
+    }
+
+    #[test]
+    fn rename_noreplace_ruta_de_300_caracteres() {
+        let dir = tempfile::tempdir().unwrap();
+        // Árbol profundo con std (que sí maneja rutas largas): la ruta final supera MAX_PATH.
+        let mut deep = dir.path().to_path_buf();
+        for _ in 0..6 {
+            deep.push("d".repeat(45));
+        }
+        fs::create_dir_all(&deep).unwrap();
+        let source = deep.join(format!("{}.txt", "a".repeat(30)));
+        let destination = deep.join(format!("{}.txt", "b".repeat(30)));
+        assert!(
+            source.as_os_str().len() > 300,
+            "la ruta de prueba debe superar 300"
+        );
+        fs::write(&source, b"largo").unwrap();
+
+        PlatformNoReplaceRename
+            .rename_noreplace(&source, &destination)
+            .unwrap();
+
+        assert!(!source.exists());
+        assert_eq!(fs::read(&destination).unwrap(), b"largo");
     }
 
     #[test]

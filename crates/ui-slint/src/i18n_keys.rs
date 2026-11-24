@@ -817,4 +817,76 @@ where
     tr.set_cfg_tip_icon_set_base(c.t("slint.cfg.tip.icon_set_base").into());
     tr.set_cfg_tip_icon_objects(c.t("slint.cfg.tip.icon_objects").into());
     tr.set_cfg_tip_icon_custom(c.t("slint.cfg.tip.icon_custom").into());
+    tr.set_splash_subtitle(c.t("splash.subtitle").into());
+}
+
+/// Textos de la ventana de bienvenida (`Splash`): solo el subtítulo. Es una ventana efímera con su
+/// propia copia del global `Tr`; volcarle los ~750 textos de `apply` sería trabajo desperdiciado.
+#[cfg(not(debug_assertions))]
+pub fn apply_splash<'a, W>(splash: &'a W, c: &ConfigCtrl)
+where
+    W: ComponentHandle,
+    Tr<'a>: Global<'a, W>,
+{
+    splash
+        .global::<Tr>()
+        .set_splash_subtitle(c.t("splash.subtitle").into());
+}
+
+#[cfg(test)]
+mod tests {
+    /// Propiedades de `Tr` que NO traduce `apply` a propósito: son muestras de formato de fecha
+    /// (dígitos, iguales en todos los idiomas), no texto.
+    const LANGUAGE_NEUTRAL_PROPS: [&str; 4] = [
+        "cfg-date-iso-min",
+        "cfg-date-iso",
+        "cfg-date-dmy-min",
+        "cfg-date-dmy",
+    ];
+
+    /// Cada propiedad `in property <string>` del global `Tr` (`i18n.slint`) debe tener su setter en
+    /// este archivo: sin él, la UI se queda para siempre con el texto por defecto en español.
+    #[test]
+    fn every_tr_property_has_a_setter_in_apply() {
+        let slint_source = include_str!("../../ui-gen/ui/i18n.slint");
+        let rust_source = include_str!("i18n_keys.rs");
+        let global_body = slint_source
+            .split_once("export global Tr {")
+            .and_then(|(_, rest)| {
+                rest.split_once(
+                    "
+}",
+                )
+            })
+            .map(|(body, _)| body)
+            .expect("el global Tr debe existir en i18n.slint");
+        let mut checked = 0;
+        let mut missing = Vec::new();
+        for line in global_body.lines() {
+            let Some(rest) = line.trim().strip_prefix("in property <string> ") else {
+                continue;
+            };
+            let name = rest
+                .split([':', ';'])
+                .next()
+                .expect("split siempre devuelve un elemento")
+                .trim();
+            checked += 1;
+            if LANGUAGE_NEUTRAL_PROPS.contains(&name) {
+                continue;
+            }
+            let setter = format!("set_{}(", name.replace('-', "_"));
+            if !rust_source.contains(&setter) {
+                missing.push(name.to_string());
+            }
+        }
+        assert!(
+            checked > 500,
+            "el parseo de Tr no encontró propiedades: {checked}"
+        );
+        assert!(
+            missing.is_empty(),
+            "propiedades de Tr sin setter en i18n_keys.rs: {missing:?}"
+        );
+    }
 }

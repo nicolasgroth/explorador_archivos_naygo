@@ -114,7 +114,7 @@ pub fn visit(
                 }
             };
             // Nunca seguir symlinks/junctions descubiertos durante el recorrido.
-            let linked = meta.file_type().is_symlink() || reparse(&meta);
+            let linked = meta.file_type().is_symlink();
             if meta.is_dir() && query.options.recursive && !linked {
                 if stack.len() + dirs >= MAX_DIRECTORIES {
                     cap = true;
@@ -214,6 +214,13 @@ pub(crate) fn contains(
     if size > MAX_CONTENT_FILE_BYTES {
         return None;
     }
+    // Placeholder de nube sin contenido local: no se lee (descargaría); cuenta como omitido.
+    if std::fs::symlink_metadata(path)
+        .map(|m| crate::listing::is_cloud_placeholder_offline(&m))
+        .unwrap_or(false)
+    {
+        return None;
+    }
     let mut file = std::fs::File::open(path)
         .ok()?
         .take(MAX_CONTENT_FILE_BYTES + 1);
@@ -241,14 +248,4 @@ pub(crate) fn contains(
     } else {
         text.contains(needle)
     })
-}
-
-#[cfg(windows)]
-pub(crate) fn reparse(meta: &std::fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt;
-    meta.file_attributes() & 0x400 != 0
-}
-#[cfg(not(windows))]
-pub(crate) fn reparse(_: &std::fs::Metadata) -> bool {
-    false
 }

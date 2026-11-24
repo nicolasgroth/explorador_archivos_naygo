@@ -167,7 +167,7 @@ reales identificados. No requiere EXE si sólo cambia documentación.
 **Estado de ejecución (2026-10-13):** código y pruebas dirigidas aprobados; tres intentos se
 detuvieron cuando el margen cayó bajo 8 GiB y un cuarto terminó correctamente después de liberar
 memoria. Los hashes nuevos están en
-[`VALIDACION-BUILD-2026-10-13.md`](../VALIDACION-BUILD-2026-10-13.md). Se conserva el último snapshot completo; el listado parcial se
+[`VALIDACION-BUILD-2026-10-13.md`](../evidencia/VALIDACION-BUILD-2026-10-13.md). Se conserva el último snapshot completo; el listado parcial se
 muestra con aviso y no alimenta comparaciones ni recientes. Error de lectura, cancelación y
 desconexión terminan como estados distintos. El probe considera ausente sólo `NotFound` y
 `NotADirectory`; ante permiso denegado u otro fallo conserva su diagnóstico previo.
@@ -330,7 +330,7 @@ No afirmar cobertura universal sólo por un `rg` limpio. Refinamiento 2026-10-20
 portapapeles externo también se movió dentro del worker de `op_paste`, junto con la decisión y la
 consulta de colisiones; un test comprueba que la lectura se ejecuta en un hilo distinto al llamador.
 El gate actual pasó 1.498 pruebas, 8 ignoradas, Clippy y formato; ver
-`../VALIDACION-W06B-PASTE-CLIPBOARD-2026-10-20.md`.
+`../evidencia/VALIDACION-W06B-PASTE-CLIPBOARD-2026-10-20.md`.
 Refinamiento adicional 2026-10-20: se encontró que Copiar/Cortar, pegar en la Cesta y las acciones
 de copiar ruta/texto/CSV/procedencia aún llamaban al clipboard del SO desde callbacks. Todas las
 lecturas y escrituras ahora se serializan en un worker único con cola acotada; el pegado de archivos
@@ -339,7 +339,7 @@ locales de corte e historial se actualizan sólo tras éxito; los errores tienen
 focalizada (2/2), gate (1.500 aprobadas, 8 ignoradas), Clippy, formato y check UI cruzado Linux pasan.
 La nueva distribución Windows 0.5.3 se regeneró bajo supervisor (Release 46m08s, Inno 176,562 s),
 verificada y no instalada; runtime/Ubuntu nativo sigue pendiente. Hashes y límites en
-`../VALIDACION-W06B-PASTE-CLIPBOARD-2026-10-20.md`.
+`../evidencia/VALIDACION-W06B-PASTE-CLIPBOARD-2026-10-20.md`.
 Auditoría autorizada del alcance, 2026-10-20: la ruta de resultado de Entregas comparte la misma
 abstracción; un barrido de `ui-slint` no encontró llamadas directas al backend fuera de
 `ops_ctrl/clipboard_io.rs`. La prueba adicional `async_read_is_processed_off_caller_thread`
@@ -446,7 +446,7 @@ local no produjo muestras `ui.input.*_callback`: `SendKeys` falló, `PostMessage
 no llegó a los callbacks y Windows negó el foco mientras otra ventana estaba activa. No se enviaron teclas a esa
 ventana. Sigue pendiente capturar callbacks con Naygo en primer plano y completar la matriz real, renderer, CPU/RAM de
 auxiliares y local/UNC. Evidencia de build y hashes en
-[`VALIDACION-BUILD-2026-10-15.md`](../VALIDACION-BUILD-2026-10-15.md).
+[`VALIDACION-BUILD-2026-10-15.md`](../evidencia/VALIDACION-BUILD-2026-10-15.md).
 
 **Rasterizado headless W-07, 2026-10-16:** la prueba manual de sincronización ahora también fuerza
 cinco redraws de `AppWindow` en `MinimalSoftwareWindow` a 1280×800, tras cargar 10k/100k filas. Tres
@@ -510,7 +510,7 @@ relanzar la instancia con `NAYGO_PERF_METRICS=1`, o esperar una sesión del usua
 se inició con `NAYGO_PERF_METRICS=1` y se cerró con `--shutdown`. El log muestra el backend de
 software, event loop, listado, sync de filas/modelo y cierre ordenado con métricas; no contiene
 muestras `ui.input.*`. Es verificación de arranque/cierre, no benchmark de interacción. El ZIP, EXE y
-setup quedaron registrados en `docs/VALIDACION-BUILD-2026-10-16.md`; W-07 permanece abierto.
+setup quedaron registrados en `docs/evidencia/VALIDACION-BUILD-2026-10-16.md`; W-07 permanece abierto.
 
 **Repetición 2026-10-16 con portable aislado:** 100 archivos sintéticos, 23 filas visibles en UIA;
 `listing.first_batch`/`complete` p50 45,955/45,964 µs y máximos 1.108.163/1.108.170 µs. El opt-in
@@ -563,7 +563,7 @@ UIA de solo lectura encontró 768 descendientes, 600 con nombre y 140/140 contro
 nombrados, árbol sin truncar. Captura pasiva de recursos en tres ventanas de 30 s: 76,9 MiB
 working set, 45,3 MiB privados, 385 handles, 26 hilos, CPU delta 0/0/0,063 s, un proceso y sin
 SMB. No se controló inactividad ni hubo entrada; esto no mide latencia, presentación o actividad del
-filesystem y no cierra W-07/W-13. Evidencia en `docs/VALIDACION-0.5.3-2026-10-19.md` y
+filesystem y no cierra W-07/W-13. Evidencia en `docs/evidencia/VALIDACION-0.5.3-2026-10-19.md` y
 `docs/BENCHMARKS.md`.
 
 **Captura pasiva W-07, 2026-10-19 23:51:** la instalación abierta PID 50260 se observó en tres
@@ -690,7 +690,7 @@ hit de 100.000 filas. Es un microbenchmark del modelo, no una medición de frame
 Suite workspace (896 core, 22 flujos, 54 platform/6 ignoradas, 373 UI + 16 integración/render),
 Clippy global con `-D warnings`, formato, diff y Graphify pasaron. Build supervisado terminado:
 Cargo 26m 01s, pico Job 10,41 GiB/12, mínimo de memoria libre muestreada 32,02 GiB, Inno Setup
-106,407 s y hashes verificados; evidencia en `docs/VALIDACION-BUILD-2026-10-13.md`.
+106,407 s y hashes verificados; evidencia en `docs/evidencia/VALIDACION-BUILD-2026-10-13.md`.
 
 **W-10B:** `sync.rs`, `workspace_ctrl/listing.rs`, `bridge.rs`, modelos estables.
 Elegir una mejora por evidencia: revisiones/deltas para foco y selección; construir únicamente
@@ -717,7 +717,7 @@ W-13 la aceptación instalada. El gate completo de este delta pasó (1.393 tests
 sin warnings y formato). El 15 de octubre se regeneraron ZIP e instalador 0.5.2 bajo supervisor, con
 pico de Job 10,42 GiB. El ejecutable del ZIP coincide con `target/release/naygo.exe`, el ZIP no incluye
 PDB, EXE y setup reportan `NotSigned` y los hashes están verificados en
-`docs/VALIDACION-BUILD-2026-10-15.md`.
+`docs/evidencia/VALIDACION-BUILD-2026-10-15.md`.
 
 ## W-10C — append incremental durante streaming
 
@@ -737,7 +737,7 @@ posteriores pueden volver a usar append. La inserción intermedia, los cambios `
 mutaciones no clasificadas conservan sus rutas previas. Tests focalizados core/UI y gate completo
 pasan. Tres corridas release a 100k dieron append 21,140/21,741/21,279 ms, mediana 21,279 ms frente
 a 561,367 ms de la muestra anterior (~26,4×, 96,2 % menos; evidencia headless). Distribución 0.5.2
-regenerada bajo supervisor, gate y hashes en `docs/VALIDACION-BUILD-2026-10-16.md`; W-07/W-13
+regenerada bajo supervisor, gate y hashes en `docs/evidencia/VALIDACION-BUILD-2026-10-16.md`; W-07/W-13
 conservan la prueba interactiva y aceptación instalada.
 
 ## W-11A/B/C — completar lectores RP-6
@@ -788,7 +788,7 @@ pruebas del módulo preview pasaron (28 tests, incluidos preflight ZIP32/ZIP64, 
 `target/agent-out/guarded-20261014-080649-329.out.log`: Cargo 37 min 22 s, pico Job 10,41 GiB de
 12 GiB y margen libre mínimo observado 16,23 GiB; Inno Setup `Successful compile` en 182,125 s.
 El ZIP contiene `naygo.exe`, `LEEME.txt`, `LICENSE` y `THIRD-PARTY-NOTICES.md`, sin PDB. Hashes y
-aceptación externa quedan registrados en `docs/VALIDACION-BUILD-2026-10-13.md`.
+aceptación externa quedan registrados en `docs/evidencia/VALIDACION-BUILD-2026-10-13.md`.
 
 **W-11C:** texto/SVG/imágenes. Conservar codificaciones, resaltado, selección, scroll y dimensiones
 actuales; auditar trabajo antes del recorte de línea y complejidad SVG. Recursos externos continúan
@@ -928,7 +928,7 @@ nombre. Las 11 pruebas de Papelera y el gate (**1.483 aprobadas, 8 ignoradas**, 
 además de los nueve idiomas, pasan. Build supervisado concluido: Release 51m07s, Inno Setup
 199,000 s y pico de 10,66 GiB. ZIP/setup verificados; no instalados ni firmados. El run remoto
 `windows-2025` sigue pendiente; evidencia en
-[`../VALIDACION-WINDOWS-TRASH-UTF16-2026-10-19.md`](../VALIDACION-WINDOWS-TRASH-UTF16-2026-10-19.md).
+[`../evidencia/VALIDACION-WINDOWS-TRASH-UTF16-2026-10-19.md`](../evidencia/VALIDACION-WINDOWS-TRASH-UTF16-2026-10-19.md).
 
 **Cierre:** workflow validado por ejecución real o registrado como pendiente hasta poder
 ejecutarse; no publicar un tag/release para probarlo sin autorización.
@@ -941,7 +941,7 @@ scroll/rename, minimizar/bandeja, UNC caída, permisos/USB, cancelación de arch
 y ciclos de preview. Usar matriz P1–P12 del plan de septiembre y pendientes de usabilidad.
 Registrar probado, fallido o pendiente por entorno. Cada fallo nuevo vuelve a un bloque concreto.
 La hoja con hashes de la entrega final, resultados parciales y casos manuales pendientes está en
-[`docs/VALIDACION-WINDOWS-0.5.2-2026-10-15.md`](../VALIDACION-WINDOWS-0.5.2-2026-10-15.md). La
+[`docs/evidencia/VALIDACION-WINDOWS-0.5.2-2026-10-15.md`](../evidencia/VALIDACION-WINDOWS-0.5.2-2026-10-15.md). La
 instalación actual coincide con el EXE final; la matriz interactiva aún no se completó.
 
 **Avance local W-13, 2026-10-18:** el preview textual de solo lectura y el `TextInput` genérico de
@@ -958,7 +958,7 @@ release 28m32s, Inno 128,218 s). Con autorización previa, se actualizó in-plac
 su EXE coincide con Release y los cuatro JSON más el PDB anterior conservaron hashes. UIA pasiva
 expuso 330 descendientes, 239 nombrados y 46/46 enfocables nombrados, pero los diálogos estaban
 cerrados y Windows seguía bloqueado. Requiere Narrador/UIA de campos individuales y revisión visual
-en sesión desbloqueada; evidencia y hashes en `docs/VALIDACION-UIA-2026-10-18.md`.
+en sesión desbloqueada; evidencia y hashes en `docs/evidencia/VALIDACION-UIA-2026-10-18.md`.
 
 **Hallazgo adicional W-13, 2026-10-18:** una revisión estática encontró botones de toolbar y de
 unidades dibujados con `Rectangle`/`TouchArea` que no exponían rol, nombre ni acción al árbol de
@@ -966,7 +966,7 @@ accesibilidad. Ahora publican semántica de botón y una acción accesible; la e
 su acción separada. Falta confirmar el árbol real UIA y activación con Narrador en la sesión manual.
 El gate posterior pasó con 1.458 pruebas y 8 ignoradas, Clippy y formato correctos. El build
 supervisado regeneró portable y setup 0.5.2 con hashes verificados (pico 10,54 GiB); no se instaló.
-No cierra la aceptación manual de W-13; ver `docs/VALIDACION-W13-TOOLBAR-2026-10-18.md`.
+No cierra la aceptación manual de W-13; ver `docs/evidencia/VALIDACION-W13-TOOLBAR-2026-10-18.md`.
 
 **W-14:** Nicolás eligió evaluar SignPath Foundation para OSS. El empaquetador ya puede firmar y
 verificar el EXE antes del portable/setup con un certificado del store local; la acción de release
@@ -1076,7 +1076,7 @@ y la firma con certificado (W-14) requieren intervención externa/autorización 
 **Seguimiento W-13, 2026-10-16:** se añadieron roles UIA/AccessKit a la barra custom de pestañas,
 selección accesible y navegación ←/→ + Enter/Espacio. El test headless, suite, Clippy y formato
 pasaron; la distribución 0.5.2 se regeneró con el gate supervisado. Hashes y límites están en
-[`docs/VALIDACION-BUILD-2026-10-16.md`](../VALIDACION-BUILD-2026-10-16.md). La build nueva quedó
+[`docs/evidencia/VALIDACION-BUILD-2026-10-16.md`](../evidencia/VALIDACION-BUILD-2026-10-16.md). La build nueva quedó
 empaquetada pero no instalada; Narrador, aceptación manual de foco y matriz W-13 siguen pendientes.
 
 **Revalidación W-07/W-13, 2026-10-18:** la distribución E-5 se instaló con autorización previa y
@@ -1101,4 +1101,4 @@ sin registrar el nombre, la ruta ni el valor del control. En PID 25124 halló un
 enfocable sin nombre (732 descendientes; 56 enfocables, 55 nombrados). No se atribuye a un control
 Slint concreto: el proceso ejecuta un EXE anterior al release actual y `LogonUI` seguía activo.
 Repetir con el release actual cuando la sesión esté desbloqueada; verificar con Narrador antes de
-decidir si se requiere un cambio de etiqueta. Evidencia: [`docs/VALIDACION-UIA-2026-10-18.md`](../VALIDACION-UIA-2026-10-18.md).
+decidir si se requiere un cambio de etiqueta. Evidencia: [`docs/evidencia/VALIDACION-UIA-2026-10-18.md`](../evidencia/VALIDACION-UIA-2026-10-18.md).

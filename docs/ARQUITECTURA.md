@@ -4,8 +4,10 @@ Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
 
 SPDX-License-Identifier: MIT
 
-Referencia: base 0.5.2, incluidos RP-1–RP-5A y correcciones de navegación del 2026-09-10. Las ampliaciones pendientes se
-distinguen en el [plan](plans/2026-09-09-rutas-preview-y-configuracion.md).
+Referencia: base 0.5.2, incluidos RP-1–RP-5A y correcciones de navegación del 2026-09-10,
+actualizada con el lote 0.5.7 (en preparación; [plan](plans/2026-11-21-integridad-build-y-docs.md)).
+Las ampliaciones pendientes de preview se distinguen en el
+[plan de rutas y preview](plans/2026-09-09-rutas-preview-y-configuracion.md).
 
 ## Responsabilidades
 
@@ -13,6 +15,7 @@ distinguen en el [plan](plans/2026-09-09-rutas-preview-y-configuracion.md).
 | --- | --- |
 | `crates/core` | Modelos, listado incremental, motores de operaciones, búsqueda, configuración/temas, reglas de preview y formatos de trabajo. No depende de Slint ni Windows. |
 | `crates/platform` | Shell/COM/OLE, Papelera, portapapeles, unidades, vigilancia nativa, ventanas, instancia única y arranque. |
+| `crates/ui-gen` | Sólo los `.slint` de `ui/` y su código Rust generado (`AppWindow`, ventanas, structs y globals). Sin lógica: `build.rs` compila `ui/app-window.slint` y `lib.rs` hace `include_modules!`. |
 | `crates/ui-slint` | Presentación Slint y coordinación: `workspace_ctrl/`, `ops_ctrl/`, `config_ctrl.rs`, callbacks, `tick.rs` y `sync.rs`. Winit y renderer por software. |
 
 Los workers publican resultados por canales. La UI drena e invalida respuestas obsoletas,
@@ -67,6 +70,45 @@ un binding inicial no basta después de editar. Los pegados usan segundos y rese
   capacidad artificialmente; resultados se descartan por revisión, no sólo por texto.
   Las enumeraciones consultan el token entre entradas y antes de empezar a leer.
 
+### Admisión de listados: cupos local y remoto
+
+`core/listing.rs` reparte los listados en dos cupos independientes (`ListingAdmissions`):
+`LOCAL_LISTING_SLOTS = 8` y `REMOTE_LISTING_SLOTS = 4`. El permiso vive hasta que el worker sale
+de verdad, así que un `read_dir` colgado en un share caído retiene una plaza remota. El listado
+no sigue enlaces (`core/listing.rs`, `entry_from_path`): en Windows el tipo sale del propio enlace
+(`FileTypeExt::is_symlink_dir` / `is_symlink_file`; un junction lleva el bit de directorio),
+un enlace a archivo queda sin tamaño, y atributos y fechas son los del enlace. Así un enlace a un
+UNC caído dentro de una carpeta local no retiene la plaza local. El watcher, la vista profunda y
+la búsqueda leen igual (`listing::entry_at`, `symlink_metadata`). La clasificación está en
+`core/path_locality.rs`: el trait `VolumeLocality` se inyecta
+(como `NoReplaceRename`); una ruta UNC es remota por sintaxis, una letra se decide con la tabla
+de unidades y lo desconocido cuenta como remoto. `platform/drives.rs` implementa el trait sobre
+la tabla que ya trae el worker de unidades (`DriveTableLocality`, `DriveKind::Network`): el hilo
+de UI no llama a `GetDriveTypeW`. Hasta que llega la primera tabla, las rutas con letra usan el
+cupo remoto. En `workspace_ctrl`, `listing_admission_for` elige el cupo; las colas pendientes ya
+no se cortan en el primer `Capacity`, y cada pendiente se reclasifica al reintentar.
+
+### Modelos persistentes y `RowsModel`
+
+`sync_rows` corre en cada tick mientras hay trabajo (30 ms). Un `ModelRc` nuevo por tick hace que
+Slint marque sucio lo que lo contiene (los `ModelRc` se comparan por puntero) y, con el renderer por
+software, repinte la ventana entera. Por eso:
+
+- `persistent_models.rs`: `PersistentModels` guarda un `Rc<VecModel>` por modelo de ventana (ops,
+  portapapeles, ayuda, favoritos, recientes, menú de columna, renombrado por lotes, asistente de
+  sincronización, metadata del Inspector, resultados y puntos). `update_rows` usa `set_row_data`
+  solo en las filas distintas si el largo no cambia y `set_vec` si cambia; sin cambios no notifica.
+  `PreviewVmCache` arma la parte pesada del VM de preview una vez por revisión del preview e idioma.
+- `rows_model.rs`: `RowsModel` (`impl slint::Model` sobre `Vec<RowData>`) avisa altas y bajas por
+  tramo (`row_added(i, n)` / `row_removed(i, n)`), nunca con `reset` (que mata la rueda). Guarda en
+  paralelo una `RowKey { id, content }` por fila (hash de 64 bits de la ruta y de todo lo que se
+  pinta). `sync_rows` compara claves y construye solo las filas que entran o cambian; los deltas de
+  core (alta al final, filas modificadas) se aplican directo. La fila en renombrado en línea nunca
+  se re-arma mientras dura la edición.
+- El resaltado de cambios no reconstruye filas por tick: la firma de filas incluye el conjunto de
+  rutas frescas (`Watchers::fresh_signature`) y, si solo queda apagar resaltados, el timer duerme
+  hasta el próximo vencimiento (`next_fresh_expiry`).
+
 ## Operaciones y datos del usuario
 
 `core/ops/` planifica/ejecuta; `ui-slint/src/ops_ctrl/` coordina archivos, ZIP, lotes y journal.
@@ -74,6 +116,68 @@ Planificar no equivale a ejecutar: preservar destinos capturados, confirmaciones
 cancelación y contratos de deshacer. Papelera se implementa en `platform/trash.rs`; no aceptar
 un resultado aparente del Shell sin comprobarlo. DnD desde archivadores necesita conservar o
 materializar fuentes efímeras antes de devolver el control al emisor.
+
+Contratos del motor de copiar/mover (`core/ops/plan.rs`, `core/ops/engine.rs`):
+
+- **Enlaces.** `expand` usa `symlink_metadata` y nunca recorre un enlace anidado
+  (`is_link_like` = `file_type().is_symlink()`, que en std incluye junctions; no se usa
+  `FILE_ATTRIBUTE_REPARSE_POINT`, que también llevan los placeholders de nube). Solo el origen
+  seleccionado en Copiar/Duplicar se sigue una vez (`follow_root_link`). En el motor, un enlace en
+  Mover se renombra como enlace (`rename_noreplace`) y, si no se puede (entre volúmenes), el paso
+  es `Failed` (`naygo:link-not-moved`); en Copiar, un enlace a carpeta es `Failed`
+  (`naygo:link-not-copied`) y uno a archivo se copia por contenido. "Reintentar" excluye los
+  fallos de enlace (`ops::is_link_failure`, que también reconoce los textos previos sin código).
+  Un Replace cuyo árbol tiene un enlace que no se copiaría o un `planned_failure` copia a staging
+  y no publica nada: origen y destino anterior quedan intactos (rechazarlo antes de copiar está
+  en `BACKLOG.md`).
+  Nunca se borra nada a través de un enlace ni se recorre uno anidado; la única lectura a través
+  de un enlace es la copia por contenido de un enlace a archivo.
+- **Identidad.** Antes de resolver conflictos, `ops::same_identity(from, to)` (sobre
+  `same_file::is_same_file`) convierte el paso en `Skipped`; `plan_transfer_with` hace lo mismo con
+  la raíz. Es fail-closed: si el destino existe y la identidad no se puede determinar, el paso (o
+  la raíz, como `planned_failure`) falla con `naygo:identity-unknown`. `paths_eq_ci` y
+  `path_starts_with_ci` comparan con `eq_ignore_case_ntfs` (mayúsculas Unicode de un solo char;
+  aproxima la tabla `$UpCase` de NTFS).
+- **Copia y publicación.** El trait inyectado `NoReplaceRename` tiene `copy_and_publish(from, to,
+  overwrite, durable, token, on_bytes) -> io::Result<bool>` (`Ok(false)` = cancelado, sin parcial).
+  El default de core copia por buffers a un temporal `.naygo-copy-…`, aplica fechas, `sync_all`
+  si `durable` y permisos. En Windows, `platform/copy_file.rs` usa `CopyFile2` (fechas, atributos,
+  ADS) y publica con `MoveFileExW` (`WRITE_THROUGH` si `durable`). `durable` vale `true` en Mover:
+  el origen solo se borra con `Ok(true)`. Con `overwrite`, si publicar da acceso denegado sobre un
+  destino de solo lectura, ambos caminos quitan el atributo y reintentan una vez
+  (`ops::retry_over_readonly_destination`, que lo repone si vuelve a fallar). Un fallo de
+  publicación sale como `naygo:publish-failed`. Las entregas (`core/delivery.rs::execute`) reciben
+  el copiador inyectado; la UI les pasa `PlatformNoReplaceRename`.
+- **Rutas largas.** El manifest del `.exe` (`ui-slint/build.rs`) declara `longPathAware`, que solo
+  surte efecto si el sistema tiene `LongPathsEnabled`. Las llamadas Win32 propias de copia y rename
+  usan rutas `\\?\` (`platform/long_path::to_verbatim`), así que funcionan aunque esa
+  opción esté apagada.
+- **Fallos planificados.** `OpStep.planned_failure: Option<String>` (serde `default`, se omite si
+  es `None`: los journals viejos siguen leyéndose). Si falla el `read_dir` de una subcarpeta, el plan
+  deja un único paso fallido para ella y no planifica su contenido; si falla el stat de un hijo, un
+  paso fallido de archivo (un hijo que desaparece, `NotFound`, se omite). La raíz ilegible sigue
+  siendo `PlanError::SourceUnreadable`. El motor reporta el paso como `Failed` sin ejecutar nada.
+  En Mover, `remove_empty_move_source` usa `remove_dir` no recursivo, así que la carpeta que
+  contiene la rama ilegible sobrevive; un Replace con fallos no publica. El lector se inyecta con
+  `PlanDirReader` para probarlo sin ACL. Para carpetas, el motivo lleva el prefijo
+  `ops::UNREADABLE_FOLDER_FAILURE`. Todos los códigos (`naygo:<código>` + U+001F + campos) se leen
+  con `ops::parse_failure` → `OpFailure`; la UI los traduce (`OpDetailTexts::localize`, claves
+  `ops.failed.*`) y core los quita en los textos sin i18n, como los de entregas
+  (`ops::plain_failure_text`). Un texto sin código (journal viejo) se muestra tal cual.
+- **Papelera.** Restaurar usa `FOF_RENAMEONCOLLISION` y un `IFileOperationProgressSink` que
+  registra la ruta real de aterrizaje; si difiere del original, se informa el otro nombre en vez de
+  pisar el destino.
+
+### Acciones del Shell fuera del hilo de UI
+
+`ui-slint/src/shell_exec.rs`: `ShellExecutor` con un único hilo `naygo-shell` que inicializa COM
+STA una vez (`platform::open::shell_job_runner`) y ejecuta `ShellJob` (Open, OpenWith,
+RunAsAdministrator, Folder). Ese hilo no bombea mensajes, así que `platform/open.rs` llama a
+`ShellExecuteExW` con `SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI`: las activaciones DDE o delegadas
+terminan antes de volver. `submit` nunca bloquea; los resultados vuelven por canal y despiertan
+la UI con un waker compartido. Cada orden corre en `catch_unwind` y una orden idéntica ya encolada
+se descarta. `WorkspaceCtrl::submit_shell` muestra el error por el toast existente. Un manejador
+colgado retrasa las órdenes siguientes, pero la UI no se congela.
 
 Entregas, espacios, consultas, puntos y recetas ya tienen guías específicas. No sustituirlos
 por scripts automáticos ni modificar originales al importar un archivo de configuración.
@@ -187,8 +291,10 @@ son otra preferencia.
 
 ## Configuración, temas e idiomas
 
-- `core/config/mod.rs`: esquema actual **4**, defaults/migraciones. Versiones futuras se
-  descartan a defaults; revisar compatibilidad y downgrade antes de cambiar el esquema.
+- `core/config/mod.rs`: versión actual de configuración **6** (`CONFIG_VERSION`), defaults y
+  migraciones por etapas al cargar. Un `settings.json` de versión mayor (downgrade de la app) se
+  descarta a defaults; un `workspace.json` de versión mayor se ignora (`load_workspace_flagged`,
+  `config/mod.rs:927-944`). Revisar compatibilidad y downgrade antes de subir la versión.
 - `core/config/fonts.rs`: interfaz de sistema, listados que heredan y Consolas para preview.
 - `core/config/settings_writer.rs`: orden por revisión para impedir que un guardado antiguo
   de fuentes sobrescriba preferencias nuevas. No implica que todo guardado histórico sea async.
@@ -205,9 +311,16 @@ son otra preferencia.
 ## Construcción, diagnóstico y comentarios
 
 Slint compila en un hilo de build con stack de 8 MiB; no es memoria reservada al ejecutar Naygo.
-La versión sale de `Cargo.toml`; el build ID se genera en `ui-slint/build.rs` y el empaquetador
-renueva su nonce. `Cargo.lock` fija dependencias, mientras `rust-toolchain.toml` selecciona
-`stable`, no una versión numérica inmutable: registrar `rustc --version` al medir/validar.
+El código generado (~32 MiB de Rust) vive en `naygo-ui-gen` para que tocar un `.rs` de
+`ui-slint`, `core` o `platform` no lo recompile: sólo se reconstruye al cambiar `ui/`.
+`ui-slint` lo re-exporta (`pub use naygo_ui_gen::*;` en `main.rs`), así `crate::AppWindow` y
+demás rutas no cambian. Las features de `slint` se definen una sola vez en
+`[workspace.dependencies]`. El `build.rs` de `ui-slint` sólo embebe ícono/manifest/metadatos y
+estampa el build ID; se re-ejecuta por el `.ico`, `Cargo.toml` o `NAYGO_BUILD_ID`.
+La versión sale de `Cargo.toml`; el build ID lo fija el empaquetador (`NAYGO_BUILD_ID`,
+`YYYYMMDDHHMM`) y en desarrollo vale `dev` (`X.Y.Z+build.dev`). `Cargo.lock` fija
+dependencias y `rust-toolchain.toml` fija Rust 1.96.0 con rustfmt y clippy. Perfiles y cifras de
+compilación: [BUILD.md](BUILD.md) y [BENCHMARKS.md](BENCHMARKS.md).
 
 Comentar el porqué de identidad, límites, ownership, cancelación y compatibilidad junto al código.
 No documentar como garantía una aspiración ni copiar una API sin comprobar la dependencia fijada.

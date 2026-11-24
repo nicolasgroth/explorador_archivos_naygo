@@ -279,7 +279,7 @@ impl PackIo {
                                         &json,
                                     )
                                 })
-                                .map_err(|error| format!("no se pudo guardar el tema: {error}"))
+                                .map_err(|error| keyed_error("packs.err.save_theme", error))
                                 .map(|()| {
                                     if let Some(old_id) = old_id {
                                         let _ = std::fs::remove_file(
@@ -313,7 +313,7 @@ impl PackIo {
                                     );
                                     (removed, catalog)
                                 })
-                                .map_err(|error| format!("no se pudo eliminar el tema: {error}"));
+                                .map_err(|error| keyed_error("packs.err.delete_theme", error));
                             PackOutcome::DeleteTheme { id, result }
                         }
                         PackJob::ImportIcon {
@@ -462,11 +462,34 @@ fn copy_user_png(
     Ok(rel)
 }
 
+/// Marca de un error de pack cuyo texto se traduce en la UI (los workers no conocen el idioma).
+/// Formato: `MARCA<US>clave<US>detalle`, con `<US>` = U+001F. Un error sin la marca se muestra tal cual.
+const KEYED_ERROR_MARK: &str = "naygo:i18n-error";
+const KEYED_ERROR_SEPARATOR: char = '\u{1f}';
+
+/// Error de un worker de packs con una clave i18n; el `{error}` de la plantilla recibe `detail`.
+fn keyed_error(key: &str, detail: impl std::fmt::Display) -> String {
+    format!("{KEYED_ERROR_MARK}{KEYED_ERROR_SEPARATOR}{key}{KEYED_ERROR_SEPARATOR}{detail}")
+}
+
+/// Traduce un error producido por [`keyed_error`] con `translate` (clave → plantilla). Un texto
+/// sin la marca (otros errores de packs) se devuelve sin cambios.
+pub(crate) fn localize_error(raw: &str, translate: impl Fn(&str) -> String) -> String {
+    let mut parts = raw.splitn(3, KEYED_ERROR_SEPARATOR);
+    if parts.next() != Some(KEYED_ERROR_MARK) {
+        return raw.to_string();
+    }
+    match (parts.next(), parts.next()) {
+        (Some(key), Some(detail)) => translate(key).replace("{error}", detail),
+        _ => raw.to_string(),
+    }
+}
+
 /// Escribe un .zip en `out_zip` con cada (nombre-en-zip, ruta-en-disco). Omite las que no
 /// existen. Error si no se puede crear el zip o no había nada que empaquetar.
 fn zip_files(out_zip: &Path, entries: &[(String, std::path::PathBuf)]) -> Result<(), String> {
     let file =
-        std::fs::File::create(out_zip).map_err(|e| format!("no se pudo crear el zip: {e}"))?;
+        std::fs::File::create(out_zip).map_err(|e| keyed_error("packs.err.create_zip", e))?;
     let mut zw = zip::ZipWriter::new(file);
     let mut wrote = 0;
     for (name, path) in entries {
@@ -955,6 +978,35 @@ fn is_png(bytes: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn los_errores_con_clave_se_traducen_y_los_demas_pasan_sin_cambios() {
+        let raw = keyed_error("packs.err.create_zip", "disco lleno");
+        let text = localize_error(&raw, |key| {
+            assert_eq!(key, "packs.err.create_zip");
+            "ZIP: {error}".to_string()
+        });
+        assert_eq!(text, "ZIP: disco lleno");
+        assert_eq!(
+            localize_error("zip inválido: x", |_| unreachable!()),
+            "zip inválido: x"
+        );
+    }
+
+    #[test]
+    fn las_claves_de_error_de_packs_existen_en_el_catalogo() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = crate::config_ctrl::ConfigCtrl::new(dir.path().to_path_buf());
+        for key in [
+            "packs.err.save_theme",
+            "packs.err.delete_theme",
+            "packs.err.create_zip",
+        ] {
+            let template = config.t(key);
+            assert_ne!(template, key, "falta la clave {key}");
+            assert!(template.contains("{error}"), "{key} sin marcador {{error}}");
+        }
+    }
 
     #[test]
     fn export_e_import_idioma_round_trip() {
