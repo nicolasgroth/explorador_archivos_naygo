@@ -38,7 +38,7 @@
 //!
 //! ## Submenús diferidos y owner-draw (`IContextMenu2` / `IContextMenu3`)
 //!
-//! Varios submenús del Shell ("Enviar a", "Abrir con", "Nuevo") y muchas
+//! Varios submenús del Shell ("Enviar a", "Abrir con") y muchas
 //! extensiones de terceros (7-Zip, Git…) no rellenan su submenú en
 //! `QueryContextMenu`: lo hacen al recibir `WM_INITMENUPOPUP`, y dibujan sus
 //! ítems (íconos) con `WM_MEASUREITEM` / `WM_DRAWITEM`. Esos mensajes llegan a la
@@ -46,6 +46,10 @@
 //! `TrackPopupMenuEx` está activo, se instala una **subclase temporal**
 //! (`SetWindowSubclass`) que reenvía esos mensajes a `IContextMenu3::HandleMenuMsg2`
 //! (o `IContextMenu2::HandleMenuMsg`). Un guard RAII la quita siempre al terminar.
+//!
+//! "Nuevo" (`CNewMenu`) NO se arregla con este reenvío: ese verbo solo existe en el menú de
+//! FONDO de una carpeta (`CreateViewObject(IID_IContextMenu)`), que Naygo todavía no pide.
+//! Queda como tarea aparte.
 //!
 //! ## Tolerancia
 //!
@@ -114,6 +118,23 @@ enum MenuMsgRoute {
     HandleMsg,
     /// No es asunto del Shell: `DefSubclassProc`.
     Default,
+}
+
+/// Valor que devuelve la subclase tras un reenvío exitoso al Shell. `shell_result` es el
+/// `plResult` que escribió `HandleMenuMsg2` (`None` con `IContextMenu2`, que no tiene `LRESULT`).
+///
+/// `WM_DRAWITEM` / `WM_MEASUREITEM` se contestan con `TRUE` (1, la convención Win32 de "mensaje
+/// procesado") cuando el Shell no dejó un valor propio. `WM_MENUCHAR` conserva lo que entrega el
+/// Shell (empaqueta la acción y el ítem), y `WM_INITMENUPOPUP` devuelve 0 ("procesado").
+#[cfg(any(windows, test))]
+fn forwarded_result(msg: u32, shell_result: Option<isize>) -> isize {
+    match msg {
+        WM_DRAWITEM | WM_MEASUREITEM => match shell_result {
+            Some(value) if value != 0 => value,
+            _ => 1,
+        },
+        _ => shell_result.unwrap_or(0),
+    }
 }
 
 #[cfg(any(windows, test))]
@@ -283,16 +304,20 @@ unsafe extern "system" fn menu_subclass_proc(
                 let mut result = LRESULT(0);
                 unsafe { menu.HandleMenuMsg2(msg, wparam, lparam, Some(&mut result)) }
                     .ok()
-                    .map(|()| result)
+                    .map(|()| LRESULT(forwarded_result(msg, Some(result.0))))
             }
             (MenuMsgRoute::HandleMsg, MenuMsgHandler::V2(menu)) => {
                 unsafe { menu.HandleMenuMsg(msg, wparam, lparam) }
                     .ok()
-                    .map(|()| LRESULT(0))
+                    .map(|()| LRESULT(forwarded_result(msg, None)))
             }
             _ => None,
         }
     }));
+    // Nota: `WM_INITMENUPOPUP` se reenvía SIEMPRE al Shell y no pasa por `DefSubclassProc` (el
+    // Explorador de Windows hace lo mismo): el menú pertenece al Shell, que rellena sus
+    // submenús diferidos aquí, y winit no usa menús propios en esta ventana, así que no hay un
+    // procedimiento por defecto que deba ver este mensaje.
     match handled {
         Ok(Some(result)) => result,
         // La subclase solo se instala si la tabla se resolvió completa.
@@ -627,6 +652,27 @@ mod tests {
             assert_eq!(route_menu_msg(V3, msg, 0, Some(ODT_MENU)), Default);
             assert_eq!(route_menu_msg(V2, msg, 0, Some(ODT_MENU)), Default);
         }
+    }
+
+    #[test]
+    fn forwarded_result_sigue_la_convencion_win32() {
+        // Owner-draw procesado: TRUE (1) tanto con IContextMenu2 (sin LRESULT) como con
+        // IContextMenu3 que no escribió plResult (0).
+        for msg in [WM_DRAWITEM, WM_MEASUREITEM] {
+            assert_eq!(forwarded_result(msg, None), 1);
+            assert_eq!(forwarded_result(msg, Some(0)), 1);
+            // Si el Shell dejó un valor propio, se respeta.
+            assert_eq!(forwarded_result(msg, Some(7)), 7);
+        }
+        // WM_MENUCHAR conserva lo que entrega el Shell (incluido el 0).
+        assert_eq!(
+            forwarded_result(WM_MENUCHAR, Some(0x0002_0005)),
+            0x0002_0005
+        );
+        assert_eq!(forwarded_result(WM_MENUCHAR, Some(0)), 0);
+        // WM_INITMENUPOPUP: 0 ("procesado").
+        assert_eq!(forwarded_result(WM_INITMENUPOPUP, None), 0);
+        assert_eq!(forwarded_result(WM_INITMENUPOPUP, Some(0)), 0);
     }
 
     #[cfg(windows)]
