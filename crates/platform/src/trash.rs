@@ -517,6 +517,33 @@ fn classify_delete_results(
 /// insensible a caja como en el comportamiento previo.
 #[cfg(windows)]
 fn windows_paths_equal(left: &std::path::Path, right: &std::path::Path) -> bool {
+    if windows_paths_equal_text(left, right) {
+        return true;
+    }
+    // Una forma corta (8.3) y su forma larga son la misma ruta aunque el texto difiera. Solo se
+    // consulta el sistema de archivos si algún lado contiene `~` (condición necesaria de un
+    // alias 8.3), de modo que el camino común no hace I/O. Si algún lado no se puede resolver
+    // (p. ej. ya no existe) se conserva el resultado textual: distinto.
+    if !path_may_have_short_alias(left) && !path_may_have_short_alias(right) {
+        return false;
+    }
+    match (long_path_name(left), long_path_name(right)) {
+        (Ok(left_long), Ok(right_long)) => windows_paths_equal_text(&left_long, &right_long),
+        _ => false,
+    }
+}
+
+#[cfg(windows)]
+fn path_may_have_short_alias(path: &std::path::Path) -> bool {
+    use std::os::windows::ffi::OsStrExt;
+    path.as_os_str()
+        .encode_wide()
+        .any(|unit| unit == b'~' as u16)
+}
+
+/// Comparación puramente textual (sin I/O) de rutas Windows; ver [`windows_paths_equal`].
+#[cfg(windows)]
+fn windows_paths_equal_text(left: &std::path::Path, right: &std::path::Path) -> bool {
     use std::os::windows::ffi::OsStrExt;
     use windows::Win32::Globalization::{CompareStringOrdinal, CSTR_EQUAL};
 
@@ -576,7 +603,7 @@ fn find_original_alias(
     aliases.get(shell_path).cloned().or_else(|| {
         let mut matches = aliases
             .iter()
-            .filter(|(alias, _)| windows_paths_equal(alias, shell_path));
+            .filter(|(alias, _)| windows_paths_equal_text(alias, shell_path));
         let (_, original) = matches.next()?;
         // Si el directorio distingue mayúsculas, una coincidencia ambigua no es identidad.
         matches.next().is_none().then(|| original.clone())
@@ -593,11 +620,11 @@ fn recycle_bin_entry_matches(
     original_parent: &std::path::Path,
     original_name: &std::ffi::OsStr,
 ) -> bool {
-    deleted_from
-        .is_some_and(|folder| windows_paths_equal(std::path::Path::new(folder), original_parent))
-        && display_name
-            .and_then(|name| std::path::Path::new(name).file_name())
-            .is_some_and(|name| name == original_name)
+    deleted_from.is_some_and(|folder| {
+        windows_paths_equal_text(std::path::Path::new(folder), original_parent)
+    }) && display_name
+        .and_then(|name| std::path::Path::new(name).file_name())
+        .is_some_and(|name| name == original_name)
 }
 
 /// El Shell necesita la forma de parsing habitual, no el prefijo extendido `\\?\\`; en UNC se
@@ -1574,8 +1601,16 @@ mod tests {
         };
         let (reported_original, reported_landed) = parse_restored_elsewhere(&message)
             .unwrap_or_else(|| panic!("detalle estructurado esperado: {message}"));
-        assert_eq!(std::path::Path::new(reported_original), original.as_path());
-        assert_ne!(std::path::Path::new(reported_landed), original.as_path());
+        // %TEMP% puede traer componentes 8.3 (RUNNER~1) y el Shell informa la forma larga:
+        // se compara por identidad de ruta, no por texto.
+        assert!(
+            windows_paths_equal(std::path::Path::new(reported_original), &original),
+            "original informado: {reported_original}"
+        );
+        assert!(!windows_paths_equal(
+            std::path::Path::new(reported_landed),
+            &original
+        ));
         // El ítem se conservó con un nombre alternativo en la misma carpeta.
         let copies: Vec<_> = std::fs::read_dir(dir.path())
             .unwrap()
@@ -1637,6 +1672,48 @@ mod tests {
         }
         let device = PathBuf::from(r"\\?\Volume{12345678-1234-1234-1234-123456789012}\file");
         assert_eq!(shell_parsing_path(device.clone()), device);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn comparacion_de_rutas_iguala_forma_corta_y_larga_de_una_ruta_existente() {
+        use std::os::windows::ffi::{OsStrExt, OsStringExt};
+        use windows::core::PCWSTR;
+        use windows::Win32::Storage::FileSystem::GetShortPathNameW;
+
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("Carpeta larga con espacios");
+        std::fs::create_dir(&folder).unwrap();
+        let file = folder.join("archivo largo.txt");
+        std::fs::write(&file, b"x").unwrap();
+        let wide: Vec<u16> = file.as_os_str().encode_wide().chain(Some(0)).collect();
+        let required = unsafe { GetShortPathNameW(PCWSTR(wide.as_ptr()), None) };
+        assert!(
+            required > 0,
+            "GetShortPathNameW falló para fixture existente"
+        );
+        let mut output = vec![0u16; required as usize];
+        let written = unsafe { GetShortPathNameW(PCWSTR(wide.as_ptr()), Some(&mut output)) };
+        assert!(written > 0 && (written as usize) < output.len());
+        let short = PathBuf::from(std::ffi::OsString::from_wide(&output[..written as usize]));
+        if windows_paths_equal_text(&short, &file) {
+            eprintln!("OMITIDO: el volumen no genera nombres 8.3 (fsutil 8dot3name); no hay alias que comparar");
+            return;
+        }
+        assert!(windows_paths_equal(&short, &file));
+        assert!(windows_paths_equal(&file, &short));
+        // Un hermano inexistente no se resuelve: se conserva el resultado textual (distinto).
+        let missing_short = short.with_file_name("NOEXIS~1.TXT");
+        assert!(!windows_paths_equal(&missing_short, &file));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn comparacion_de_rutas_con_tilde_inexistente_sigue_siendo_textual() {
+        let left = std::path::Path::new(r"C:\no_existe_naygo\RUNNER~1\a.txt");
+        let right = std::path::Path::new(r"C:\no_existe_naygo\runneradmin\a.txt");
+        assert!(!windows_paths_equal(left, right));
+        assert!(windows_paths_equal(left, left));
     }
 
     #[cfg(windows)]
