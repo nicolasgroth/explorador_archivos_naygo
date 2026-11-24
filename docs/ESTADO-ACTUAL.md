@@ -86,3 +86,10 @@ El build release tardó 21 min 02 s con un pico contable del Job de 6,14 GiB. El
 
 Sin validar en vivo todavía (ver `BACKLOG.md`, sección 1): abrir archivos a través del hilo del
 Shell, el menú contextual nativo y la copia de un archivo descargado a un USB FAT32/exFAT.
+
+## Medición final y decisiones
+
+La medición de memoria y CPU sobre este mismo binario está en `BENCHMARKS.md`, sección "Cierre del
+lote — medición final": no hay regresión respecto de las mediciones intermedias del lote. Las
+decisiones que se tomaron sin consultar al autor, con su motivo y su costo si resultan
+equivocadas, están en [`evidencia/decisiones-lote-0.5.7.md`](evidencia/decisiones-lote-0.5.7.md).

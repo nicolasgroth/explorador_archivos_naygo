@@ -108,6 +108,9 @@ Primero lo que nota el usuario:
   aparte.
 
 Técnico (sin efecto visible):
+- **Handles del proceso:** la medición final dio 357–366 handles con ventana, contra 333–342 en
+  la medición anterior del mismo lote. Sin investigar; no crece en reposo. La medición final
+  tampoco capturó el pico de memoria ni el CPU del listado inicial de 100.000 entradas.
 - **Restos de la ola de arreglos del review final:** `copy_with_junction`
   (`ui-slint/src/ops_ctrl/mod.rs`, helper de tests) no tiene `cfg(windows)` y rompe el clippy
   opcional de Linux por `dead_code`; el test `shell_execute_ex_pide_noasync_y_sin_ui` compara una
