@@ -77,11 +77,9 @@ fn resolve_entries(events: &[DirEvent]) -> HashMap<PathBuf, Option<Entry>> {
             DirEvent::Removed(_) => None,
         };
         if let Some(p) = p {
-            out.entry(p.clone()).or_insert_with(|| {
-                std::fs::metadata(p)
-                    .ok()
-                    .map(|m| naygo_core::listing::entry_from_path(p, Some(&m)))
-            });
+            // Metadata del propio enlace (no del destino), igual que el listado.
+            out.entry(p.clone())
+                .or_insert_with(|| naygo_core::listing::entry_at(p));
         }
     }
     out
@@ -429,6 +427,34 @@ mod tests {
         assert_eq!(w.next_fresh_expiry(8, now), Some(Duration::from_secs(3)));
         assert_eq!(w.next_fresh_expiry(8, t0 + Duration::from_secs(20)), None);
         assert_eq!(w.next_fresh_expiry(0, t0), None);
+    }
+
+    /// El watcher lee la metadata del ENLACE (no de su destino), igual que el listado: un
+    /// junction a un destino caído se resuelve como carpeta en vez de desaparecer.
+    #[cfg(windows)]
+    #[test]
+    fn resolve_entries_no_sigue_enlaces() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("target");
+        std::fs::create_dir(&target).unwrap();
+        let link = tmp.path().join("link");
+        let made = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&link)
+            .arg(&target)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if !made {
+            return;
+        }
+        std::fs::remove_dir(&target).unwrap();
+        let r = resolve_entries(&[DirEvent::Modified(link.clone())]);
+        let e = r
+            .get(&link)
+            .and_then(|o| o.as_ref())
+            .expect("el enlace se resuelve sin seguirlo");
+        assert_eq!(e.kind, naygo_core::fs_model::EntryKind::Directory);
     }
 
     #[test]

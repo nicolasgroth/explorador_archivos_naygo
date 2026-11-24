@@ -18,7 +18,7 @@
 
 use crate::cancel::CancellationToken;
 use crate::fs_model::{Entry, EntryKind};
-use crate::listing::entry_from_path;
+use crate::listing::entry_at;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread::{self, JoinHandle};
@@ -286,9 +286,10 @@ fn file_contains_text(path: &Path, needle: &str, ignore_case: bool) -> bool {
 /// Construye el `Entry` de una coincidencia leyendo su metadata real (tamaño/fechas). Si la
 /// metadata no se puede leer, cae a un `Entry` mínimo con el tipo ya conocido del walk.
 fn make_entry(path: &Path, is_dir: bool) -> Entry {
-    match std::fs::metadata(path) {
-        Ok(m) => entry_from_path(path, Some(&m)),
-        Err(_) => Entry {
+    // Metadata del propio enlace, como el listado (no se sigue el destino).
+    match entry_at(path) {
+        Some(entry) => entry,
+        None => Entry {
             name: path
                 .file_name()
                 .map(crate::path_display::display_os_str)

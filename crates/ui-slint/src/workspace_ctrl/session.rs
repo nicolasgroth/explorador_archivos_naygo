@@ -318,11 +318,7 @@ impl WorkspaceCtrl {
         pane: PaneId,
         events: &[naygo_core::listing::DirEvent],
     ) -> Vec<std::path::PathBuf> {
-        self.apply_watch_events_inner(pane, events, &|p| {
-            std::fs::metadata(p)
-                .ok()
-                .map(|m| naygo_core::listing::entry_from_path(p, Some(&m)))
-        })
+        self.apply_watch_events_inner(pane, events, &naygo_core::listing::entry_at)
     }
 
     /// Versión con metadata PRE-RESUELTA en el hilo del watcher (`resolved`, ver

@@ -498,29 +498,18 @@ pub fn entry_from_path(path: &Path, metadata: Option<&Metadata>) -> Entry {
         .map(crate::path_display::display_os_str)
         .unwrap_or_default();
 
-    // Un enlace (symlink/junction) llega con metadata sin seguir: no es ni carpeta ni
-    // archivo. Para que una carpeta-enlace sea navegable se resuelve su destino con una
-    // sola `stat` extra (solo por enlace, no por entrada). Destino roto → `Other`.
-    // Del destino se toman SOLO `kind` y `size`; oculto/sistema/fechas son los del enlace
-    // mismo (como el Explorador): p. ej. `Documents and Settings` es un junction
-    // oculto+sistema cuyo destino no lo es. Quien recorre recursivamente (tamaño, búsqueda,
-    // ops) decide por `is_symlink()`, no por `EntryKind`.
-    let followed = match metadata {
-        Some(m) if m.file_type().is_symlink() => std::fs::metadata(path).ok(),
-        _ => None,
-    };
-    let kind_meta = followed.as_ref().or(metadata);
-
-    let kind = match kind_meta {
-        Some(m) if m.is_dir() => EntryKind::Directory,
-        Some(m) if m.is_file() => EntryKind::File,
-        Some(_) => EntryKind::Other,
-        None => EntryKind::Other,
-    };
-
-    let size = match (metadata, kind) {
-        _ if kind == EntryKind::File => kind_meta.map(|m| m.len()),
-        _ => None,
+    // Un enlace (symlink/junction) llega con metadata sin seguir. En Windows su tipo sale del
+    // PROPIO enlace (un junction o symlink de carpeta lleva el bit de directorio), sin tocar el
+    // destino: un enlace a un share caído no bloquea el listado ni retiene la plaza del worker.
+    // Un enlace a archivo queda sin tamaño (el del destino exigiría seguirlo). Oculto/sistema y
+    // fechas son siempre los del enlace (como el Explorador): p. ej. `Documents and Settings`
+    // es un junction oculto+sistema cuyo destino no lo es. Quien recorre recursivamente
+    // (tamaño, búsqueda, ops) decide por `is_symlink()`, no por `EntryKind`.
+    let (kind, size) = match metadata {
+        Some(m) if m.file_type().is_symlink() => (link_kind(path, m), None),
+        Some(m) if m.is_dir() => (EntryKind::Directory, None),
+        Some(m) if m.is_file() => (EntryKind::File, Some(m.len())),
+        Some(_) | None => (EntryKind::Other, None),
     };
 
     let modified = metadata.and_then(|m| m.modified().ok());
@@ -539,6 +528,41 @@ pub fn entry_from_path(path: &Path, metadata: Option<&Metadata>) -> Entry {
         created,
         hidden,
         system,
+    }
+}
+
+/// `Entry` de una ruta con la metadata del propio enlace (`symlink_metadata`): nunca sigue
+/// symlinks ni junctions. Es la lectura que usan el watcher, la vista profunda y la búsqueda,
+/// para coincidir con el listado. `None` si la ruta no se puede leer.
+pub fn entry_at(path: &Path) -> Option<Entry> {
+    std::fs::symlink_metadata(path)
+        .ok()
+        .map(|metadata| entry_from_path(path, Some(&metadata)))
+}
+
+/// Tipo de un enlace leído de sus propios atributos, sin seguirlo (Windows): el bit de
+/// directorio distingue un junction/symlink de carpeta de un symlink de archivo.
+#[cfg(windows)]
+fn link_kind(_path: &Path, metadata: &Metadata) -> EntryKind {
+    use std::os::windows::fs::FileTypeExt;
+    let file_type = metadata.file_type();
+    if file_type.is_symlink_dir() {
+        EntryKind::Directory
+    } else if file_type.is_symlink_file() {
+        EntryKind::File
+    } else {
+        EntryKind::Other
+    }
+}
+
+/// Fuera de Windows el enlace no dice a qué apunta: se resuelve el destino con una `stat`
+/// (destino roto → `Other`).
+#[cfg(not(windows))]
+fn link_kind(path: &Path, _metadata: &Metadata) -> EntryKind {
+    match std::fs::metadata(path) {
+        Ok(m) if m.is_dir() => EntryKind::Directory,
+        Ok(m) if m.is_file() => EntryKind::File,
+        _ => EntryKind::Other,
     }
 }
 
@@ -685,6 +709,32 @@ mod tests {
         let entry = found.unwrap();
         assert_eq!(entry.kind, EntryKind::Directory);
         assert!(entry.hidden && entry.system);
+    }
+
+    /// El tipo sale del propio enlace, sin seguirlo: un junction cuyo destino no responde (NAS
+    /// apagado) o ya no existe se lista igual como carpeta, sin bloquear el worker.
+    #[cfg(windows)]
+    #[test]
+    fn junction_a_destino_inexistente_se_lista_como_carpeta_sin_seguir() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("target");
+        fs::create_dir(&target).unwrap();
+        let link = dir.path().join("link");
+        if !crate::ops::make_junction(&link, &target) {
+            return;
+        }
+        fs::remove_dir(&target).unwrap();
+        let (rx, worker) = spawn_listing(dir.path().to_path_buf(), CancellationToken::new());
+        worker.join().unwrap();
+        let mut found = None;
+        while let Ok(entry) = rx.try_recv_entry() {
+            if entry.name == "link" {
+                found = Some(entry);
+            }
+        }
+        let entry = found.expect("el junction se lista");
+        assert_eq!(entry.kind, EntryKind::Directory);
+        assert_eq!(entry.size, None);
     }
 
     #[test]
