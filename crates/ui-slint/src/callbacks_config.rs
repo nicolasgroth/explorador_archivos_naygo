@@ -102,7 +102,8 @@ pub(crate) fn wire_config(
             }
             crate::packs::PackOutcome::ImportTopic(Err(error))
             | crate::packs::PackOutcome::ExportTopic(Err(error)) => {
-                report(&ui_weak, Err::<(), String>(error));
+                let text = crate::packs::localize_error(&error, |key| ctrl.borrow().config.t(key));
+                report(&ui_weak, Err::<(), String>(text));
             }
             crate::packs::PackOutcome::ExportTopic(Ok(())) => {}
             crate::packs::PackOutcome::SaveTheme(Ok((id, catalog))) => {
@@ -120,18 +121,14 @@ pub(crate) fn wire_config(
                 refresh();
             }
             crate::packs::PackOutcome::SaveTheme(Err(error)) => {
-                report(&ui_weak, Err::<(), String>(error));
+                let text = crate::packs::localize_error(&error, |key| ctrl.borrow().config.t(key));
+                report(&ui_weak, Err::<(), String>(text));
             }
             crate::packs::PackOutcome::DeleteTheme { id, result } => match result {
                 Ok((removed, catalog)) => {
-                    {
-                        let mut c = ctrl.borrow_mut();
-                        c.config.themes = catalog;
-                        if removed && c.config.settings.theme.as_str() == id {
-                            c.config.settings.theme = naygo_core::theme::ThemeCatalog::default_id();
-                            c.config.save();
-                        }
-                    }
+                    ctrl.borrow_mut()
+                        .config
+                        .finish_theme_delete(&id, removed, catalog);
                     let c = ctrl.borrow();
                     if let Some(ui) = ui_weak.upgrade() {
                         theme_apply::apply(&ui, c.config.active_theme());
@@ -142,7 +139,11 @@ pub(crate) fn wire_config(
                     drop(c);
                     refresh();
                 }
-                Err(error) => report(&ui_weak, Err::<(), String>(error)),
+                Err(error) => {
+                    let text =
+                        crate::packs::localize_error(&error, |key| ctrl.borrow().config.t(key));
+                    report(&ui_weak, Err::<(), String>(text));
+                }
             },
             crate::packs::PackOutcome::ImportIcon(Ok((manifest, icon_sets))) => {
                 let mut c = ctrl.borrow_mut();

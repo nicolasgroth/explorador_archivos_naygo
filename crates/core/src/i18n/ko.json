@@ -1265,5 +1265,12 @@
   "slint.cfg.tip.icon_custom": "Import or export a full icon set (.naygoset), or reset all icons to the base set.",
   "listing.incomplete": "목록이 불완전합니다. 일부 항목을 읽을 수 없습니다",
   "slint.cfg.system_file_icons": "파일에 시스템 아이콘 사용",
-  "slint.cfg.tip.system_file_icons": "각 확장자에 Windows가 연결한 아이콘을 사용합니다. 조회는 백그라운드에서 수행되며 512개 유형으로 제한됩니다. 기본값은 꺼짐입니다."
+  "slint.cfg.tip.system_file_icons": "각 확장자에 Windows가 연결한 아이콘을 사용합니다. 조회는 백그라운드에서 수행되며 512개 유형으로 제한됩니다. 기본값은 꺼짐입니다.",
+  "splash.subtitle": "파일 탐색기",
+  "packs.err.save_theme": "테마를 저장하지 못했습니다: {error}",
+  "packs.err.delete_theme": "테마를 삭제하지 못했습니다: {error}",
+  "packs.err.create_zip": "zip을 만들지 못했습니다: {error}",
+  "ops.err.trash_not_supported": "이 시스템에서는 휴지통을 사용할 수 없습니다.",
+  "ops.err.trash_restored_elsewhere": "복원 중 대상이 나타나 덮어쓰지 않았습니다: {original}. 항목은 다른 이름으로 {restored}에 복원되었습니다.",
+  "ops.failed.unreadable_folder": "폴더를 읽지 못했습니다: {reason}"
 }

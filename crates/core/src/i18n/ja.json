@@ -1265,5 +1265,12 @@
   "slint.cfg.tip.icon_custom": "Import or export a full icon set (.naygoset), or reset all icons to the base set.",
   "listing.incomplete": "一覧が不完全です。一部の項目を読み取れませんでした",
   "slint.cfg.system_file_icons": "ファイルにシステムアイコンを使用",
-  "slint.cfg.tip.system_file_icons": "各拡張子に Windows が関連付けたアイコンを使用します。検索はバックグラウンドで行い、512 種類までに制限されます。既定ではオフです。"
+  "slint.cfg.tip.system_file_icons": "各拡張子に Windows が関連付けたアイコンを使用します。検索はバックグラウンドで行い、512 種類までに制限されます。既定ではオフです。",
+  "splash.subtitle": "ファイルエクスプローラー",
+  "packs.err.save_theme": "テーマを保存できませんでした: {error}",
+  "packs.err.delete_theme": "テーマを削除できませんでした: {error}",
+  "packs.err.create_zip": "zip を作成できませんでした: {error}",
+  "ops.err.trash_not_supported": "このシステムではごみ箱を利用できません。",
+  "ops.err.trash_restored_elsewhere": "復元中に復元先が現れたため、上書きしませんでした: {original}。項目は別の名前で {restored} に復元されました。",
+  "ops.failed.unreadable_folder": "フォルダーを読み取れませんでした: {reason}"
 }

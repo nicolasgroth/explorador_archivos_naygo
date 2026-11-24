@@ -1265,5 +1265,12 @@
   "slint.cfg.tip.icon_custom": "Importa o exporta un set de íconos completo (.naygoset), o restablece todos los íconos al set base.",
   "listing.incomplete": "Listado incompleto; algunos elementos no pudieron leerse",
   "slint.cfg.system_file_icons": "Usar íconos del sistema para archivos",
-  "slint.cfg.tip.system_file_icons": "Usa el ícono asociado por Windows a cada extensión. La consulta se hace en segundo plano y se limita a 512 tipos; desactivado por defecto."
+  "slint.cfg.tip.system_file_icons": "Usa el ícono asociado por Windows a cada extensión. La consulta se hace en segundo plano y se limita a 512 tipos; desactivado por defecto.",
+  "splash.subtitle": "Explorador de archivos",
+  "packs.err.save_theme": "No se pudo guardar el tema: {error}",
+  "packs.err.delete_theme": "No se pudo eliminar el tema: {error}",
+  "packs.err.create_zip": "No se pudo crear el zip: {error}",
+  "ops.err.trash_not_supported": "La Papelera no está disponible en este sistema.",
+  "ops.err.trash_restored_elsewhere": "El destino apareció durante la restauración y no se pisó: {original}. El elemento quedó restaurado con otro nombre en {restored}.",
+  "ops.failed.unreadable_folder": "No se pudo leer la carpeta: {reason}"
 }

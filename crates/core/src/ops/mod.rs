@@ -87,6 +87,27 @@ pub struct OpRequest {
     pub conflict: ConflictPolicy,
 }
 
+/// Prefijo estable de un fallo planificado de CARPETA (no se pudo enumerar). Le sigue, tras
+/// `PLANNED_FAILURE_SEPARATOR`, el texto del error del sistema. core no conoce i18n: la UI
+/// reconoce el prefijo con [`parse_unreadable_folder`] y antepone el contexto traducido.
+pub const UNREADABLE_FOLDER_FAILURE: &str = "naygo:unreadable-folder";
+
+/// Separador (US, no imprimible) entre el prefijo y el motivo de un fallo planificado.
+const PLANNED_FAILURE_SEPARATOR: char = '\u{1f}';
+
+/// Motivo estructurado de una carpeta que no se pudo leer durante la planificación.
+pub(crate) fn unreadable_folder_failure(reason: &str) -> String {
+    format!("{UNREADABLE_FOLDER_FAILURE}{PLANNED_FAILURE_SEPARATOR}{reason}")
+}
+
+/// Si `detail` es un fallo planificado de carpeta ilegible, devuelve el texto del error del
+/// sistema (sin el prefijo) para que la UI lo componga con su traducción.
+pub fn parse_unreadable_folder(detail: &str) -> Option<&str> {
+    detail
+        .strip_prefix(UNREADABLE_FOLDER_FAILURE)?
+        .strip_prefix(PLANNED_FAILURE_SEPARATOR)
+}
+
 /// Un paso concreto del plan: copiar/mover un archivo, o crear una carpeta.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct OpStep {

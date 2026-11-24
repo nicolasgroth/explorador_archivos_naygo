@@ -462,6 +462,7 @@ fn main() -> Result<(), slint::PlatformError> {
             Ok(splash) => {
                 // Muestra el id de build al pie del splash (misma fuente que el Acerca de).
                 splash.set_build_version(naygo_full_version().into());
+                i18n_keys::apply_splash(&splash, &ctrl.borrow().config);
                 let _ = splash.show();
                 // Centrar en la pantalla primaria: una Window suelta de Slint abre por defecto
                 // arriba a la izquierda. Tamaño del splash (de splash.slint): 360x220 lógicos.

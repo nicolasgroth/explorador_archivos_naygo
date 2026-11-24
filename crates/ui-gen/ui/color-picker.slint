@@ -9,6 +9,7 @@
 // campos numéricos); el campo hex es de SOLO LECTURA (para copiar/referencia). Eso cubre
 // "elegir cualquier color por presets O por valor exacto" sin nada frágil.
 import { Theme } from "theme.slint";
+import { Tr } from "i18n.slint";
 import { LineEdit } from "std-widgets.slint";
 
 export component ColorPicker inherits Rectangle {
@@ -17,10 +18,10 @@ export component ColorPicker inherits Rectangle {
     in-out property <string> hex: "#000000";
     // Se emite con el nuevo "#rrggbb" cada vez que cambia el color.
     callback changed(string);
-    // Etiquetas traducidas: el componente es autocontenido (no importa el global `Tr`), así que el
-    // llamador pasa los textos del idioma activo. Defaults en español para verlos en el editor Slint.
-    in property <string> standard-colors-label: "Colores estándar";
-    in property <string> more-colors-label: "Más colores…";
+    // Etiquetas traducidas: por defecto salen del global `Tr` (idioma activo); el llamador puede
+    // sobreescribirlas.
+    in property <string> standard-colors-label: Tr.theme-standard-colors;
+    in property <string> more-colors-label: Tr.theme-more-colors;
 
     // Color inicial por DATA-BINDING (0-255 por canal). El editor de temas usa un ColorPicker
     // condicional (`if token abierto`), así que NO puede llamar imperativamente a `load-rgb` al

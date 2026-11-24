@@ -1265,5 +1265,12 @@
   "slint.cfg.tip.icon_custom": "Import or export a full icon set (.naygoset), or reset all icons to the base set.",
   "listing.incomplete": "列表不完整；部分项目无法读取",
   "slint.cfg.system_file_icons": "文件使用系统图标",
-  "slint.cfg.tip.system_file_icons": "使用 Windows 为各扩展名关联的图标。查询在后台运行，最多缓存 512 种类型；默认关闭。"
+  "slint.cfg.tip.system_file_icons": "使用 Windows 为各扩展名关联的图标。查询在后台运行，最多缓存 512 种类型；默认关闭。",
+  "splash.subtitle": "文件资源管理器",
+  "packs.err.save_theme": "无法保存主题：{error}",
+  "packs.err.delete_theme": "无法删除主题：{error}",
+  "packs.err.create_zip": "无法创建 zip：{error}",
+  "ops.err.trash_not_supported": "此系统上无法使用回收站。",
+  "ops.err.trash_restored_elsewhere": "还原期间目标位置出现了同名项，未被覆盖：{original}。该项目已以其他名称还原到 {restored}。",
+  "ops.failed.unreadable_folder": "无法读取文件夹：{reason}"
 }

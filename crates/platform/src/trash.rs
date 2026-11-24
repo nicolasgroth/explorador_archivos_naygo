@@ -87,6 +87,40 @@ pub type CancelProbe = std::sync::Arc<dyn Fn() -> bool + Send + Sync>;
 /// La UI lo traduce; no es una instrucción para reintentar ni una garantía de recuperación.
 pub const TRASH_UNCONFIRMED_IDENTITY: &str = "naygo:trash-unconfirmed-identity";
 
+/// Código estable para "la Papelera no está disponible en esta plataforma". La UI lo traduce.
+pub const TRASH_NOT_SUPPORTED: &str = "naygo:trash-not-supported";
+
+/// Prefijo estable del detalle "el destino apareció durante la restauración y el elemento quedó
+/// con otro nombre". Le siguen, separadas por `DETAIL_SEPARATOR`, la ruta original y la ruta
+/// donde quedó. La UI lo traduce con [`parse_restored_elsewhere`].
+pub const TRASH_RESTORED_ELSEWHERE: &str = "naygo:trash-restored-elsewhere";
+
+/// Separador (US, no imprimible) entre los campos de un detalle estructurado: una ruta de
+/// Windows nunca lo contiene.
+const DETAIL_SEPARATOR: char = '\u{1f}';
+
+/// Arma el detalle estructurado de una restauración que cayó con otro nombre.
+#[cfg(any(windows, test))]
+fn restored_elsewhere_detail(original: &std::path::Path, restored: &std::path::Path) -> String {
+    format!(
+        "{TRASH_RESTORED_ELSEWHERE}{DETAIL_SEPARATOR}{}{DETAIL_SEPARATOR}{}",
+        original.display(),
+        restored.display()
+    )
+}
+
+/// Si `detail` es el detalle de [`TRASH_RESTORED_ELSEWHERE`], devuelve (ruta original, ruta donde
+/// quedó el elemento) para que la UI componga el texto traducido.
+pub fn parse_restored_elsewhere(detail: &str) -> Option<(&str, &str)> {
+    let mut parts = detail.split(DETAIL_SEPARATOR);
+    if parts.next()? != TRASH_RESTORED_ELSEWHERE {
+        return None;
+    }
+    let original = parts.next()?;
+    let restored = parts.next()?;
+    parts.next().is_none().then_some((original, restored))
+}
+
 /// Error al enviar a papelera.
 #[derive(Debug)]
 pub enum TrashError {
@@ -100,6 +134,26 @@ pub enum TrashError {
         receipts: Vec<TrashReceipt>,
         failures: Vec<TrashItemFailure>,
     },
+}
+
+impl std::fmt::Display for TrashError {
+    /// Texto de diagnóstico sin el formato de depuración. Los casos que el usuario ve llevan un
+    /// código estable (`TRASH_NOT_SUPPORTED`, `TRASH_RESTORED_ELSEWHERE`) que la UI traduce.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TrashError::NotSupported => f.write_str(TRASH_NOT_SUPPORTED),
+            TrashError::Failed(message) => f.write_str(message),
+            TrashError::Partial { failures, .. } => {
+                for (index, failure) in failures.iter().enumerate() {
+                    if index > 0 {
+                        f.write_str("; ")?;
+                    }
+                    write!(f, "{}: {}", failure.original.display(), failure.detail)?;
+                }
+                Ok(())
+            }
+        }
+    }
 }
 
 /// Fallo asociado a un origen: puede seguir presente o haber salido sin identidad confirmada.
@@ -930,11 +984,9 @@ fn restore_from_trash_with_enumerator(
                 let landed = landed_at.lock().ok().and_then(|slot| slot.clone());
                 if let Some(landed) = landed {
                     if !windows_paths_equal(&landed, &receipt.original) {
-                        return Err(TrashError::Failed(format!(
-                            "el destino apareció durante la restauración y no se pisó: {}; \
-                             el elemento quedó restaurado con otro nombre en {}",
-                            receipt.original.display(),
-                            landed.display()
+                        return Err(TrashError::Failed(restored_elsewhere_detail(
+                            &receipt.original,
+                            &landed,
                         )));
                     }
                 }
@@ -1520,7 +1572,10 @@ mod tests {
         let Err(TrashError::Failed(message)) = result else {
             panic!("restaurar con colisión debe reportar fallo, no éxito");
         };
-        assert!(message.contains("otro nombre"), "{message}");
+        let (reported_original, reported_landed) = parse_restored_elsewhere(&message)
+            .unwrap_or_else(|| panic!("detalle estructurado esperado: {message}"));
+        assert_eq!(std::path::Path::new(reported_original), original.as_path());
+        assert_ne!(std::path::Path::new(reported_landed), original.as_path());
         // El ítem se conservó con un nombre alternativo en la misma carpeta.
         let copies: Vec<_> = std::fs::read_dir(dir.path())
             .unwrap()

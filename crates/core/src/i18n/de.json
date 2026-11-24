@@ -1265,5 +1265,12 @@
   "slint.cfg.tip.icon_custom": "Import or export a full icon set (.naygoset), or reset all icons to the base set.",
   "listing.incomplete": "Auflistung unvollständig; einige Elemente konnten nicht gelesen werden",
   "slint.cfg.system_file_icons": "Systemsymbole für Dateien verwenden",
-  "slint.cfg.tip.system_file_icons": "Verwendet das von Windows zugeordnete Symbol für jede Erweiterung. Abfragen laufen im Hintergrund und sind auf 512 Typen begrenzt; standardmäßig aus."
+  "slint.cfg.tip.system_file_icons": "Verwendet das von Windows zugeordnete Symbol für jede Erweiterung. Abfragen laufen im Hintergrund und sind auf 512 Typen begrenzt; standardmäßig aus.",
+  "splash.subtitle": "Datei-Explorer",
+  "packs.err.save_theme": "Das Design konnte nicht gespeichert werden: {error}",
+  "packs.err.delete_theme": "Das Design konnte nicht gelöscht werden: {error}",
+  "packs.err.create_zip": "Das ZIP-Archiv konnte nicht erstellt werden: {error}",
+  "ops.err.trash_not_supported": "Der Papierkorb ist auf diesem System nicht verfügbar.",
+  "ops.err.trash_restored_elsewhere": "Das Ziel ist während der Wiederherstellung aufgetaucht und wurde nicht überschrieben: {original}. Das Element wurde unter einem anderen Namen in {restored} wiederhergestellt.",
+  "ops.failed.unreadable_folder": "Der Ordner konnte nicht gelesen werden: {reason}"
 }

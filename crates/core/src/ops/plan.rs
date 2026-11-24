@@ -592,7 +592,8 @@ impl<'a> Expansion<'a> {
         // intenta retirarla del origen: conserva lo que no se llegó a enumerar.
         match (cut, preorder_step) {
             (Some(error), Some(index)) => {
-                self.steps[index].planned_failure = Some(error.to_string());
+                self.steps[index].planned_failure =
+                    Some(super::unreadable_folder_failure(&error.to_string()));
             }
             (Some(error), None) => self.push_failure(src, to, true, &error),
             (None, Some(_)) => {}
@@ -612,14 +613,21 @@ impl<'a> Expansion<'a> {
     }
 
     /// Registra un paso que el motor reportará como fallido sin ejecutarlo. El motivo es el
-    /// texto del error del sistema (sin cadenas nuevas para traducir).
+    /// texto del error del sistema; para una carpeta va con el prefijo estructurado
+    /// `UNREADABLE_FOLDER_FAILURE` (la UI lo traduce).
     fn push_failure(&mut self, src: &Path, to: &Path, is_dir: bool, error: &std::io::Error) {
         self.steps.push(OpStep {
             from: Some(src.to_path_buf()),
             to: to.to_path_buf(),
             bytes: 0,
             is_dir,
-            planned_failure: Some(error.to_string()),
+            // Una carpeta lleva el motivo estructurado para que la UI anteponga su contexto
+            // traducido; un archivo conserva el texto pelado del sistema.
+            planned_failure: Some(if is_dir {
+                super::unreadable_folder_failure(&error.to_string())
+            } else {
+                error.to_string()
+            }),
         });
         if !is_dir {
             self.total_files += 1;
@@ -862,6 +870,12 @@ mod tests {
                 .collect();
             assert_eq!(mid_steps.len(), 1, "{kind:?}: {:?}", plan.steps);
             assert!(mid_steps[0].is_dir && mid_steps[0].planned_failure.is_some());
+            // El motivo de una carpeta cortada es estructurado: la UI le antepone su contexto.
+            let reason = mid_steps[0].planned_failure.as_deref().unwrap();
+            assert!(
+                crate::ops::parse_unreadable_folder(reason).is_some(),
+                "{kind:?}: {reason}"
+            );
             assert_eq!(
                 plan.steps
                     .iter()

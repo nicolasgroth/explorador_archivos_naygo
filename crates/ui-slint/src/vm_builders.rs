@@ -599,18 +599,60 @@ pub(crate) fn to_op_row_vm(r: ops_ctrl::OpRowData) -> OpRowVm {
     }
 }
 
-pub(crate) fn to_op_file_vm(e: ops_ctrl::OpFileEntry, trash_unconfirmed: &str) -> OpFileVm {
-    let detail = if e.detail == naygo_platform::trash::TRASH_UNCONFIRMED_IDENTITY {
-        trash_unconfirmed
-    } else {
-        e.detail.as_str()
-    };
+/// Textos traducidos con los que se reemplazan los códigos estables que core/platform dejan en el
+/// detalle de un ítem fallido (ellos no conocen i18n). Se arma una vez por apertura del popup.
+pub(crate) struct OpDetailTexts {
+    pub trash_unconfirmed: String,
+    pub trash_not_supported: String,
+    /// Plantilla con `{original}` y `{restored}`.
+    pub trash_restored_elsewhere: String,
+    /// Plantilla con `{reason}`.
+    pub unreadable_folder: String,
+}
+
+impl OpDetailTexts {
+    pub(crate) fn from_config(config: &crate::config_ctrl::ConfigCtrl) -> Self {
+        Self {
+            trash_unconfirmed: config.t("ops.trash_unconfirmed"),
+            trash_not_supported: config.t("ops.err.trash_not_supported"),
+            trash_restored_elsewhere: config.t("ops.err.trash_restored_elsewhere"),
+            unreadable_folder: config.t("ops.failed.unreadable_folder"),
+        }
+    }
+
+    /// Detalle listo para mostrar: traduce los códigos estables conocidos y deja pasar el resto
+    /// (texto del sistema operativo) tal cual.
+    pub(crate) fn localize(&self, detail: &str) -> String {
+        use naygo_platform::trash::{
+            parse_restored_elsewhere, TRASH_NOT_SUPPORTED, TRASH_UNCONFIRMED_IDENTITY,
+        };
+        if detail == TRASH_UNCONFIRMED_IDENTITY {
+            return self.trash_unconfirmed.clone();
+        }
+        if detail == TRASH_NOT_SUPPORTED {
+            return self.trash_not_supported.clone();
+        }
+        if let Some((original, restored)) = parse_restored_elsewhere(detail) {
+            return self
+                .trash_restored_elsewhere
+                .replace("{original}", original)
+                .replace("{restored}", restored);
+        }
+        if let Some(reason) = naygo_core::ops::parse_unreadable_folder(detail) {
+            return self.unreadable_folder.replace("{reason}", reason);
+        }
+        detail.to_string()
+    }
+}
+
+pub(crate) fn to_op_file_vm(e: ops_ctrl::OpFileEntry, texts: &OpDetailTexts) -> OpFileVm {
+    let detail = texts.localize(&e.detail);
     OpFileVm {
         name: SharedString::from(e.name.as_str()),
         rel_path: SharedString::from(e.rel_path.as_str()),
         size: SharedString::from(e.size.as_str()),
         status: e.status,
-        detail: SharedString::from(detail),
+        detail: SharedString::from(detail.as_str()),
     }
 }
 
@@ -805,28 +847,75 @@ mod tests {
     use naygo_core::palette::{Command, CommandCategory, CommandMatch, CommandPayload};
     use std::path::PathBuf;
 
+    fn detail_texts() -> OpDetailTexts {
+        OpDetailTexts {
+            trash_unconfirmed: "T-UNCONFIRMED".into(),
+            trash_not_supported: "T-UNSUPPORTED".into(),
+            trash_restored_elsewhere: "T-ELSEWHERE {original} -> {restored}".into(),
+            unreadable_folder: "T-UNREADABLE {reason}".into(),
+        }
+    }
+
+    fn entry_with_detail(detail: &str) -> ops_ctrl::OpFileEntry {
+        ops_ctrl::OpFileEntry {
+            name: "file".into(),
+            rel_path: "file".into(),
+            size: String::new(),
+            status: 2,
+            detail: detail.into(),
+        }
+    }
+
     #[test]
-    fn unconfirmed_trash_identity_is_translated_in_operation_details() {
-        let entry = ops_ctrl::OpFileEntry {
-            name: "file".into(),
-            rel_path: "file".into(),
-            size: String::new(),
-            status: 2,
-            detail: naygo_platform::trash::TRASH_UNCONFIRMED_IDENTITY.into(),
-        };
-        let view = to_op_file_vm(entry, "Check the Recycle Bin");
-        assert_eq!(view.detail.as_str(), "Check the Recycle Bin");
-        let ordinary = ops_ctrl::OpFileEntry {
-            name: "file".into(),
-            rel_path: "file".into(),
-            size: String::new(),
-            status: 2,
-            detail: "access denied".into(),
+    fn stable_failure_codes_are_translated_in_operation_details() {
+        let texts = detail_texts();
+        let detail_of = |detail: &str| {
+            to_op_file_vm(entry_with_detail(detail), &texts)
+                .detail
+                .to_string()
         };
         assert_eq!(
-            to_op_file_vm(ordinary, "translated").detail.as_str(),
-            "access denied"
+            detail_of(naygo_platform::trash::TRASH_UNCONFIRMED_IDENTITY),
+            "T-UNCONFIRMED"
         );
+        assert_eq!(
+            detail_of(naygo_platform::trash::TRASH_NOT_SUPPORTED),
+            "T-UNSUPPORTED"
+        );
+        let elsewhere = format!(
+            "{}\u{1f}C:\\a\\x.txt\u{1f}C:\\a\\x (2).txt",
+            naygo_platform::trash::TRASH_RESTORED_ELSEWHERE
+        );
+        assert_eq!(
+            detail_of(&elsewhere),
+            "T-ELSEWHERE C:\\a\\x.txt -> C:\\a\\x (2).txt"
+        );
+        let unreadable = format!(
+            "{}\u{1f}access denied",
+            naygo_core::ops::UNREADABLE_FOLDER_FAILURE
+        );
+        assert_eq!(detail_of(&unreadable), "T-UNREADABLE access denied");
+        // Un detalle ordinario (texto del sistema) pasa sin cambios.
+        assert_eq!(detail_of("access denied"), "access denied");
+    }
+
+    #[test]
+    fn operation_detail_texts_use_existing_i18n_keys() {
+        // Las cuatro claves existen en el catálogo: si faltara una, `t` devolvería la clave.
+        let dir = tempfile::tempdir().unwrap();
+        let config = crate::config_ctrl::ConfigCtrl::new(dir.path().to_path_buf());
+        let texts = OpDetailTexts::from_config(&config);
+        for (key, text) in [
+            ("ops.trash_unconfirmed", &texts.trash_unconfirmed),
+            ("ops.err.trash_not_supported", &texts.trash_not_supported),
+            (
+                "ops.err.trash_restored_elsewhere",
+                &texts.trash_restored_elsewhere,
+            ),
+            ("ops.failed.unreadable_folder", &texts.unreadable_folder),
+        ] {
+            assert_ne!(text, key, "falta la clave {key}");
+        }
     }
 
     #[test]

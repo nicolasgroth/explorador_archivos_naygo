@@ -506,7 +506,7 @@ pub(crate) fn wire_ops(ui: &AppWindow, ctx: &WireCtx) {
         let ctrl = ctrl.clone();
         let ui_weak = ui.as_weak();
         ui.on_op_show_files(move |id| {
-            let (rows, label, context, can_retry, unconfirmed_trash) = {
+            let (rows, label, context, can_retry, detail_texts) = {
                 let c = ctrl.borrow();
                 let id = id as u64;
                 let rows = c.ops.op_file_list(id);
@@ -524,13 +524,13 @@ pub(crate) fn wire_ops(ui: &AppWindow, ctx: &WireCtx) {
                     label,
                     context,
                     c.ops.retry_files(id).is_some(),
-                    c.config.t("ops.trash_unconfirmed"),
+                    OpDetailTexts::from_config(&c.config),
                 )
             };
             if let Some(ui) = ui_weak.upgrade() {
                 let vms: Vec<OpFileVm> = rows
                     .into_iter()
-                    .map(|row| to_op_file_vm(row, &unconfirmed_trash))
+                    .map(|row| to_op_file_vm(row, &detail_texts))
                     .collect();
                 ui.set_op_file_list(ModelRc::from(Rc::new(VecModel::from(vms))));
                 ui.set_op_file_list_label(SharedString::from(label.as_str()));
