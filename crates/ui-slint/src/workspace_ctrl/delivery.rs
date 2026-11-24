@@ -349,7 +349,6 @@ mod failure_message_tests {
             link_not_moved: String::new(),
             publish_failed: String::new(),
             identity_unknown: String::new(),
-            replace_incomplete: String::new(),
         };
         let summary = naygo_core::ops::OpSummary {
             items: vec![naygo_core::ops::OpItem {

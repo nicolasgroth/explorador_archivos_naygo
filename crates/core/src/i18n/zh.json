@@ -1276,6 +1276,5 @@
   "ops.failed.link_not_copied": "未复制链接（链接不会在目标位置重新创建）：{path}",
   "ops.failed.link_not_moved": "无法移动链接，它仍保留在源位置：{path}（{reason}）",
   "ops.failed.publish": "无法将副本保存到目标位置：{reason}",
-  "ops.failed.identity_unknown": "无法确认源和目标是否为同一文件，未做任何更改：{reason}",
-  "ops.failed.replace_incomplete": "未替换该文件夹：其中包含无法复制的项目（链接或无法访问的文件夹），例如 {path}。源和目标均未更改。"
+  "ops.failed.identity_unknown": "无法确认源和目标是否为同一文件，未做任何更改：{reason}"
 }

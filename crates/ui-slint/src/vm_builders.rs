@@ -616,8 +616,6 @@ pub(crate) struct OpDetailTexts {
     pub publish_failed: String,
     /// Plantilla con `{reason}`.
     pub identity_unknown: String,
-    /// Plantilla con `{path}`.
-    pub replace_incomplete: String,
 }
 
 impl OpDetailTexts {
@@ -631,7 +629,6 @@ impl OpDetailTexts {
             link_not_moved: config.t("ops.failed.link_not_moved"),
             publish_failed: config.t("ops.failed.publish"),
             identity_unknown: config.t("ops.failed.identity_unknown"),
-            replace_incomplete: config.t("ops.failed.replace_incomplete"),
         }
     }
 
@@ -668,9 +665,6 @@ impl OpDetailTexts {
             }
             Some(OpFailure::IdentityUnknown { reason }) => {
                 self.identity_unknown.replace("{reason}", reason)
-            }
-            Some(OpFailure::ReplaceIncomplete { path }) => {
-                self.replace_incomplete.replace("{path}", path)
             }
             None => detail.to_string(),
         }
@@ -889,7 +883,6 @@ mod tests {
             link_not_moved: "T-LINKMOVE {path} {reason}".into(),
             publish_failed: "T-PUBLISH {reason}".into(),
             identity_unknown: "T-IDENTITY {reason}".into(),
-            replace_incomplete: "T-REPLACE {path}".into(),
         }
     }
 
@@ -953,12 +946,6 @@ mod tests {
             detail_of(&naygo_core::ops::identity_unknown_failure("io")),
             "T-IDENTITY io"
         );
-        assert_eq!(
-            detail_of(&naygo_core::ops::replace_incomplete_failure(
-                std::path::Path::new("l")
-            )),
-            "T-REPLACE l"
-        );
         // Un texto previo sin código (journal viejo) se muestra sin cambios.
         assert_eq!(
             detail_of("enlace no copiado: C:\\l"),
@@ -986,7 +973,6 @@ mod tests {
             ("ops.failed.link_not_moved", &texts.link_not_moved),
             ("ops.failed.publish", &texts.publish_failed),
             ("ops.failed.identity_unknown", &texts.identity_unknown),
-            ("ops.failed.replace_incomplete", &texts.replace_incomplete),
         ] {
             assert_ne!(text, key, "falta la clave {key}");
         }

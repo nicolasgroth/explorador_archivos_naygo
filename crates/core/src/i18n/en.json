@@ -1276,6 +1276,5 @@
   "ops.failed.link_not_copied": "Link not copied (links are not recreated at the destination): {path}",
   "ops.failed.link_not_moved": "Could not move the link; it stayed at the source: {path} ({reason})",
   "ops.failed.publish": "Could not save the copy to its destination: {reason}",
-  "ops.failed.identity_unknown": "Could not check whether the source and the destination are the same file; nothing was changed: {reason}",
-  "ops.failed.replace_incomplete": "The folder was not replaced: it contains items that cannot be copied (links or folders without access), for example {path}. Neither the source nor the destination was changed."
+  "ops.failed.identity_unknown": "Could not check whether the source and the destination are the same file; nothing was changed: {reason}"
 }

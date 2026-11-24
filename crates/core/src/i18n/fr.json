@@ -1276,6 +1276,5 @@
   "ops.failed.link_not_copied": "Lien non copié (les liens ne sont pas recréés à la destination) : {path}",
   "ops.failed.link_not_moved": "Impossible de déplacer le lien ; il est resté à la source : {path} ({reason})",
   "ops.failed.publish": "Impossible d'enregistrer la copie à sa destination : {reason}",
-  "ops.failed.identity_unknown": "Impossible de vérifier si la source et la destination sont le même fichier ; rien n'a été modifié : {reason}",
-  "ops.failed.replace_incomplete": "Le dossier n'a pas été remplacé : il contient des éléments qui ne peuvent pas être copiés (liens ou dossiers inaccessibles), par exemple {path}. Ni la source ni la destination n'ont été modifiées."
+  "ops.failed.identity_unknown": "Impossible de vérifier si la source et la destination sont le même fichier ; rien n'a été modifié : {reason}"
 }
