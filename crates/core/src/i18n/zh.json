@@ -1272,5 +1272,8 @@
   "packs.err.create_zip": "无法创建 zip：{error}",
   "ops.err.trash_not_supported": "此系统上无法使用回收站。",
   "ops.err.trash_restored_elsewhere": "还原期间目标位置出现了同名项，未被覆盖：{original}。该项目已以其他名称还原到 {restored}。",
-  "ops.failed.unreadable_folder": "无法读取文件夹：{reason}"
+  "ops.failed.unreadable_folder": "无法读取文件夹：{reason}",
+  "ops.failed.link_not_copied": "未复制链接（链接不会在目标位置重新创建）：{path}",
+  "ops.failed.link_not_moved": "无法移动链接，它仍保留在源位置：{path}（{reason}）",
+  "ops.failed.publish": "无法将副本保存到目标位置：{reason}"
 }

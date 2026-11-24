@@ -147,7 +147,7 @@ fn copy_and_publish_with_hook(
             let error = windows_error_to_io(error);
             std::io::Error::new(
                 error.kind(),
-                format!("no se pudo publicar la copia: {error}"),
+                naygo_core::ops::publish_failed_failure(&error.to_string()),
             )
         },
     )?;

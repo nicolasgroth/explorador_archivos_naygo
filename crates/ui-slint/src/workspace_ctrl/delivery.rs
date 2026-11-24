@@ -345,6 +345,9 @@ mod failure_message_tests {
             trash_not_supported: String::new(),
             trash_restored_elsewhere: String::new(),
             unreadable_folder: "T-UNREADABLE {reason}".into(),
+            link_not_copied: String::new(),
+            link_not_moved: String::new(),
+            publish_failed: String::new(),
         };
         let summary = naygo_core::ops::OpSummary {
             items: vec![naygo_core::ops::OpItem {

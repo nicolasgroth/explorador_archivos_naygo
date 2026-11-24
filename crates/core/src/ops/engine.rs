@@ -1791,13 +1791,12 @@ fn exec_copy_step(
                 }
                 match no_replace_rename.rename_noreplace(&from, &step.to) {
                     Ok(()) => OpOutcome::Done,
-                    Err(error) => OpOutcome::Failed(format!(
-                        "enlace no movido entre volúmenes: {}: {error}",
-                        from.display()
-                    )),
+                    Err(error) => {
+                        OpOutcome::Failed(super::link_not_moved_failure(&from, &error.to_string()))
+                    }
                 }
             } else {
-                OpOutcome::Failed(format!("enlace no copiado: {}", from.display()))
+                OpOutcome::Failed(super::link_not_copied_failure(&from))
             };
             return (step.to.clone(), outcome, 0, true);
         }
@@ -2043,7 +2042,13 @@ fn copy_buffered(
     };
     let published = match persisted {
         Ok(file) => file,
-        Err(error) => return Err(error.error),
+        Err(error) => {
+            let error = error.error;
+            return Err(std::io::Error::new(
+                error.kind(),
+                super::publish_failed_failure(&error.to_string()),
+            ));
+        }
     };
     if durable {
         sync_parent_dir(to);

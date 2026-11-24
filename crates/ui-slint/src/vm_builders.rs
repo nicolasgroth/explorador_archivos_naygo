@@ -608,6 +608,12 @@ pub(crate) struct OpDetailTexts {
     pub trash_restored_elsewhere: String,
     /// Plantilla con `{reason}`.
     pub unreadable_folder: String,
+    /// Plantilla con `{path}`.
+    pub link_not_copied: String,
+    /// Plantilla con `{path}` y `{reason}`.
+    pub link_not_moved: String,
+    /// Plantilla con `{reason}`.
+    pub publish_failed: String,
 }
 
 impl OpDetailTexts {
@@ -617,6 +623,9 @@ impl OpDetailTexts {
             trash_not_supported: config.t("ops.err.trash_not_supported"),
             trash_restored_elsewhere: config.t("ops.err.trash_restored_elsewhere"),
             unreadable_folder: config.t("ops.failed.unreadable_folder"),
+            link_not_copied: config.t("ops.failed.link_not_copied"),
+            link_not_moved: config.t("ops.failed.link_not_moved"),
+            publish_failed: config.t("ops.failed.publish"),
         }
     }
 
@@ -638,10 +647,21 @@ impl OpDetailTexts {
                 .replace("{original}", original)
                 .replace("{restored}", restored);
         }
-        if let Some(reason) = naygo_core::ops::parse_unreadable_folder(detail) {
-            return self.unreadable_folder.replace("{reason}", reason);
+        use naygo_core::ops::OpFailure;
+        match naygo_core::ops::parse_failure(detail) {
+            Some(OpFailure::UnreadableFolder { reason }) => {
+                self.unreadable_folder.replace("{reason}", reason)
+            }
+            Some(OpFailure::LinkNotCopied { path }) => self.link_not_copied.replace("{path}", path),
+            Some(OpFailure::LinkNotMoved { path, reason }) => self
+                .link_not_moved
+                .replace("{path}", path)
+                .replace("{reason}", reason),
+            Some(OpFailure::PublishFailed { reason }) => {
+                self.publish_failed.replace("{reason}", reason)
+            }
+            None => detail.to_string(),
         }
-        detail.to_string()
     }
 }
 
@@ -853,6 +873,9 @@ mod tests {
             trash_not_supported: "T-UNSUPPORTED".into(),
             trash_restored_elsewhere: "T-ELSEWHERE {original} -> {restored}".into(),
             unreadable_folder: "T-UNREADABLE {reason}".into(),
+            link_not_copied: "T-LINK {path}".into(),
+            link_not_moved: "T-LINKMOVE {path} {reason}".into(),
+            publish_failed: "T-PUBLISH {reason}".into(),
         }
     }
 
@@ -895,6 +918,28 @@ mod tests {
             naygo_core::ops::UNREADABLE_FOLDER_FAILURE
         );
         assert_eq!(detail_of(&unreadable), "T-UNREADABLE access denied");
+        assert_eq!(
+            detail_of(&naygo_core::ops::link_not_copied_failure(
+                std::path::Path::new("l")
+            )),
+            "T-LINK l"
+        );
+        assert_eq!(
+            detail_of(&naygo_core::ops::link_not_moved_failure(
+                std::path::Path::new("l"),
+                "otro volumen"
+            )),
+            "T-LINKMOVE l otro volumen"
+        );
+        assert_eq!(
+            detail_of(&naygo_core::ops::publish_failed_failure("denied")),
+            "T-PUBLISH denied"
+        );
+        // Un texto previo sin código (journal viejo) se muestra sin cambios.
+        assert_eq!(
+            detail_of("enlace no copiado: C:\\l"),
+            "enlace no copiado: C:\\l"
+        );
         // Un detalle ordinario (texto del sistema) pasa sin cambios.
         assert_eq!(detail_of("access denied"), "access denied");
     }
@@ -913,6 +958,9 @@ mod tests {
                 &texts.trash_restored_elsewhere,
             ),
             ("ops.failed.unreadable_folder", &texts.unreadable_folder),
+            ("ops.failed.link_not_copied", &texts.link_not_copied),
+            ("ops.failed.link_not_moved", &texts.link_not_moved),
+            ("ops.failed.publish", &texts.publish_failed),
         ] {
             assert_ne!(text, key, "falta la clave {key}");
         }

@@ -1272,5 +1272,8 @@
   "packs.err.create_zip": "Could not create the zip: {error}",
   "ops.err.trash_not_supported": "The Recycle Bin is not available on this system.",
   "ops.err.trash_restored_elsewhere": "The destination appeared during the restore and was not overwritten: {original}. The item was restored under another name at {restored}.",
-  "ops.failed.unreadable_folder": "Could not read the folder: {reason}"
+  "ops.failed.unreadable_folder": "Could not read the folder: {reason}",
+  "ops.failed.link_not_copied": "Link not copied (links are not recreated at the destination): {path}",
+  "ops.failed.link_not_moved": "Could not move the link; it stayed at the source: {path} ({reason})",
+  "ops.failed.publish": "Could not save the copy to its destination: {reason}"
 }

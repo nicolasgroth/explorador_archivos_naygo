@@ -664,7 +664,7 @@ pub fn execute(
 fn first_failure_detail(summary: &crate::ops::OpSummary) -> Option<String> {
     summary.items.iter().find_map(|item| match &item.outcome {
         crate::ops::OpOutcome::Failed(error) => {
-            Some(crate::ops::plain_failure_text(error).to_string())
+            Some(crate::ops::plain_failure_text(error).into_owned())
         }
         _ => None,
     })

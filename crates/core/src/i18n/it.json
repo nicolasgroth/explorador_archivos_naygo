@@ -1272,5 +1272,8 @@
   "packs.err.create_zip": "Impossibile creare lo zip: {error}",
   "ops.err.trash_not_supported": "Il Cestino non è disponibile su questo sistema.",
   "ops.err.trash_restored_elsewhere": "La destinazione è comparsa durante il ripristino e non è stata sovrascritta: {original}. L’elemento è stato ripristinato con un altro nome in {restored}.",
-  "ops.failed.unreadable_folder": "Impossibile leggere la cartella: {reason}"
+  "ops.failed.unreadable_folder": "Impossibile leggere la cartella: {reason}",
+  "ops.failed.link_not_copied": "Collegamento non copiato (i collegamenti non vengono ricreati nella destinazione): {path}",
+  "ops.failed.link_not_moved": "Impossibile spostare il collegamento; è rimasto nell'origine: {path} ({reason})",
+  "ops.failed.publish": "Impossibile salvare la copia nella destinazione: {reason}"
 }

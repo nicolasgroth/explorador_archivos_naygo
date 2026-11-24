@@ -2069,7 +2069,12 @@ impl OpsCtrl {
         let mut seen = std::collections::HashSet::new();
         let mut files = Vec::new();
         for item in &summary.items {
-            if !matches!(item.outcome, OpOutcome::Failed(_)) {
+            let OpOutcome::Failed(detail) = &item.outcome else {
+                continue;
+            };
+            // Un enlace no copiado/movido es el resultado previsto (no se recorren ni se
+            // recrean): reintentarlo daría lo mismo y `retry::review` rechazaría el lote entero.
+            if naygo_core::ops::is_link_failure(detail) {
                 continue;
             }
             let Some(source) = &item.src else {
@@ -3780,6 +3785,85 @@ mod tests {
         assert!(c.retry_files(99).is_none());
         c.active_ops[0].request.as_mut().unwrap().kind = OpKind::Delete { to_trash: true };
         assert!(c.retry_files(42).is_none());
+    }
+
+    /// Copia real de una carpeta con un junction: devuelve el controlador con la op terminada
+    /// (id 77), la carpeta de origen y el resumen del motor. `None` si no se pudo crear el enlace.
+    fn copy_with_junction(tmp: &Path) -> Option<(OpsCtrl, PathBuf)> {
+        let src = tmp.join("proyecto");
+        std::fs::create_dir(&src).unwrap();
+        std::fs::write(src.join("a.txt"), b"a").unwrap();
+        std::fs::write(src.join("b.txt"), b"b").unwrap();
+        let target = tmp.join("destino-del-enlace");
+        std::fs::create_dir(&target).unwrap();
+        let made = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(src.join("enlace"))
+            .arg(&target)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if !made {
+            return None;
+        }
+        let dst = tmp.join("dst");
+        std::fs::create_dir(&dst).unwrap();
+        let req = naygo_core::ops::transfer(false, vec![src.clone()], dst);
+        let plan = naygo_core::ops::plan(&req).unwrap();
+        let token = CancellationToken::new();
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let (_ctx, crx) = std::sync::mpsc::channel();
+        let summary =
+            naygo_core::ops::run_plan(&plan, &req.kind, req.conflict, &token, &tx, &crx, None);
+        assert_eq!(summary.count_failed(), 1, "{summary:?}");
+        let mut op = fake_active_op(77);
+        op.rx = None;
+        op.size_map = size_map_of(&plan);
+        op.request = Some(req);
+        op.summary = Some(summary);
+        let mut c = OpsCtrl::new(tmp.join("cfg"));
+        c.active_ops.push(op);
+        Some((c, src))
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn retry_files_excluye_pasos_de_enlace_fallidos() {
+        let tmp = tempfile::tempdir().unwrap();
+        let Some((c, _src)) = copy_with_junction(tmp.path()) else {
+            return;
+        };
+        assert!(
+            c.retry_files(77).is_none(),
+            "un enlace no copiado no es reintentable"
+        );
+    }
+
+    /// Un fallo de enlace no envenena "Reintentar": el fallo reintentable de la misma op (aquí,
+    /// un archivo bloqueado simulado) se sigue ofreciendo y la revisión lo acepta.
+    #[cfg(windows)]
+    #[test]
+    fn retry_con_fallo_de_enlace_y_fallo_reintentable_ofrece_el_segundo() {
+        let tmp = tempfile::tempdir().unwrap();
+        let Some((mut c, src)) = copy_with_junction(tmp.path()) else {
+            return;
+        };
+        let locked = src.join("b.txt");
+        let summary = c.active_ops[0].summary.as_mut().unwrap();
+        let item = summary
+            .items
+            .iter_mut()
+            .find(|i| i.src.as_deref() == Some(locked.as_path()))
+            .unwrap();
+        std::fs::remove_file(&item.dest).unwrap();
+        item.outcome = OpOutcome::Failed("El proceso no tiene acceso al archivo.".into());
+
+        let (_, files, failed) = c.retry_files(77).expect("queda un fallo reintentable");
+        assert_eq!(failed, 2);
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].source, locked);
+        let review = naygo_core::ops::retry::review(files, &CancellationToken::new());
+        assert!(review.is_ok(), "{review:?}");
     }
 
     #[test]

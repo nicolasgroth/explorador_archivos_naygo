@@ -1272,5 +1272,8 @@
   "packs.err.create_zip": "Não foi possível criar o zip: {error}",
   "ops.err.trash_not_supported": "A Lixeira não está disponível neste sistema.",
   "ops.err.trash_restored_elsewhere": "O destino apareceu durante a restauração e não foi sobrescrito: {original}. O item foi restaurado com outro nome em {restored}.",
-  "ops.failed.unreadable_folder": "Não foi possível ler a pasta: {reason}"
+  "ops.failed.unreadable_folder": "Não foi possível ler a pasta: {reason}",
+  "ops.failed.link_not_copied": "Link não copiado (os links não são recriados no destino): {path}",
+  "ops.failed.link_not_moved": "Não foi possível mover o link; ele ficou na origem: {path} ({reason})",
+  "ops.failed.publish": "Não foi possível salvar a cópia no destino: {reason}"
 }

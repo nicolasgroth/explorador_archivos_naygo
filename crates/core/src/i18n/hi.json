@@ -1272,5 +1272,8 @@
   "packs.err.create_zip": "ज़िप बनाई नहीं जा सकी: {error}",
   "ops.err.trash_not_supported": "इस सिस्टम पर रीसायकल बिन उपलब्ध नहीं है।",
   "ops.err.trash_restored_elsewhere": "पुनर्स्थापना के दौरान गंतव्य मौजूद हो गया और उसे अधिलेखित नहीं किया गया: {original}। आइटम को {restored} में दूसरे नाम से पुनर्स्थापित किया गया।",
-  "ops.failed.unreadable_folder": "फ़ोल्डर पढ़ा नहीं जा सका: {reason}"
+  "ops.failed.unreadable_folder": "फ़ोल्डर पढ़ा नहीं जा सका: {reason}",
+  "ops.failed.link_not_copied": "लिंक कॉपी नहीं किया गया (लिंक गंतव्य पर दोबारा नहीं बनाए जाते): {path}",
+  "ops.failed.link_not_moved": "लिंक को स्थानांतरित नहीं किया जा सका; वह स्रोत में ही रहा: {path} ({reason})",
+  "ops.failed.publish": "कॉपी को गंतव्य पर सहेजा नहीं जा सका: {reason}"
 }

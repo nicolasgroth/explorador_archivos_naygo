@@ -1272,5 +1272,8 @@
   "packs.err.create_zip": "zip を作成できませんでした: {error}",
   "ops.err.trash_not_supported": "このシステムではごみ箱を利用できません。",
   "ops.err.trash_restored_elsewhere": "復元中に復元先が現れたため、上書きしませんでした: {original}。項目は別の名前で {restored} に復元されました。",
-  "ops.failed.unreadable_folder": "フォルダーを読み取れませんでした: {reason}"
+  "ops.failed.unreadable_folder": "フォルダーを読み取れませんでした: {reason}",
+  "ops.failed.link_not_copied": "リンクはコピーされませんでした（リンクはコピー先に再作成されません）: {path}",
+  "ops.failed.link_not_moved": "リンクを移動できませんでした。元の場所に残っています: {path}（{reason}）",
+  "ops.failed.publish": "コピーをコピー先に保存できませんでした: {reason}"
 }

@@ -101,19 +101,115 @@ pub fn unreadable_folder_failure(reason: &str) -> String {
     format!("{UNREADABLE_FOLDER_FAILURE}{PLANNED_FAILURE_SEPARATOR}{reason}")
 }
 
+/// Un enlace (symlink/junction) que Copiar no recrea en el destino. Campo: ruta del origen.
+pub const LINK_NOT_COPIED_FAILURE: &str = "naygo:link-not-copied";
+
+/// Un enlace que Mover no pudo renombrar como enlace (p. ej. otro volumen); quedó en el origen.
+/// Campos: ruta del origen y error del sistema.
+pub const LINK_NOT_MOVED_FAILURE: &str = "naygo:link-not-moved";
+
+/// La copia de un archivo terminó pero no se pudo publicar en su destino. Campo: error del sistema.
+pub const PUBLISH_FAILED_FAILURE: &str = "naygo:publish-failed";
+
+/// Prefijos de los textos previos (journals y resúmenes 0.5.x sin código), que se siguen
+/// reconociendo como fallos de enlace para excluirlos de "Reintentar".
+const LEGACY_LINK_NOT_COPIED: &str = "enlace no copiado: ";
+const LEGACY_LINK_NOT_MOVED: &str = "enlace no movido entre volúmenes: ";
+
+/// Fallo estructurado del motor, ya separado en sus campos. La UI lo traduce; los consumidores
+/// sin i18n usan [`plain_failure_text`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OpFailure<'a> {
+    UnreadableFolder { reason: &'a str },
+    LinkNotCopied { path: &'a str },
+    LinkNotMoved { path: &'a str, reason: &'a str },
+    PublishFailed { reason: &'a str },
+}
+
+impl OpFailure<'_> {
+    /// `true` para los fallos de enlace: son el resultado previsto (los enlaces no se recorren
+    /// ni se recrean), no algo que un reintento pueda resolver.
+    pub fn is_link(&self) -> bool {
+        matches!(self, Self::LinkNotCopied { .. } | Self::LinkNotMoved { .. })
+    }
+}
+
+fn coded_failure(code: &str, fields: &[&str]) -> String {
+    let mut out = String::from(code);
+    for field in fields {
+        out.push(PLANNED_FAILURE_SEPARATOR);
+        out.push_str(field);
+    }
+    out
+}
+
+/// Fallo estructurado de un enlace que Copiar no recrea.
+pub fn link_not_copied_failure(path: &Path) -> String {
+    coded_failure(LINK_NOT_COPIED_FAILURE, &[&path.display().to_string()])
+}
+
+/// Fallo estructurado de un enlace que Mover no pudo renombrar.
+pub fn link_not_moved_failure(path: &Path, reason: &str) -> String {
+    coded_failure(
+        LINK_NOT_MOVED_FAILURE,
+        &[&path.display().to_string(), reason],
+    )
+}
+
+/// Fallo estructurado de la publicación de una copia (el temporal se descarta).
+pub fn publish_failed_failure(reason: &str) -> String {
+    coded_failure(PUBLISH_FAILED_FAILURE, &[reason])
+}
+
+/// Reconoce un fallo estructurado. Un texto sin código (texto del sistema o de un journal viejo)
+/// devuelve `None` y se muestra tal cual.
+pub fn parse_failure(detail: &str) -> Option<OpFailure<'_>> {
+    let (code, rest) = detail.split_once(PLANNED_FAILURE_SEPARATOR)?;
+    match code {
+        UNREADABLE_FOLDER_FAILURE => Some(OpFailure::UnreadableFolder { reason: rest }),
+        LINK_NOT_COPIED_FAILURE => Some(OpFailure::LinkNotCopied { path: rest }),
+        LINK_NOT_MOVED_FAILURE => {
+            let (path, reason) = rest.split_once(PLANNED_FAILURE_SEPARATOR)?;
+            Some(OpFailure::LinkNotMoved { path, reason })
+        }
+        PUBLISH_FAILED_FAILURE => Some(OpFailure::PublishFailed { reason: rest }),
+        _ => None,
+    }
+}
+
+/// `true` si el detalle es un fallo de enlace, con código o con el texto previo sin código.
+pub fn is_link_failure(detail: &str) -> bool {
+    parse_failure(detail).is_some_and(|failure| failure.is_link())
+        || detail.starts_with(LEGACY_LINK_NOT_COPIED)
+        || detail.starts_with(LEGACY_LINK_NOT_MOVED)
+}
+
 /// Texto de un fallo del motor apto para consumidores SIN traducción (errores de dominio,
-/// logs): quita los códigos estructurados internos (hoy, el de carpeta ilegible) y deja el texto
-/// del sistema. La UI que sí traduce usa `parse_unreadable_folder` y antepone su contexto.
-pub fn plain_failure_text(detail: &str) -> &str {
-    parse_unreadable_folder(detail).unwrap_or(detail)
+/// logs): quita los códigos estructurados internos y deja el texto del sistema, con el mismo
+/// contexto en español que tenía antes de los códigos. La UI que sí traduce usa
+/// [`parse_failure`] y su propio catálogo.
+pub fn plain_failure_text(detail: &str) -> std::borrow::Cow<'_, str> {
+    use std::borrow::Cow;
+    match parse_failure(detail) {
+        Some(OpFailure::UnreadableFolder { reason }) => Cow::Borrowed(reason),
+        Some(OpFailure::LinkNotCopied { path }) => Cow::Owned(format!("enlace no copiado: {path}")),
+        Some(OpFailure::LinkNotMoved { path, reason }) => {
+            Cow::Owned(format!("enlace no movido: {path}: {reason}"))
+        }
+        Some(OpFailure::PublishFailed { reason }) => {
+            Cow::Owned(format!("no se pudo publicar la copia: {reason}"))
+        }
+        None => Cow::Borrowed(detail),
+    }
 }
 
 /// Si `detail` es un fallo planificado de carpeta ilegible, devuelve el texto del error del
 /// sistema (sin el prefijo) para que la UI lo componga con su traducción.
 pub fn parse_unreadable_folder(detail: &str) -> Option<&str> {
-    detail
-        .strip_prefix(UNREADABLE_FOLDER_FAILURE)?
-        .strip_prefix(PLANNED_FAILURE_SEPARATOR)
+    match parse_failure(detail)? {
+        OpFailure::UnreadableFolder { reason } => Some(reason),
+        _ => None,
+    }
 }
 
 /// Un paso concreto del plan: copiar/mover un archivo, o crear una carpeta.
@@ -694,6 +790,60 @@ mod conflict_prompt_tests {
         );
         assert!(p.existing_modified.is_some(), "fecha del existente leída");
         assert!(p.incoming_modified.is_some(), "fecha del entrante leída");
+    }
+
+    #[test]
+    fn fallos_estructurados_de_enlace_y_publicacion_se_reconocen() {
+        let source = Path::new("C:/src/node_modules");
+        let link = link_not_copied_failure(source);
+        let shown = source.display().to_string();
+        assert_eq!(
+            parse_failure(&link),
+            Some(OpFailure::LinkNotCopied { path: &shown })
+        );
+        assert!(is_link_failure(&link));
+        let moved = link_not_moved_failure(Path::new("C:/src/l"), "otro volumen");
+        assert!(matches!(
+            parse_failure(&moved),
+            Some(OpFailure::LinkNotMoved {
+                reason: "otro volumen",
+                ..
+            })
+        ));
+        assert!(is_link_failure(&moved));
+        let publish = publish_failed_failure("Acceso denegado");
+        assert_eq!(
+            parse_failure(&publish),
+            Some(OpFailure::PublishFailed {
+                reason: "Acceso denegado"
+            })
+        );
+        assert!(!is_link_failure(&publish));
+        for coded in [&link, &moved, &publish] {
+            let plain = plain_failure_text(coded);
+            assert!(
+                !plain.contains("naygo:") && !plain.contains('\u{1f}'),
+                "{plain}"
+            );
+        }
+        assert_eq!(
+            plain_failure_text(&publish),
+            "no se pudo publicar la copia: Acceso denegado"
+        );
+    }
+
+    /// Los textos previos (sin código) siguen leyéndose igual: se muestran tal cual y los de
+    /// enlace se siguen reconociendo como tales.
+    #[test]
+    fn textos_de_fallo_previos_sin_codigo_se_aceptan_sin_cambios() {
+        let old_copy = "enlace no copiado: C:\\src\\l";
+        let old_move = "enlace no movido entre volúmenes: C:\\src\\l: error";
+        for old in [old_copy, old_move, "Acceso denegado. (os error 5)"] {
+            assert_eq!(parse_failure(old), None);
+            assert_eq!(plain_failure_text(old), old);
+        }
+        assert!(is_link_failure(old_copy) && is_link_failure(old_move));
+        assert!(!is_link_failure("Acceso denegado. (os error 5)"));
     }
 
     #[test]

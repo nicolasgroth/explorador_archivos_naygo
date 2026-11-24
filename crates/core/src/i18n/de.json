@@ -1272,5 +1272,8 @@
   "packs.err.create_zip": "Das ZIP-Archiv konnte nicht erstellt werden: {error}",
   "ops.err.trash_not_supported": "Der Papierkorb ist auf diesem System nicht verfügbar.",
   "ops.err.trash_restored_elsewhere": "Das Ziel ist während der Wiederherstellung aufgetaucht und wurde nicht überschrieben: {original}. Das Element wurde unter einem anderen Namen in {restored} wiederhergestellt.",
-  "ops.failed.unreadable_folder": "Der Ordner konnte nicht gelesen werden: {reason}"
+  "ops.failed.unreadable_folder": "Der Ordner konnte nicht gelesen werden: {reason}",
+  "ops.failed.link_not_copied": "Verknüpfung nicht kopiert (Verknüpfungen werden am Ziel nicht neu erstellt): {path}",
+  "ops.failed.link_not_moved": "Die Verknüpfung konnte nicht verschoben werden; sie ist an der Quelle geblieben: {path} ({reason})",
+  "ops.failed.publish": "Die Kopie konnte nicht am Ziel gespeichert werden: {reason}"
 }
