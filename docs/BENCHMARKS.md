@@ -212,7 +212,7 @@ Delta dev vs la medición anterior (debuginfo completa, `keys.rs`: 18,9 s, 6,39 
 | `cargo build --release -p naygo-ui-slint --locked`, build completo | 39m33s | 6,68 | 7,20 | 45.468.160 B | 176.869.376 B |
 
 Delta vs la línea base documentada (29m18s, pico 10,92 GiB, commit `82db92d5`): esa cifra viene
-de un build supervisado (`docs/ESTADO-ACTUAL.md`, "pico" sin más detalle, probablemente el contador
+de un build supervisado (`docs/evidencia/estado-historico-2026.md`, "pico" sin más detalle, probablemente el contador
 de compromiso del Job, no WS), así que la métrica no es idéntica. Comparada con WS el pico baja
 unos 4,2 GiB (10,92 → 6,68); con privada, unos 3,7 GiB (10,92 → 7,20). El `.pdb` pasa de 473.083.904 B (build previo con `debug = true`,
 sin tocar) a 176.869.376 B; el `.exe` casi no cambia (45.369.856 → 45.468.160 B). El tiempo
@@ -268,7 +268,7 @@ El `app-window.rs` generado por Slint en `target/debug/build/naygo-ui-slint-*/ou
 33.436.455 bytes (31,9 MiB). Cualquier cambio en `ui-slint` recompila ese archivo completo, lo que
 explica el costo fijo de ~1 minuto y ~6 GiB incluso para un cambio trivial.
 
-Referencia release documentada: 29m18s, pico 10,92 GiB (commit `82db92d5`, `docs/ESTADO-ACTUAL.md`);
+Referencia release documentada: 29m18s, pico 10,92 GiB (commit `82db92d5`, `docs/evidencia/estado-historico-2026.md`);
 no se repitió en esta medición.
 
 ### W-07 y vista profunda — perfil Release 0.5.6, 2026-11-21
