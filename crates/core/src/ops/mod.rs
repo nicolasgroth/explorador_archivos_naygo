@@ -161,6 +161,42 @@ pub fn publish_failed_failure(reason: &str) -> String {
     coded_failure(PUBLISH_FAILED_FAILURE, &[reason])
 }
 
+/// Reintento de una publicación con sobrescritura autorizada que falló (`error`, acceso
+/// denegado) porque el destino es de solo lectura: quita el atributo de `to` y llama una vez
+/// más a `publish`; si ese reintento falla, repone los atributos originales. Si el destino no es
+/// un archivo normal de solo lectura (o es un enlace), devuelve `error` sin tocar nada. Solo se
+/// usa cuando el usuario ya autorizó sobrescribir: sin esa autorización nunca se llama.
+pub fn retry_over_readonly_destination(
+    to: &Path,
+    error: std::io::Error,
+    mut publish: impl FnMut() -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    let Ok(metadata) = std::fs::symlink_metadata(to) else {
+        return Err(error);
+    };
+    if !metadata.is_file()
+        || metadata.file_type().is_symlink()
+        || !metadata.permissions().readonly()
+    {
+        return Err(error);
+    }
+    let original = metadata.permissions();
+    let mut writable = original.clone();
+    // Windows: solo quita FILE_ATTRIBUTE_READONLY y conserva el resto de los atributos.
+    #[allow(clippy::permissions_set_readonly_false)]
+    writable.set_readonly(false);
+    if std::fs::set_permissions(to, writable).is_err() {
+        return Err(error);
+    }
+    match publish() {
+        Ok(()) => Ok(()),
+        Err(retry_error) => {
+            let _ = std::fs::set_permissions(to, original);
+            Err(retry_error)
+        }
+    }
+}
+
 /// Reconoce un fallo estructurado. Un texto sin código (texto del sistema o de un journal viejo)
 /// devuelve `None` y se muestra tal cual.
 pub fn parse_failure(detail: &str) -> Option<OpFailure<'_>> {
@@ -829,6 +865,57 @@ mod conflict_prompt_tests {
         assert_eq!(
             plain_failure_text(&publish),
             "no se pudo publicar la copia: Acceso denegado"
+        );
+    }
+
+    #[test]
+    fn reintento_sobre_solo_lectura_restaura_el_atributo_si_vuelve_a_fallar() {
+        let dir = tempfile::tempdir().unwrap();
+        let to = dir.path().join("destino.txt");
+        fs::write(&to, b"viejo").unwrap();
+        let mut permissions = fs::metadata(&to).unwrap().permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(&to, permissions).unwrap();
+        let mut calls = 0;
+
+        let result = retry_over_readonly_destination(
+            &to,
+            std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+            || {
+                calls += 1;
+                Err(std::io::Error::other("sigue fallando"))
+            },
+        );
+
+        let readonly = fs::metadata(&to).unwrap().permissions().readonly();
+        let mut permissions = fs::metadata(&to).unwrap().permissions();
+        #[allow(clippy::permissions_set_readonly_false)]
+        permissions.set_readonly(false);
+        fs::set_permissions(&to, permissions).unwrap();
+        assert_eq!(calls, 1, "un solo reintento");
+        assert_eq!(result.unwrap_err().to_string(), "sigue fallando");
+        assert!(readonly, "el solo lectura se restauró");
+        assert_eq!(fs::read(&to).unwrap(), b"viejo");
+    }
+
+    #[test]
+    fn reintento_sobre_destino_escribible_no_reintenta() {
+        let dir = tempfile::tempdir().unwrap();
+        let to = dir.path().join("destino.txt");
+        fs::write(&to, b"viejo").unwrap();
+        let mut calls = 0;
+        let result = retry_over_readonly_destination(
+            &to,
+            std::io::Error::other("acceso denegado por otra causa"),
+            || {
+                calls += 1;
+                Ok(())
+            },
+        );
+        assert_eq!(calls, 0);
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "acceso denegado por otra causa"
         );
     }
 

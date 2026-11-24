@@ -2036,14 +2036,37 @@ fn copy_buffered(
     // se autorizó Overwrite; persist_noclobber vuelve a validar el destino al final y no puede
     // pisar una ruta que apareció durante la copia. El temporal comparte filesystem con `to`.
     let persisted = if overwrite {
-        writer.persist(to)
+        match writer.persist(to) {
+            // Sobrescribir autorizado sobre un destino de solo lectura: `persist` (rename con
+            // reemplazo) da acceso denegado. Se quita el atributo y se reintenta una vez.
+            Err(error) if error.error.kind() == std::io::ErrorKind::PermissionDenied => {
+                let mut pending = Some(error.file);
+                let mut published = None;
+                super::retry_over_readonly_destination(to, error.error, || {
+                    let file = pending
+                        .take()
+                        .ok_or_else(|| std::io::Error::other("temporal ya consumido"))?;
+                    match file.persist(to) {
+                        Ok(file) => {
+                            published = Some(file);
+                            Ok(())
+                        }
+                        Err(error) => {
+                            pending = Some(error.file);
+                            Err(error.error)
+                        }
+                    }
+                })
+                .map(|()| published.expect("persist devolvió Ok"))
+            }
+            other => other.map_err(|error| error.error),
+        }
     } else {
-        writer.persist_noclobber(to)
+        writer.persist_noclobber(to).map_err(|error| error.error)
     };
     let published = match persisted {
         Ok(file) => file,
         Err(error) => {
-            let error = error.error;
             return Err(std::io::Error::new(
                 error.kind(),
                 super::publish_failed_failure(&error.to_string()),
@@ -4939,6 +4962,74 @@ mod tests {
             copied_readonly,
             "la copia conserva el atributo solo lectura"
         );
+    }
+
+    fn set_readonly(path: &Path, readonly: bool) {
+        let mut permissions = fs::metadata(path).unwrap().permissions();
+        #[allow(clippy::permissions_set_readonly_false)]
+        permissions.set_readonly(readonly);
+        fs::set_permissions(path, permissions).unwrap();
+    }
+
+    /// Copiar dos veces con Sobrescribir un origen de solo lectura: la primera copia conserva el
+    /// atributo, así que la segunda publica sobre un destino de solo lectura. El usuario autorizó
+    /// sobrescribir: el motor reemplaza el archivo (y la copia vuelve a quedar de solo lectura).
+    #[test]
+    fn copiar_dos_veces_con_sobrescribir_origen_solo_lectura() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("objeto.pack");
+        fs::write(&source, b"v1").unwrap();
+        set_readonly(&source, true);
+        let dest = dir.path().join("dst");
+        fs::create_dir(&dest).unwrap();
+        let copied = dest.join("objeto.pack");
+
+        let mut request = super::super::transfer(false, vec![source.clone()], dest.clone());
+        request.conflict = ConflictPolicy::Overwrite;
+        let (_m, first) = run(request.clone());
+        set_readonly(&source, false);
+        fs::write(&source, b"v2").unwrap();
+        set_readonly(&source, true);
+        let (_m, second) = run(request);
+
+        let content = fs::read(&copied).ok();
+        let still_readonly = fs::metadata(&copied)
+            .map(|m| m.permissions().readonly())
+            .unwrap_or(false);
+        for path in [&source, &copied] {
+            if path.exists() {
+                set_readonly(path, false);
+            }
+        }
+        assert_eq!(first.count_done(), 1, "{first:?}");
+        assert_eq!(second.count_failed(), 0, "{second:?}");
+        assert_eq!(second.count_done(), 1, "{second:?}");
+        assert_eq!(content.as_deref(), Some(&b"v2"[..]));
+        assert!(still_readonly, "la copia nueva conserva el solo lectura");
+    }
+
+    /// Sin autorización de sobrescribir no cambia nada: el destino de solo lectura no se toca.
+    #[test]
+    fn sin_sobrescribir_un_destino_de_solo_lectura_no_se_toca() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("a.txt");
+        fs::write(&source, b"nuevo").unwrap();
+        let dest = dir.path().join("dst");
+        fs::create_dir(&dest).unwrap();
+        let existing = dest.join("a.txt");
+        fs::write(&existing, b"viejo").unwrap();
+        set_readonly(&existing, true);
+
+        let mut request = super::super::transfer(false, vec![source.clone()], dest.clone());
+        request.conflict = ConflictPolicy::Skip;
+        let (_m, summary) = run(request);
+
+        let content = fs::read(&existing).unwrap();
+        let readonly = fs::metadata(&existing).unwrap().permissions().readonly();
+        set_readonly(&existing, false);
+        assert_eq!(summary.count_skipped(), 1, "{summary:?}");
+        assert_eq!(content, b"viejo");
+        assert!(readonly);
     }
 
     #[test]

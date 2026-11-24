@@ -139,18 +139,22 @@ fn copy_and_publish_with_hook(
     if durable {
         flags |= MOVEFILE_WRITE_THROUGH;
     }
-    let temp_wide = wide(temp.path());
-    let to_wide = wide(&to);
-    // SAFETY: ambas rutas son UTF-16 terminadas en NUL que viven durante la llamada.
-    unsafe { MoveFileExW(PCWSTR(temp_wide.as_ptr()), PCWSTR(to_wide.as_ptr()), flags) }.map_err(
-        |error| {
-            let error = windows_error_to_io(error);
-            std::io::Error::new(
-                error.kind(),
-                naygo_core::ops::publish_failed_failure(&error.to_string()),
-            )
-        },
-    )?;
+    let publish = || move_file(temp.path(), &to, flags);
+    let published = match publish() {
+        Err(error) if overwrite && error.kind() == std::io::ErrorKind::PermissionDenied => {
+            // El usuario autorizó sobrescribir y `MoveFileExW(REPLACE_EXISTING)` no reemplaza un
+            // destino de solo lectura (ERROR_ACCESS_DENIED). Si ese es el motivo, se le quita el
+            // atributo y se reintenta UNA vez; si el reintento falla, se restaura.
+            naygo_core::ops::retry_over_readonly_destination(&to, error, publish)
+        }
+        other => other,
+    };
+    published.map_err(|error| {
+        std::io::Error::new(
+            error.kind(),
+            naygo_core::ops::publish_failed_failure(&error.to_string()),
+        )
+    })?;
     temp.disarm();
 
     // Emisión final sólo después de que la publicación tuvo éxito.
@@ -241,6 +245,15 @@ fn copy_file2(from: &Path, to: &Path, progress: &mut ProgressContext<'_>) -> std
         )
     }
     .map_err(windows_error_to_io)
+}
+
+/// `MoveFileExW(from → to, flags)` con rutas UTF-16 propias.
+fn move_file(from: &Path, to: &Path, flags: MOVE_FILE_FLAGS) -> std::io::Result<()> {
+    let from_wide = wide(from);
+    let to_wide = wide(to);
+    // SAFETY: ambas rutas son UTF-16 terminadas en NUL que viven durante la llamada.
+    unsafe { MoveFileExW(PCWSTR(from_wide.as_ptr()), PCWSTR(to_wide.as_ptr()), flags) }
+        .map_err(windows_error_to_io)
 }
 
 /// Fuerza el contenido del temporal a disco (FlushFileBuffers vía `sync_all`). CopyFile2 copia
@@ -445,6 +458,127 @@ mod tests {
         assert!(!destination.exists(), "no se publica nada");
         assert!(sin_temporales(dir.path()), "el temporal se borra");
         assert!(source.exists());
+    }
+
+    fn set_readonly(path: &Path, readonly: bool) {
+        let mut permissions = fs::metadata(path).unwrap().permissions();
+        #[allow(clippy::permissions_set_readonly_false)]
+        permissions.set_readonly(readonly);
+        fs::set_permissions(path, permissions).unwrap();
+    }
+
+    /// Con Sobrescribir autorizado, un destino de solo lectura (p. ej. una copia previa de un
+    /// `.git`, que Naygo ahora crea con su atributo) se reemplaza en vez de fallar con acceso
+    /// denegado.
+    #[test]
+    fn copyfile2_overwrite_reemplaza_destino_solo_lectura() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("nuevo.txt");
+        let destination = dir.path().join("existente.txt");
+        fs::write(&source, b"NUEVO").unwrap();
+        fs::write(&destination, b"VIEJO").unwrap();
+        set_readonly(&destination, true);
+
+        let result = PlatformNoReplaceRename.copy_and_publish(
+            &source,
+            &destination,
+            true,
+            false,
+            &CancellationToken::new(),
+            &mut |_| {},
+        );
+
+        let content = fs::read(&destination).unwrap();
+        let readonly = fs::metadata(&destination).unwrap().permissions().readonly();
+        if readonly {
+            set_readonly(&destination, false);
+        }
+        assert!(matches!(result, Ok(true)), "{result:?}");
+        assert_eq!(content, b"NUEVO");
+        assert!(!readonly, "la copia lleva los atributos del origen");
+        assert!(sin_temporales(dir.path()));
+    }
+
+    /// Sin autorización de sobrescribir, un destino de solo lectura sigue sin tocarse.
+    #[test]
+    fn copyfile2_sin_overwrite_no_toca_destino_solo_lectura() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("nuevo.txt");
+        let destination = dir.path().join("existente.txt");
+        fs::write(&source, b"NUEVO").unwrap();
+        fs::write(&destination, b"VIEJO").unwrap();
+        set_readonly(&destination, true);
+
+        let result = PlatformNoReplaceRename.copy_and_publish(
+            &source,
+            &destination,
+            false,
+            false,
+            &CancellationToken::new(),
+            &mut |_| {},
+        );
+
+        let content = fs::read(&destination).unwrap();
+        let readonly = fs::metadata(&destination).unwrap().permissions().readonly();
+        set_readonly(&destination, false);
+        assert!(result.is_err(), "{result:?}");
+        assert_eq!(content, b"VIEJO");
+        assert!(readonly, "el atributo del destino no se modificó");
+        assert!(sin_temporales(dir.path()));
+    }
+
+    /// Motor completo con el copiador de plataforma: copiar dos veces con Sobrescribir un origen
+    /// de solo lectura (CopyFile2 conserva el atributo en la primera copia).
+    #[test]
+    fn motor_copiar_dos_veces_con_sobrescribir_origen_solo_lectura() {
+        use naygo_core::ops::{ConflictPolicy, OpMsg};
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("objeto.pack");
+        fs::write(&source, b"v1").unwrap();
+        set_readonly(&source, true);
+        let dest = dir.path().join("dst");
+        fs::create_dir(&dest).unwrap();
+        let copied = dest.join("objeto.pack");
+        let mut request = naygo_core::ops::transfer(false, vec![source.clone()], dest.clone());
+        request.conflict = ConflictPolicy::Overwrite;
+        let run = || {
+            let plan = naygo_core::ops::plan(&request).unwrap();
+            let (tx, _rx) = std::sync::mpsc::channel::<OpMsg>();
+            let (_ctx, crx) = std::sync::mpsc::channel();
+            naygo_core::ops::run_plan_with_no_replace_rename(
+                &plan,
+                &request.kind,
+                request.conflict,
+                &CancellationToken::new(),
+                &tx,
+                &crx,
+                None,
+                &PlatformNoReplaceRename,
+            )
+        };
+
+        let first = run();
+        set_readonly(&source, false);
+        fs::write(&source, b"v2").unwrap();
+        set_readonly(&source, true);
+        let second = run();
+
+        let content = fs::read(&copied).ok();
+        let readonly = fs::metadata(&copied)
+            .map(|m| m.permissions().readonly())
+            .unwrap_or(false);
+        for path in [&source, &copied] {
+            if path.exists() {
+                set_readonly(path, false);
+            }
+        }
+        assert_eq!(first.count_done(), 1, "{first:?}");
+        assert_eq!(second.count_failed(), 0, "{second:?}");
+        assert_eq!(content.as_deref(), Some(&b"v2"[..]));
+        assert!(
+            readonly,
+            "la copia nueva conserva el solo lectura del origen"
+        );
     }
 
     #[test]
