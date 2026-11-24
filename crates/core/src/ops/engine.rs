@@ -816,6 +816,22 @@ fn publish_tree_replacement(
     replacement: &mut TreeReplacementStage,
     no_replace_rename: &dyn NoReplaceRename,
 ) -> Result<TreePublication, String> {
+    // El marcador identifica el staging como de ESTA transacción. Si desapareció, otro proceso
+    // pudo tomar el Replace por interrumpido y descartar (o recrear) el staging: no se publica.
+    match marker_matches(&replacement.marker, &replacement.transaction_id) {
+        Ok(true) => {}
+        Ok(false) => {
+            return Err(
+                "el árbol temporal perdió su marca de Naygo antes de publicar; no se publicó"
+                    .to_owned(),
+            )
+        }
+        Err(error) => {
+            return Err(format!(
+                "no se pudo confirmar el árbol temporal antes de publicar: {error}"
+            ))
+        }
+    }
     let backup = &replacement.backup;
     let had_destination = match std::fs::symlink_metadata(&replacement.destination) {
         Ok(_) => {
@@ -1052,10 +1068,44 @@ fn is_tree_replacement_active(id: &str) -> bool {
 /// Recupera Replace interrumpidos en el padre antes de listar sus contenidos o reintentar la op.
 /// La consulta y los renames corren en un worker, validan registros/sentinels y nunca pisan una ruta
 /// que apareció después. Los registros activos del mismo proceso no se consumen ni se duplican.
+///
+/// Con [`disable_tree_replacement_recovery`] (modo multi-instancia de depuración) no recupera
+/// nada: solo informa como activos los destinos con registro, para no reemplazar encima.
 pub fn recover_tree_replacements_in_parent(
     parent: &Path,
     token: &CancellationToken,
     no_replace_rename: &dyn NoReplaceRename,
+) -> std::io::Result<Vec<PathBuf>> {
+    scan_tree_replacements_in_parent(
+        parent,
+        token,
+        no_replace_rename,
+        tree_replacement_recovery_enabled(),
+    )
+}
+
+static TREE_RECOVERY_DISABLED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Desactiva, para todo el proceso, la recuperación de Replace interrumpidos. La usa la UI cuando
+/// corre en modo multi-instancia (`NAYGO_DEBUG_MULTI_INSTANCE=1`): los Replace "activos" son un
+/// conjunto en memoria de cada proceso, así que una segunda instancia tomaría la transacción viva
+/// de la primera como interrumpida y borraría su staging. No hay forma de reactivarla.
+pub fn disable_tree_replacement_recovery() {
+    TREE_RECOVERY_DISABLED.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+fn tree_replacement_recovery_enabled() -> bool {
+    !TREE_RECOVERY_DISABLED.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// Recorre los registros de Replace del padre. Con `recover = false` no modifica nada en disco y
+/// devuelve como activos todos los destinos con registro válido (propios o de otro proceso).
+fn scan_tree_replacements_in_parent(
+    parent: &Path,
+    token: &CancellationToken,
+    no_replace_rename: &dyn NoReplaceRename,
+    recover: bool,
 ) -> std::io::Result<Vec<PathBuf>> {
     let recovery_dir = tree_recovery_dir(parent);
     let metadata = match std::fs::symlink_metadata(&recovery_dir) {
@@ -1094,7 +1144,7 @@ pub fn recover_tree_replacements_in_parent(
                     "nombre de temporal de recuperación inválido; no se modificó",
                 ));
             }
-            if is_tree_replacement_active(id) {
+            if !recover || is_tree_replacement_active(id) {
                 continue;
             }
             let metadata = std::fs::symlink_metadata(entry.path())?;
@@ -1121,14 +1171,16 @@ pub fn recover_tree_replacements_in_parent(
             serde_json::from_slice(&std::fs::read(entry.path())?)
                 .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
         validate_tree_replacement_record(name, &record)?;
-        if is_tree_replacement_active(&record.id) {
+        if !recover || is_tree_replacement_active(&record.id) {
             active_targets.push(record.destination_name);
             continue;
         }
         recover_tree_replacement_record(parent, &record, token, no_replace_rename)?;
     }
 
-    remove_empty_tree_recovery_dir(parent)?;
+    if recover {
+        remove_empty_tree_recovery_dir(parent)?;
+    }
     Ok(active_targets)
 }
 
@@ -3318,6 +3370,113 @@ mod tests {
         assert!(!destination.exists());
         assert_eq!(fs::read(backup.join("old.txt")).unwrap(), b"old tree");
         assert!(staging.exists());
+    }
+
+    /// Modo multi-instancia (depuración): un registro de OTRO proceso no se recupera ni se
+    /// borra; su destino se informa como activo para que esta instancia no lo reemplace encima.
+    #[test]
+    fn sin_recuperacion_no_toca_un_replace_ajeno_y_lo_informa_activo() {
+        let parent = tempfile::tempdir().unwrap();
+        let destination = parent.path().join("dest");
+        let staging = parent.path().join(".naygo-replace-ajeno");
+        let backup = parent.path().join(".naygo-backup-dest-21-3");
+        fs::create_dir(&destination).unwrap();
+        fs::write(destination.join("old.txt"), b"old tree").unwrap();
+        fs::create_dir(&staging).unwrap();
+        add_interrupted_replace_marker(&staging, "d4-e5-f6");
+        fs::rename(&destination, &backup).unwrap();
+        let record = write_interrupted_replace_record(
+            parent.path(),
+            "d4-e5-f6",
+            "dest",
+            ".naygo-replace-ajeno",
+            ".naygo-backup-dest-21-3",
+        );
+        let temporary = tree_recovery_dir(parent.path()).join("tmp-a7.json");
+        fs::write(&temporary, b"{}").unwrap();
+
+        let active = scan_tree_replacements_in_parent(
+            parent.path(),
+            &CancellationToken::new(),
+            &NativeNoReplaceRename,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(active, vec![PathBuf::from("dest")]);
+        assert!(!destination.exists(), "no se restauró nada");
+        assert_eq!(fs::read(backup.join("old.txt")).unwrap(), b"old tree");
+        assert!(staging.exists(), "el staging ajeno se conserva");
+        assert!(record.exists(), "el registro ajeno se conserva");
+        assert!(temporary.exists(), "el temporal ajeno se conserva");
+    }
+
+    /// Endurecimiento: si el marcador del staging desapareció antes de publicar (otra instancia
+    /// lo tomó por interrumpido), no se publica y el destino anterior queda intacto.
+    #[test]
+    fn replace_no_publica_si_el_marcador_del_staging_desaparecio() {
+        use crate::ops::{apply_folder_decision, folder_conflicts, FolderDecision};
+        struct RemoveMarkerAfterCopy;
+        impl NoReplaceRename for RemoveMarkerAfterCopy {
+            fn rename_noreplace(&self, from: &Path, to: &Path) -> std::io::Result<()> {
+                NativeNoReplaceRename.rename_noreplace(from, to)
+            }
+            fn copy_and_publish(
+                &self,
+                from: &Path,
+                to: &Path,
+                overwrite: bool,
+                durable: bool,
+                token: &CancellationToken,
+                on_bytes: &mut dyn FnMut(u64),
+            ) -> std::io::Result<bool> {
+                let published = NativeNoReplaceRename
+                    .copy_and_publish(from, to, overwrite, durable, token, on_bytes)?;
+                let staging = to.parent().unwrap();
+                for entry in fs::read_dir(staging).unwrap().flatten() {
+                    if entry
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with(TREE_MARKER_PREFIX)
+                    {
+                        fs::remove_file(entry.path()).unwrap();
+                    }
+                }
+                Ok(published)
+            }
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("folder");
+        fs::create_dir(&src).unwrap();
+        fs::write(src.join("new.txt"), b"new").unwrap();
+        let dest_parent = dir.path().join("dest");
+        fs::create_dir(&dest_parent).unwrap();
+        let dest_root = dest_parent.join("folder");
+        fs::create_dir(&dest_root).unwrap();
+        fs::write(dest_root.join("old.txt"), b"old").unwrap();
+        let req = super::super::transfer(false, vec![src.clone()], dest_parent.clone());
+        let conflict = folder_conflicts(&req).pop().unwrap();
+        let mut plan = plan(&req).unwrap();
+        apply_folder_decision(&mut plan, &conflict.dest_root, FolderDecision::Replace);
+        let token = CancellationToken::new();
+        let (tx, _rx) = mpsc::channel::<OpMsg>();
+        let (_ctx, conflict_rx) = mpsc::channel::<ConflictDecision>();
+        let summary = super::run_plan_with_no_replace_rename(
+            &plan,
+            &req.kind,
+            req.conflict,
+            &token,
+            &tx,
+            &conflict_rx,
+            None,
+            &RemoveMarkerAfterCopy,
+        );
+
+        assert!(summary.count_failed() > 0, "{summary:?}");
+        assert_eq!(fs::read(dest_root.join("old.txt")).unwrap(), b"old");
+        assert!(!dest_root.join("new.txt").exists());
+        assert_eq!(fs::read(src.join("new.txt")).unwrap(), b"new");
     }
 
     #[test]

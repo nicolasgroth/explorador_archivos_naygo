@@ -280,6 +280,9 @@ pub struct OpsCtrl {
     pending_clipboard_errors: VecDeque<String>,
     /// Notificaciones terminales, no snapshots del historial: se consumen una sola vez.
     completed_changes: Vec<(OpRequest, bool, Option<PathBuf>)>,
+    /// `false` en modo multi-instancia de depuración: los journals del directorio de
+    /// configuración pueden ser de OTRA instancia viva, así que no se ofrecen ni se reanudan.
+    journal_resume_enabled: bool,
 }
 
 /// Escritura exclusivamente en worker. `create_new` arbitra colisiones concurrentes;
@@ -350,7 +353,13 @@ impl OpsCtrl {
             pending_clipboard_writes: VecDeque::new(),
             pending_clipboard_errors: VecDeque::new(),
             completed_changes: Vec::new(),
+            journal_resume_enabled: true,
         }
+    }
+
+    /// Modo multi-instancia (`NAYGO_DEBUG_MULTI_INSTANCE=1`): no ofrecer ni reanudar journals.
+    pub fn disable_journal_resume(&mut self) {
+        self.journal_resume_enabled = false;
     }
 
     pub fn last_transfer_destinations(&self, limit: usize) -> Vec<PathBuf> {
@@ -3515,6 +3524,35 @@ mod tests {
             .map(|rd| rd.flatten().count())
             .unwrap_or(0);
         assert_eq!(remaining, 0, "el journal se borra al completar la op");
+    }
+
+    #[test]
+    fn scan_resume_desactivado_no_ofrece_ni_reanuda_journals() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = tmp.path().join("cfg");
+        std::fs::create_dir(&cfg).unwrap();
+        let src = tmp.path().join("a.txt");
+        std::fs::write(&src, b"x").unwrap();
+        let dst = tmp.path().join("dst");
+        std::fs::create_dir(&dst).unwrap();
+        let req = naygo_core::ops::transfer(false, vec![src], dst.clone());
+        let plan = naygo_core::ops::plan(&req).unwrap();
+        let j = OpJournal::new("op-ajena".into(), req.kind.clone(), req.conflict, plan);
+        let _w = JournalWriter::new(&cfg, j);
+        let mut c = OpsCtrl::new(cfg.clone());
+        c.disable_journal_resume();
+        c.scan_resume();
+        assert!(c.pending_dialog.is_none(), "no se ofrece retomar");
+        assert!(
+            !c.resume("op-ajena"),
+            "no se reanuda el journal de otra instancia"
+        );
+        assert!(!dst.join("a.txt").exists());
+        assert_eq!(
+            naygo_core::ops::scan(&cfg).len(),
+            1,
+            "el journal ajeno se conserva"
+        );
     }
 
     #[test]

@@ -224,6 +224,9 @@ fn main() -> Result<(), slint::PlatformError> {
         logging::log_line(
             "NAYGO_DEBUG_MULTI_INSTANCE=1: se omite la instancia única (modo depuración)",
         );
+        // Los Replace "en curso" y los journals son de cada proceso: esta instancia no recupera
+        // reemplazos de árbol ni ofrece retomar operaciones, que pueden ser de otra viva.
+        naygo_core::ops::disable_tree_replacement_recovery();
         if cli_args.shutdown {
             // `--shutdown` apuntaría a la instancia viva de OTRO proceso: no se toca.
             logging::log_line(
@@ -1139,6 +1142,10 @@ fn main() -> Result<(), slint::PlatformError> {
     }
 
     // Al arrancar: si hay operaciones interrumpidas (journal), ofrecer retomarlas.
+    if multi_instance {
+        ctrl.borrow_mut().ops.disable_journal_resume();
+        logging::log_line("modo multi-instancia: no se ofrecen operaciones interrumpidas");
+    }
     ctrl.borrow_mut().ops.scan_resume();
     sync_layout();
     // Línea de entorno para el log (versión/OS/ventana). Se fija aquí, tras sync_layout(),

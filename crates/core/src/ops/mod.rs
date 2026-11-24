@@ -20,8 +20,9 @@ pub use actions::{
     batch_rename, create, delete, parse_new_folders, rename, transfer, FolderSpec, NewFolderError,
 };
 pub use engine::{
-    recover_tree_replacements_in_parent, run_plan, run_plan_with_no_replace_rename, spawn,
-    spawn_with_no_replace_rename, NativeNoReplaceRename, NoReplaceRename,
+    disable_tree_replacement_recovery, recover_tree_replacements_in_parent, run_plan,
+    run_plan_with_no_replace_rename, spawn, spawn_with_no_replace_rename, NativeNoReplaceRename,
+    NoReplaceRename,
 };
 pub use journal::{
     journal_path, remove, resume_plan, scan, FileFingerprint, JournalWriter, OpJournal, ResumePlan,
