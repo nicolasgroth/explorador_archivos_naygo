@@ -96,8 +96,15 @@ pub const UNREADABLE_FOLDER_FAILURE: &str = "naygo:unreadable-folder";
 const PLANNED_FAILURE_SEPARATOR: char = '\u{1f}';
 
 /// Motivo estructurado de una carpeta que no se pudo leer durante la planificación.
-pub(crate) fn unreadable_folder_failure(reason: &str) -> String {
+pub fn unreadable_folder_failure(reason: &str) -> String {
     format!("{UNREADABLE_FOLDER_FAILURE}{PLANNED_FAILURE_SEPARATOR}{reason}")
+}
+
+/// Texto de un fallo del motor apto para consumidores SIN traducción (errores de dominio,
+/// logs): quita los códigos estructurados internos (hoy, el de carpeta ilegible) y deja el texto
+/// del sistema. La UI que sí traduce usa `parse_unreadable_folder` y antepone su contexto.
+pub fn plain_failure_text(detail: &str) -> &str {
+    parse_unreadable_folder(detail).unwrap_or(detail)
 }
 
 /// Si `detail` es un fallo planificado de carpeta ilegible, devuelve el texto del error del

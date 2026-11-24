@@ -559,15 +559,8 @@ pub fn execute(
         || summary.count_skipped() != 0
         || summary.count_done() != plan.entries.len()
     {
-        let detail = summary.items.iter().find_map(|i| {
-            if let crate::ops::OpOutcome::Failed(e) = &i.outcome {
-                Some(e.clone())
-            } else {
-                None
-            }
-        });
         return Err(DeliveryError::Copy(
-            detail.unwrap_or_else(|| "incomplete delivery copy".into()),
+            first_failure_detail(&summary).unwrap_or_else(|| "incomplete delivery copy".into()),
         ));
     }
     revalidate(plan, token, false)?;
@@ -666,9 +659,37 @@ pub fn execute(
     Ok(plan.destination.clone())
 }
 
+/// Primer motivo de fallo del resumen del motor, sin códigos estructurados internos: este texto
+/// termina en `DeliveryError::Copy` y por tanto delante del usuario.
+fn first_failure_detail(summary: &crate::ops::OpSummary) -> Option<String> {
+    summary.items.iter().find_map(|item| match &item.outcome {
+        crate::ops::OpOutcome::Failed(error) => {
+            Some(crate::ops::plain_failure_text(error).to_string())
+        }
+        _ => None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn el_detalle_de_fallo_de_entrega_no_expone_codigos_internos() {
+        let summary = crate::ops::OpSummary {
+            items: vec![crate::ops::OpItem {
+                dest: PathBuf::from("destino"),
+                src: None,
+                outcome: crate::ops::OpOutcome::Failed(crate::ops::unreadable_folder_failure(
+                    "acceso denegado",
+                )),
+            }],
+            ..Default::default()
+        };
+        let detail = first_failure_detail(&summary).unwrap();
+        assert_eq!(detail, "acceso denegado");
+        assert!(!detail.contains("naygo:") && !detail.contains('\u{1f}'));
+    }
 
     #[cfg(unix)]
     #[test]
