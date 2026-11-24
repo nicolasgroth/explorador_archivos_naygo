@@ -47,15 +47,12 @@ gente le saque provecho dando a conocer el nombre de Nicolás Groth y de ISGroth
   Contiene `fs_model`, `listing` / `deep_listing` (streaming incremental), `ops`
   (copiar/mover/borrar), `archive_ops` / `archive_tree`, `search`, `metadata`,
   `preview`, `batch_rename`, `i18n`, `theme`, `config`, `keymap`, `workspace`
-  (layout de paneles), `path_locality` (clasificar rutas locales/remotas para los
-  cupos de listado), entre otros.
+  (layout de paneles), entre otros.
 - **`platform`** (`naygo-platform`): TODO lo que toca Windows, aislado. `drives` /
   `drive_space` / `eject` (discos), `dnd` + `drop_target` + `clipboard` (drag&drop
   y portapapeles COM/OLE), `context_menu` (menú del Shell), `trash` (papelera),
-  `open` (ShellExecute y `ShellJob`), `copy_file` (copia con `CopyFile2`),
-  `long_path` (rutas `\\?\`), `device_watch` / `dir_watch` (vigilancia),
-  `global_hotkey`, `window` / `window_geometry`, `autostart`, `single_instance`,
-  `exe_meta`.
+  `open` (ShellExecute), `device_watch` / `dir_watch` (vigilancia), `global_hotkey`,
+  `window` / `window_geometry`, `autostart`, `single_instance`, `exe_meta`.
 - **`ui-gen`** (`naygo-ui-gen`): solo los `.slint` (`ui/`) y el código Rust que
   Slint genera desde ellos (`AppWindow`, structs, globals). Crate aparte para que
   tocar un `.rs` no recompile ese código (~32 MiB); `ui-slint` lo re-exporta con
@@ -65,9 +62,7 @@ gente le saque provecho dando a conocer el nombre de Nicolás Groth y de ISGroth
   sin lógica de negocio. `main` (arranque + modelos estables), `bridge` (puente
   core↔Slint), `workspace_ctrl` / `listing` / `ops_ctrl` / `config_ctrl`
   (controladores), `packs`, `preview`, `devices`, `keys` (atajos), `icons`,
-  `theme_apply`, `tray`, `watch`, `i18n_keys`, `logging`, `persistent_models`
-  (modelos de ventana que no se recrean por tick), `rows_model` (`RowsModel`, filas
-  por tramos y claves), `shell_exec` (hilo único STA para las acciones del Shell).
+  `theme_apply`, `tray`, `watch`, `i18n_keys`, `logging`.
 
 **Regla de oro:** el hilo de UI **nunca** hace I/O de disco. Todo lo pesado corre
 en workers que se comunican por canales. `core` no conoce Slint ni Windows.
@@ -103,13 +98,6 @@ en workers que se comunican por canales. `core` no conoce Slint ni Windows.
 - Async para todo I/O. El hilo de UI no bloquea.
 - Logging básico a archivo desde el inicio. Sin telemetría.
 - Build limpio + tests pasando antes de cada commit.
-
-## Documentación
-
-- `docs/BACKLOG.md`: pendientes, corto y priorizado. `docs/ESTADO-ACTUAL.md`: solo el estado
-  vigente (versión, cifras, gate, distribución).
-- `docs/evidencia/`: registros `VALIDACION-*` y los históricos congelados
-  (`backlog-historico-2026.md`, `estado-historico-2026.md`).
 
 ## Estrategia de construcción — faseado
 
