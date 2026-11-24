@@ -28,6 +28,41 @@ empaquetador. Para simular uno, exporta `NAYGO_BUILD_ID` con 12 dígitos (`YYYYM
 otro valor cuenta como `dev`. Los `.slint` viven en `crates/ui-gen/ui/` (crate `naygo-ui-gen`):
 tocarlos recompila el código generado; tocar un `.rs` de `ui-slint`, `core` o `platform`, no.
 
+## Perfiles de compilación
+
+Definidos en el `Cargo.toml` raíz:
+
+| Perfil | Ajustes | Uso |
+|---|---|---|
+| `dev` | por defecto; `[profile.dev.package.naygo-ui-gen] debug = false` | desarrollo y tests |
+| `release` | `opt-level = "s"`, `lto = "thin"`, `codegen-units = 16`, `debug = "line-tables-only"` | distribución |
+| `diag` | hereda de `release`, sin LTO | reproducir una caída sin esperar el release completo |
+
+Cifras medidas en el PC de desarrollo (`scripts/measure-build.ps1`, `CARGO_BUILD_JOBS=1`; detalle en
+[BENCHMARKS.md](BENCHMARKS.md), secciones de compilación):
+
+| Medida | Antes | Después |
+|---|---|---|
+| Pico de RAM del build release | 10,9 GiB | 6,7 GiB |
+| Tamaño del PDB | 473 MB | 177 MB |
+| Recompilar tras tocar un `.rs` de UI (dev) | 1 min 01 s | 18,9 s |
+| `cargo check` tras tocar un `.rs` de UI | 41 s | 4,4 s |
+
+Salvedades:
+
+- Tocar un `.slint` en dev quedó más lento (1 min 02 s → 1 min 27 s): se recompilan `naygo-ui-gen`
+  y luego `naygo-ui-slint`. Los `.rs` se tocan mucho más seguido.
+- El build release completo tardó 39m33s, ~10 min más que la línea base anterior (29m18s), sin
+  causa confirmada: la línea base es de otro commit y otra sesión.
+- El pico "antes" (10,9 GiB) viene del build supervisado de 0.5.6, probablemente medido como
+  compromiso del Job y no como working set. El "después" es 6,68 GiB de working set y 7,20 GiB de
+  memoria privada.
+- Con `naygo-ui-gen` sin debuginfo, recompilar tras tocar `keys.rs` midió 13,6 s (pico 4,49 GiB WS);
+  el 18,9 s de la tabla es la medición con debuginfo completa justo tras separar el crate.
+- El `cargo check` de 4,4 s es con la caché de check caliente; el primero tras tocar un `.slint`
+  regenera `naygo-ui-gen` en modo check (2m13s).
+- `CARGO_BUILD_JOBS=2` no se probó: con un trabajo el pico ya supera 6 GiB.
+
 ## Estado del port Linux
 
 El código de arranque ya resuelve XDG para Linux sin consultar el filesystem: la configuración va
@@ -141,9 +176,22 @@ actualizan al producir la siguiente distribución funcional.
 | `Naygo-<versión>-portable.zip` | Versión portable: descomprimir y ejecutar, sin instalar. |
 | `Naygo-<versión>-setup.exe` | Instalador (asistente, accesos directos, desinstalador). |
 
-## Pruebas con varias instancias
+## Pruebas con varias instancias (solo desarrollo)
 
-`NAYGO_DEBUG_MULTI_INSTANCE=1` (valor exacto `1`) desactiva la instancia única, para lanzar un exe de prueba junto a un Naygo ya vivo (smoke, repro, mediciones) sin que se reenvíe a ese; con la variable activa `--shutdown` no apaga la instancia de otro proceso.
+Naygo es de instancia única: un segundo arranque avisa a la instancia viva y sale. Para lanzar un
+exe de prueba junto a un Naygo ya abierto (smoke, repro, mediciones), define la variable de
+entorno con el valor exacto `1`:
+
+```powershell
+$env:NAYGO_DEBUG_MULTI_INSTANCE = "1"
+& .\target\debug\naygo.exe
+```
+
+Con la variable activa, esa instancia no usa el mutex, el evento ni el spool de la instancia
+única, y lo deja escrito en el log. `--shutdown` no apaga la instancia de otro proceso: se
+registra y sale. Cualquier otro valor (`0`, `true`, vacío) se ignora. Si el atajo global ya lo
+tiene la otra instancia, la de prueba solo lo registra en el log y sigue. Lo usan
+`scripts/repro-scroll.ps1` y `scripts/repro-rename.ps1`. No es una opción para usuarios.
 
 ## Troubleshooting
 

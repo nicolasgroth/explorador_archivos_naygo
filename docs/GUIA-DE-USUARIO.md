@@ -510,7 +510,9 @@ Los resúmenes grandes no construyen listas completas de nombres que no se muest
 Naygo solo registra como recuperable un elemento cuya identidad en la Papelera pudo confirmar.
 En la vista **Papelera de reciclaje**, Windows muestra el nombre del elemento. Si abres la
 carpeta interna `$Recycle.Bin`, puedes ver nombres de almacenamiento como `$R…`. Al restaurar
-desde el historial de Naygo, el destino usa el nombre y la ruta originales.
+desde el historial de Naygo, el destino usa el nombre y la ruta originales. Si otro elemento
+aparece en esa ruta mientras se restaura, no se reemplaza: el restaurado queda con otro nombre y
+el aviso indica dónde.
 Si el origen desapareció pero esa identidad no se pudo confirmar, el historial lo indica: revisa
 la Papelera antes de actuar. Windows puede pedir confirmación si solo ofrece borrado permanente.
 Antes de reciclar, Naygo consulta el nombre largo para poder restaurarlo; si Windows no permite
@@ -530,7 +532,50 @@ el menú conserva todo el lote. Si haces clic derecho sobre un elemento que no e
 el menú usa solo ese elemento. **Más opciones de Windows…** entrega el lote al Shell cuando todos
 los elementos siguen disponibles y pertenecen a una misma carpeta del Shell; si no, muestra un
 aviso en vez de operar sobre una parte. Las opciones visibles dependen de Windows y de las
-extensiones instaladas.
+extensiones instaladas. Los submenús se muestran completos: **Enviar a** lista sus destinos
+(Escritorio, Documentos, carpeta comprimida, unidades), **Abrir con** lista las aplicaciones y
+«Elegir otra aplicación», y los submenús de extensiones (7-Zip, Git y similares) muestran sus
+entradas e íconos. Las letras subrayadas funcionan con el teclado. El submenú **Nuevo** de
+Windows no aparece en este menú: para crear, usa **Ctrl+N / Ctrl+Shift+N**.
+
+**Enlaces (junctions y symlinks):** un junction o symlink a carpeta se lista como carpeta y se
+abre con doble clic o Enter; conserva sus propios atributos, así que un enlace oculto de sistema
+sigue oculto. Al copiar o mover, Naygo nunca recorre los enlaces que hay dentro de las carpetas,
+para no entrar en bucles ni borrar el contenido al que apuntan:
+
+- Si seleccionas un enlace a carpeta y lo copias, se copia el contenido de la carpeta apuntada
+  una vez. Los enlaces a carpeta que hay *dentro* de lo copiado se informan como fallidos
+  («enlace no copiado»); un enlace a archivo se copia con su contenido.
+- Al mover, el enlace se traslada como enlace dentro del mismo volumen. Entre volúmenes no se
+  puede: el enlace queda en el origen y el paso figura como fallido.
+- Calcular el tamaño de una carpeta no entra en los enlaces anidados; sobre un junction
+  seleccionado, mide la carpeta a la que apunta.
+
+**Mismo archivo por otra ruta:** antes de sobrescribir o mover, Naygo comprueba si el origen y el
+destino son en realidad el mismo archivo (un hard link, otra combinación de mayúsculas o una ruta
+`\\?\`). En ese caso omite el paso y el original queda intacto.
+
+**Copias fieles:** en Windows la copia conserva fechas, atributos (oculto, sistema, solo lectura)
+y flujos alternativos como la marca de descarga `Zone.Identifier`. Al mover a otro volumen, la
+copia se escribe en disco antes de borrar el origen; si algo falla, el origen se conserva.
+
+**OneDrive y archivos solo en línea:** los archivos que OneDrive guarda solo en la nube no se
+tratan como enlaces. El tamaño de carpeta y la búsqueda entran en sus carpetas; la búsqueda por
+contenido los cuenta como omitidos para no descargarlos.
+
+**Rutas largas:** copiar y mover funcionan con rutas de más de 260 caracteres, aunque la opción
+de rutas largas de Windows esté apagada.
+
+**Carpetas que no se pueden leer:** si una subcarpeta no se puede leer (por ejemplo, por permisos)
+durante una copia o un movimiento, el resto continúa y el detalle de la operación la muestra como
+«No se pudo leer la carpeta: …». Al mover, esa subcarpeta y las carpetas que la contienen se
+quedan en el origen, con todo su contenido. Si no se puede leer la carpeta que seleccionaste, la
+operación no empieza. Si reemplazas una carpeta existente y la nueva tiene una subcarpeta
+ilegible, no se reemplaza nada. La vista profunda también avisa cuando su recorrido queda
+incompleto.
+
+**Unidades de red:** una unidad de red o un recurso compartido que no responde no deja esperando
+a los listados de los discos locales; sus carpetas esperan turno aparte.
 
 **Abrir terminal aquí:** clic derecho → *Abrir PowerShell / CMD / Windows Terminal
 aquí* (abre en la carpeta seleccionada o, si no hay, la del panel). Desde la
