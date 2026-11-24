@@ -89,6 +89,10 @@ Técnico (sin efecto visible):
 - Tests: identidad en `plan_transfer_with` sin test propio; el test de hard link no ejercita
   rename-falla→copia→borrado; los tests de textos usan claves, no las cadenas de los 10 idiomas;
   falta un test de extremo a extremo de una entrega con subcarpeta ilegible real.
+- Menores: `eq_ignore_case_ntfs` aproxima `$UpCase`; `sync_file` pierde el error; `to_verbatim`
+  usa `to_string_lossy` en UNC; el comentario "rename durable" exagera `WRITE_THROUGH`; doc
+  duplicado de `fs_lister` (`sizing.rs:88-91`); `PostMoveItem` no mira `hrMove` y la caché de
+  nombres queda vieja; `measure-build.ps1` no lista `rust-lld` y el quoting de `cmd /c`.
 - Código: `return` redundante de `--shutdown` con `NAYGO_DEBUG_MULTI_INSTANCE`; el log de
   `batch_delete.rs` escribe el detalle crudo; helper de test duplicado en `config_ctrl.rs`.
 
@@ -115,6 +119,9 @@ Solo maqueta y propuesta; no se implementa hasta su aprobación:
 
 ## 5. Abierto en el backlog histórico
 
+Las etiquetas (T-4, RP-…, E-…, secciones A, B, D y E) son las del
+[backlog histórico](evidencia/backlog-historico-2026.md).
+
 - **Firma de código del instalador (T-4).** El script ya firma si recibe `SignToolPath` y
   `CertificateThumbprint`; falta que ISGroth obtenga y autorice un certificado.
 - **Aceptación nativa de rutas editables (RP-1/RP-2):** AltGr/IME, DPI/Narrador y UNC lenta o
@@ -124,13 +131,14 @@ Solo maqueta y propuesta; no se implementa hasta su aprobación:
 - **Visor STL/3MF:** aceptación manual del gesto de órbita.
 - **Arrastre real desde la ventana de 7-Zip (E-2)** y WinRAR: archivo y carpeta, contenido y hash,
   conflicto y cancelación. La fixture existe (`scripts/prepare-e2-7zip-fixture.ps1`).
-- **Aceptación visual pendiente:** menú de favoritos con ruta (E-3), selector de Espacios con
-  rutas ausentes o remotas (E-4), orden de la toolbar (E-5) y toolbar adaptable en ancho
+- **Aceptación visual pendiente:** selector de Espacios con rutas ausentes o remotas (E-4), orden de la toolbar (E-5) y toolbar adaptable en ancho
   compacto/amplio, con UIA/Narrador (E-6).
 - **Ícono propio para Espacios:** hoy usa el de paneles clonados del set activo (E-6).
 
 ### Por confirmar con Nicolás
 
+- **Menú de favoritos con ruta (E-3):** el histórico se contradice (una entrada dice que ya tuvo
+  aceptación instalada y otra que sigue pendiente).
 - **Plan de usabilidad 2026-09-04, etapas 0–7:** el histórico las deja sin marcar, casi todas con
   "validación instalada pendiente" (DPI, Narrador, red caída, cancelación de archivos grandes). No
   hay evidencia de su cierre ni de que sigan vigentes.

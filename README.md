@@ -41,22 +41,23 @@ la solicitud OSS y el procedimiento previsto para firmar las descargas.
 
 Esta versión aún no está publicada; la última publicada es 0.5.6.
 
-- **Copiar y mover sin riesgo a través de enlaces.** Naygo ya no recorre junctions ni symlinks
+- **Copiar y mover con enlaces.** Naygo ya no recorre junctions ni symlinks
   dentro de las carpetas que copia o mueve: no hay bucles ni se borra el contenido al que apunta
   un enlace. Ver [enlaces, nube y rutas largas](#enlaces-nube-y-rutas-largas).
 - **Identidad real del archivo.** Antes de sobrescribir o mover se comprueba si origen y destino
-  son el mismo archivo por otra ruta (hard link, mayúsculas, `\\?\`): el original nunca se pierde.
+  son el mismo archivo por otra ruta (hard link, mayúsculas, `\\?\`); si lo son, Naygo omite el
+  paso y deja el original intacto.
 - **Copias más fieles.** En Windows se conservan fechas, atributos y flujos alternativos
   (`Zone.Identifier`), y un mover entre volúmenes escribe la copia en disco antes de borrar el
   origen. Funcionan las rutas de más de 260 caracteres.
 - **Carpetas problemáticas.** Una subcarpeta ilegible se informa como fallo sin detener la
   operación ni borrar su origen. Un recurso de red caído ya no bloquea los listados locales.
   Restaurar desde la Papelera no pisa un archivo que aparezca en el destino.
-- **OneDrive.** El tamaño de carpeta y la búsqueda entran en sus carpetas; la búsqueda por
-  contenido no descarga los archivos que están solo en línea.
+- **OneDrive.** La búsqueda por contenido y los puntos de comparación no descargan los archivos
+  que están solo en línea.
 - **Interfaz que no se congela.** Abrir archivos, la terminal o el Explorador corre en segundo
   plano. El menú «Más opciones de Windows…» muestra completos «Enviar a» y «Abrir con», con
-  íconos.
+  íconos (implementado; pendiente de validación manual).
 - **Menos CPU y memoria.** Medido en el PC de desarrollo ([benchmarks](docs/BENCHMARKS.md)):
 
   | Medida | 0.5.6 | 0.5.7 |
@@ -66,7 +67,7 @@ Esta versión aún no está publicada; la última publicada es 0.5.6.
   | Memoria tras ese cambio (working set / privada) | 256 / 249 MiB | 176 / 157 MiB |
   | Actualizar / agregar una fila con 100.000 entradas | 28,5 / 22,3 ms | 3,80 / 4,14 ms |
 
-  En release, Naygo usa 47/21 MiB en la bandeja, 56–59 / 26–28 MiB con la ventana en reposo y
+  En release (working set / privada), Naygo usa 47/21 MiB en la bandeja, 56–59 / 26–28 MiB con la ventana en reposo y
   ~185/167 MiB con una carpeta de 100.000 entradas abierta (≈1,4 KiB por fila), sin crecer en
   reposo.
 - **Compilar cuesta menos.** El pico de RAM del build release bajó de 10,9 GiB a 6,7 GiB y el PDB
@@ -85,8 +86,9 @@ Los cambios completos están en el [changelog](CHANGELOG.md) y el estado de la r
   los enlaces a carpeta que hay *dentro* de lo copiado no se recorren y se informan como fallidos.
   Al mover, el enlace se traslada como enlace dentro del mismo volumen; entre volúmenes queda en
   el origen. Calcular el tamaño no entra en enlaces anidados.
-- **OneDrive y otros proveedores de nube.** Los archivos "solo en línea" no se tratan como enlaces:
-  sus carpetas se recorren normalmente. La búsqueda por contenido los omite para no descargarlos.
+- **OneDrive y otros proveedores de nube.** Los archivos "solo en línea" no se tratan como
+  enlaces. La búsqueda por contenido los omite y los puntos de comparación los marcan como
+  cobertura incompleta, para no descargarlos.
 - **Rutas largas.** Copiar y mover usan rutas extendidas, por lo que funcionan con más de 260
   caracteres aunque la opción de rutas largas de Windows esté apagada.
 
@@ -234,7 +236,7 @@ El workspace tiene cuatro crates:
 | `crates/ui-gen` | `naygo-ui-gen` | Los archivos `.slint` y el código Rust que Slint genera desde ellos. |
 | `crates/ui-slint` | `naygo-ui-slint` (binario `naygo`) | La interfaz: controladores y puente entre `core` y Slint. |
 
-El hilo de la interfaz nunca hace I/O de disco. Detalle en
+Regla de diseño: el hilo de la interfaz no hace I/O de disco. Detalle en
 [arquitectura](docs/ARQUITECTURA.md).
 
 ## Descargar

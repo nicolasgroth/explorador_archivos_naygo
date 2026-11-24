@@ -13,13 +13,13 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
   seleccionó copia su contenido una sola vez; un enlace a carpeta que está dentro de lo copiado se
   informa como fallido. Mover traslada el enlace como enlace dentro del mismo volumen; entre
   volúmenes, el enlace queda en el origen y el paso se informa como fallido.
-- Sobrescribir o mover sobre el mismo archivo escrito con otra ruta ya no puede perder el original.
-  Naygo compara la identidad real del archivo (hard links, rutas `\\?\`, mayúsculas y minúsculas
-  Unicode como las trata NTFS) y omite el paso.
+- Sobrescribir o mover sobre el mismo archivo escrito con otra ruta ya no borra el original.
+  Naygo compara la identidad real del archivo (hard links, rutas `\\?\`, mayúsculas y minúsculas,
+  incluidas las no ASCII) y omite el paso.
 - En Windows las copias conservan fechas, atributos y flujos alternativos.
   Se usa `CopyFile2`: se conservan oculto, sistema y solo lectura, y flujos como `Zone.Identifier`.
-  Cancelar no deja archivos temporales. Por eso, copiar dos veces con «Saltar idénticos» omite
-  todo en la segunda pasada.
+  Cancelar no deja archivos temporales. Como las fechas se conservan, copiar dos veces con
+  «Saltar idénticos» omite todo en la segunda pasada.
 - Mover entre volúmenes escribe la copia en disco antes de borrar el origen.
   Si la copia o la aplicación de atributos falla, el origen no se borra.
 - Copiar y mover funcionan con rutas de más de 260 caracteres.
@@ -27,7 +27,8 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
   apagada, y el ejecutable declara compatibilidad con rutas largas.
 - Una subcarpeta ilegible ya no detiene una copia o un movimiento.
   Se informa como «No se pudo leer la carpeta» y el resto continúa. Al mover, esa subcarpeta y las
-  carpetas que la contienen se quedan en el origen. Si la carpeta seleccionada misma no se puede
+  carpetas que la contienen se quedan en el origen (salvo que la carpeta entera se mueva con un
+  solo renombrado dentro del mismo volumen: entonces viaja completa, sin borrar nada). Si la carpeta seleccionada misma no se puede
   leer, la operación no empieza, como antes. Reemplazar una carpeta que contiene una subcarpeta
   ilegible no publica nada: el destino anterior y el origen quedan intactos.
 - Restaurar desde la Papelera ya no pisa un elemento que aparece en el destino durante la operación.
@@ -36,10 +37,9 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
 ### Usabilidad
 - Un junction a carpeta se lista como carpeta y se puede abrir con doble clic o Enter.
   Conserva sus propios atributos: un junction oculto de sistema sigue oculto.
-- El tamaño de carpeta y la búsqueda entran en las carpetas de OneDrive.
-  Los archivos solo en línea no se descargan: la búsqueda por contenido los cuenta como omitidos y
-  el punto de comparación, como cobertura incompleta. Calcular el tamaño de un junction mide la
-  carpeta a la que apunta.
+- La búsqueda por contenido y los puntos de comparación ya no descargan los archivos de OneDrive que están solo en línea.
+  La búsqueda los cuenta como omitidos y el punto de comparación, como cobertura incompleta.
+- Calcular el tamaño de un junction seleccionado mide la carpeta a la que apunta.
 - Abrir archivos, abrir con, ejecutar como administrador, terminal y Explorador ya no congelan la ventana.
   Las órdenes al Shell corren en un hilo propio; si fallan, el aviso llega cuando el Shell
   responde. Pedir dos veces lo mismo mientras espera no lo encola de nuevo.
@@ -47,9 +47,8 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
   Las carpetas locales y las remotas tienen cupos separados (8 y 4).
 - La vista profunda avisa cuando el recorrido queda incompleto.
   Pasa si la carpeta ya no existe o si una subcarpeta no se puede leer; antes no se notaba.
-- El menú «Más opciones de Windows…» muestra completos «Enviar a», «Abrir con» y los submenús de extensiones.
-  Aparecen con sus íconos y funcionan las letras de acceso por teclado. «Nuevo» todavía no
-  aparece en este menú.
+- El menú «Más opciones de Windows…» reenvía al Shell los mensajes de sus submenús, para que «Enviar a», «Abrir con» y los submenús de extensiones se muestren completos y con íconos (implementado; pendiente de validación manual).
+  «Nuevo» todavía no aparece en este menú.
 - Al renombrar en línea, el cursor ya no salta al final si aparece un archivo en la misma carpeta.
 - Se tradujeron a los 10 idiomas textos que faltaban.
   Incluye el subtítulo de la pantalla de inicio, las etiquetas del selector de colores, los errores
@@ -65,7 +64,7 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
   256/249 MiB a 176/157 MiB (working set / privada). Actualizar o agregar una fila con 100.000
   cuesta 3,80 / 4,14 ms en lugar de 28,5 / 22,3 ms.
 - La detección de Windows Terminal y WSL se hace una vez, en segundo plano, al arrancar.
-- Memoria medida en release: bandeja 47/21 MiB, ventana en reposo 56–59 / 26–28 MiB y carpeta de 100.000 entradas ~185/167 MiB.
+- Memoria medida en release (working set / privada): bandeja 47/21 MiB, ventana en reposo 56–59 / 26–28 MiB y carpeta de 100.000 entradas ~185/167 MiB.
   Son unos 1,4 KiB por fila. No crece en reposo.
 
 ### Construcción

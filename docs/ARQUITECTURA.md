@@ -74,8 +74,9 @@ un binding inicial no basta después de editar. Los pegados usan segundos y rese
 
 `core/listing.rs` reparte los listados en dos cupos independientes (`ListingAdmissions`):
 `LOCAL_LISTING_SLOTS = 8` y `REMOTE_LISTING_SLOTS = 4`. El permiso vive hasta que el worker sale
-de verdad, así que un `read_dir` colgado en un share caído retiene una plaza remota, nunca una
-local. La clasificación está en `core/path_locality.rs`: el trait `VolumeLocality` se inyecta
+de verdad, así que un `read_dir` colgado en un share caído retiene una plaza remota (salvo un
+enlace que apunta a un UNC caído, que bloquea un worker local hasta el timeout: ver
+[BACKLOG.md](BACKLOG.md)). La clasificación está en `core/path_locality.rs`: el trait `VolumeLocality` se inyecta
 (como `NoReplaceRename`); una ruta UNC es remota por sintaxis, una letra se decide con la tabla
 de unidades y lo desconocido cuenta como remoto. `platform/drives.rs` implementa el trait sobre
 la tabla que ya trae el worker de unidades (`DriveTableLocality`, `DriveKind::Network`): el hilo
@@ -120,10 +121,12 @@ Contratos del motor de copiar/mover (`core/ops/plan.rs`, `core/ops/engine.rs`):
   seleccionado en Copiar/Duplicar se sigue una vez (`follow_root_link`). En el motor, un enlace en
   Mover se renombra como enlace (`rename_noreplace`) y, si no se puede (entre volúmenes), el paso
   es `Failed`; en Copiar, un enlace a carpeta es `Failed` y uno a archivo se copia por contenido.
-  Nunca hay copia ni `remove_file` a través de un enlace.
+  Nunca se borra nada a través de un enlace ni se recorre uno anidado; la única lectura a través
+  de un enlace es la copia por contenido de un enlace a archivo.
 - **Identidad.** Antes de resolver conflictos, `same_file::is_same_file(from, to)` convierte el
   paso en `Skipped`; `plan_transfer_with` hace lo mismo con la raíz. `paths_eq_ci` y
-  `path_starts_with_ci` comparan con `eq_ignore_case_ntfs` (mayúsculas Unicode de un solo char).
+  `path_starts_with_ci` comparan con `eq_ignore_case_ntfs` (mayúsculas Unicode de un solo char;
+  aproxima la tabla `$UpCase` de NTFS).
 - **Copia y publicación.** El trait inyectado `NoReplaceRename` tiene `copy_and_publish(from, to,
   overwrite, durable, token, on_bytes) -> io::Result<bool>` (`Ok(false)` = cancelado, sin parcial).
   El default de core copia por buffers a un temporal `.naygo-copy-…`, aplica fechas, `sync_all`
@@ -269,8 +272,10 @@ son otra preferencia.
 
 ## Configuración, temas e idiomas
 
-- `core/config/mod.rs`: esquema actual **4**, defaults/migraciones. Versiones futuras se
-  descartan a defaults; revisar compatibilidad y downgrade antes de cambiar el esquema.
+- `core/config/mod.rs`: versión actual de configuración **6** (`CONFIG_VERSION`), defaults y
+  migraciones por etapas al cargar. Un `settings.json` de versión mayor (downgrade de la app) se
+  descarta a defaults; un `workspace.json` de versión mayor se ignora (`load_workspace_flagged`,
+  `config/mod.rs:927-944`). Revisar compatibilidad y downgrade antes de subir la versión.
 - `core/config/fonts.rs`: interfaz de sistema, listados que heredan y Consolas para preview.
 - `core/config/settings_writer.rs`: orden por revisión para impedir que un guardado antiguo
   de fuentes sobrescriba preferencias nuevas. No implica que todo guardado histórico sea async.

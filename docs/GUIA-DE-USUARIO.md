@@ -532,15 +532,14 @@ el menú conserva todo el lote. Si haces clic derecho sobre un elemento que no e
 el menú usa solo ese elemento. **Más opciones de Windows…** entrega el lote al Shell cuando todos
 los elementos siguen disponibles y pertenecen a una misma carpeta del Shell; si no, muestra un
 aviso en vez de operar sobre una parte. Las opciones visibles dependen de Windows y de las
-extensiones instaladas. Los submenús se muestran completos: **Enviar a** lista sus destinos
-(Escritorio, Documentos, carpeta comprimida, unidades), **Abrir con** lista las aplicaciones y
-«Elegir otra aplicación», y los submenús de extensiones (7-Zip, Git y similares) muestran sus
-entradas e íconos. Las letras subrayadas funcionan con el teclado. El submenú **Nuevo** de
-Windows no aparece en este menú: para crear, usa **Ctrl+N / Ctrl+Shift+N**.
+extensiones instaladas. Naygo reenvía al Shell los mensajes de los submenús para que
+**Enviar a**, **Abrir con** y los submenús de extensiones se muestren con sus entradas e íconos
+(implementado; pendiente de validación manual). El submenú **Nuevo** de Windows no aparece en
+este menú: para crear, usa **Ctrl+N / Ctrl+Shift+N**.
 
 **Enlaces (junctions y symlinks):** un junction o symlink a carpeta se lista como carpeta y se
 abre con doble clic o Enter; conserva sus propios atributos, así que un enlace oculto de sistema
-sigue oculto. Al copiar o mover, Naygo nunca recorre los enlaces que hay dentro de las carpetas,
+sigue oculto. Al copiar o mover, Naygo no recorre los enlaces que hay dentro de las carpetas,
 para no entrar en bucles ni borrar el contenido al que apuntan:
 
 - Si seleccionas un enlace a carpeta y lo copias, se copia el contenido de la carpeta apuntada
@@ -560,8 +559,8 @@ y flujos alternativos como la marca de descarga `Zone.Identifier`. Al mover a ot
 copia se escribe en disco antes de borrar el origen; si algo falla, el origen se conserva.
 
 **OneDrive y archivos solo en línea:** los archivos que OneDrive guarda solo en la nube no se
-tratan como enlaces. El tamaño de carpeta y la búsqueda entran en sus carpetas; la búsqueda por
-contenido los cuenta como omitidos para no descargarlos.
+tratan como enlaces. Para no descargarlos, la búsqueda por contenido los cuenta como omitidos y
+un punto de comparación los marca como cobertura incompleta.
 
 **Rutas largas:** copiar y mover funcionan con rutas de más de 260 caracteres, aunque la opción
 de rutas largas de Windows esté apagada.
@@ -569,7 +568,8 @@ de rutas largas de Windows esté apagada.
 **Carpetas que no se pueden leer:** si una subcarpeta no se puede leer (por ejemplo, por permisos)
 durante una copia o un movimiento, el resto continúa y el detalle de la operación la muestra como
 «No se pudo leer la carpeta: …». Al mover, esa subcarpeta y las carpetas que la contienen se
-quedan en el origen, con todo su contenido. Si no se puede leer la carpeta que seleccionaste, la
+quedan en el origen, con todo su contenido (salvo que la carpeta entera se mueva con un solo
+renombrado dentro del mismo volumen: entonces viaja completa, sin borrar nada). Si no se puede leer la carpeta que seleccionaste, la
 operación no empieza. Si reemplazas una carpeta existente y la nueva tiene una subcarpeta
 ilegible, no se reemplaza nada. La vista profunda también avisa cuando su recorrido queda
 incompleto.

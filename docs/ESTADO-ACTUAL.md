@@ -24,15 +24,15 @@ Solo lo vigente. El historial de entregas, gates y hashes anteriores está en el
    otra ruta, hard links, mayúsculas y minúsculas).
 3. En Windows la copia usa `CopyFile2`: conserva fechas, atributos y flujos alternativos, y un
    mover entre volúmenes es durable antes de borrar el origen. Rutas de más de 260 caracteres.
-4. Los placeholders de nube (OneDrive solo en línea) no se tratan como enlaces y la búsqueda por
-   contenido no los descarga. Restaurar desde la Papelera ya no pisa un destino que aparece
+4. Los placeholders de nube (OneDrive solo en línea) no se tratan como enlaces; la búsqueda por
+   contenido y los puntos de comparación no los descargan. Restaurar desde la Papelera ya no pisa un destino que aparece
    durante la operación.
 5. Una subcarpeta ilegible dentro de una copia o un movimiento se informa como fallo y no se borra
    su origen. Un recurso de red caído no bloquea los listados locales (cupos de 8 locales y
    4 remotos).
 6. Abrir archivos, terminal y Explorador corre en un hilo propio: ya no bloquea la interfaz.
-7. Menú contextual nativo completo ("Enviar a", "Abrir con", íconos de extensiones). "Nuevo" no
-   aparece: va al backlog.
+7. Menú contextual nativo completo ("Enviar a", "Abrir con", íconos de extensiones; implementado,
+   pendiente de validación manual). "Nuevo" no aparece: va al backlog.
 8. Rendimiento: modelos persistentes en la sincronización de la UI y `RowsModel` por tramos en
    listados grandes. Build: el código Slint generado vive en el crate `naygo-ui-gen` y el release
    usa `debug = "line-tables-only"`.
