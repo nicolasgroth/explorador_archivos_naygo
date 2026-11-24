@@ -65,8 +65,24 @@ medida como compromiso del Job y no como working set.
 
 ## Gate
 
-Pendiente: se completa al cerrar el gate y regenerar la distribución.
+`scripts/test-all.ps1` sobre el commit `d68cee5e`, 2026-11-24: 1790 tests pasaron, 0 fallaron y 12
+quedaron ignorados; clippy sin warnings y formato correcto. `scripts/check_i18n_lang.py` dio OK en
+los nueve idiomas distintos del español (`en`, `fr`, `de`, `it`, `pt`, `ja`, `ko`, `zh`, `hi`).
 
 ## Distribución
 
-Pendiente: se completa al cerrar el gate y regenerar la distribución.
+Distribución local de avance, generada el 2026-11-24 con `scripts/build-release-guarded.ps1` desde
+el commit `d68cee5e`. El binario se identifica como `0.5.6+build.202611240518`: la versión pasa a
+0.5.7 cuando el autor ejecute `scripts/bump.ps1`. Los artefactos no llevan firma Authenticode.
+
+| Artefacto | Tamaño | SHA-256 |
+|---|---|---|
+| `dist/Naygo-0.5.6-portable.zip` | 14,3 MiB | `db3e6d337c68590630572c97d1cbcfcf4a234ca0409d195fd3cf698c5ab78b9c` |
+| `dist/Naygo-0.5.6-setup.exe` | 32,6 MiB | `0b444cbb931cb7a2fd146139a0c6c936540d4f53af43a62ff6f967a4a0c8c0db` |
+
+El build release tardó 21 min 02 s con un pico contable del Job de 6,14 GiB. El instalador bajó de
+65,8 MiB a 32,6 MiB porque incluye el PDB como componente opcional de símbolos, y el PDB bajó de
+473 MB a 177 MB con `debug = "line-tables-only"`.
+
+Sin validar en vivo todavía (ver `BACKLOG.md`, sección 1): abrir archivos a través del hilo del
+Shell, el menú contextual nativo y la copia de un archivo descargado a un USB FAT32/exFAT.

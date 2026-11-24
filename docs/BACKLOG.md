@@ -103,7 +103,9 @@ Primero lo que nota el usuario:
   - Índice por nombre en core para quitar el recorrido O(n) por evento.
   - Bajar de ~3,8 ms por evento con 100.000 filas: índice ruta→posición (~1,6 MiB por 100.000),
     índice de la entrada modificada desde core, o holgura de capacidad en `RowsModel`.
-- **Instalador.** 69 MB contra 15 MB del portable: revisar qué lo infla.
+- **Instalador.** Pesa 32,6 MiB contra 14,3 MiB del portable (antes 65,8 MiB): la diferencia es el
+  PDB, que va como componente opcional de símbolos. Decidir si se sigue incluyendo o se publica
+  aparte.
 
 Técnico (sin efecto visible):
 - **Restos de la ola de arreglos del review final:** `copy_with_junction`
