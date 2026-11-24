@@ -28,45 +28,64 @@ pub const MAX_ROWS: usize = 5_000;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Scope {
+    #[serde(with = "crate::path_wire")]
     pub root: PathBuf,
     pub recursive: bool,
     /// Prefijos relativos de ruta; no son patrones glob.
+    #[serde(with = "crate::path_wire::vec")]
     pub exclusions: Vec<PathBuf>,
     pub hashed: bool,
 }
 
-pub(crate) fn key(path: &Path) -> String {
-    // Normalizar separadores redundantes/finales antes de comparar prefijos o duplicados.
-    let normalized: PathBuf = path.components().collect();
-    let value = normalized.to_string_lossy().replace('\\', "/");
-    if cfg!(windows) {
-        value.to_lowercase()
-    } else {
-        value
-    }
+pub(crate) fn key(path: &Path) -> crate::path_identity::PathIdentityKey {
+    // Normalizar componentes antes de comparar duplicados sin colapsar bytes POSIX inválidos.
+    crate::path_identity::key(&path.components().collect::<PathBuf>())
 }
 fn relative(path: &Path, allow_empty: bool) -> bool {
-    (allow_empty || !path.as_os_str().is_empty())
-        && path
-            .to_str()
-            .is_some_and(|s| !s.contains(['\0', '*', '?', '"', '<', '>', '|']) && s.len() <= 4096)
-        && path.components().all(|c| matches!(c, Component::Normal(_)))
-        && !path
-            .to_string_lossy()
-            .split(['/', '\\'])
-            .any(|s| s == ".." || s == "." || s.contains(':'))
+    if (!allow_empty && path.as_os_str().is_empty())
+        || path.as_os_str().as_encoded_bytes().contains(&0)
+        || path.as_os_str().len() > 4096
+        || !path.components().all(|c| matches!(c, Component::Normal(_)))
+    {
+        return false;
+    }
+
+    #[cfg(windows)]
+    {
+        path.to_str().is_some_and(|value| {
+            !value.contains(['*', '?', '"', '<', '>', '|', ':'])
+                && !value
+                    .split(['/', '\\'])
+                    .any(|part| part == "." || part == "..")
+        })
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+
+        !path
+            .as_os_str()
+            .as_bytes()
+            .split(|byte| *byte == b'/')
+            .any(|part| part == b"." || part == b"..")
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        true
+    }
 }
 pub(crate) fn under(path: &Path, prefix: &Path) -> bool {
-    let (p, base) = (key(path), key(prefix));
-    base.is_empty() || p == base || p.strip_prefix(&base).is_some_and(|s| s.starts_with('/'))
+    let path: PathBuf = path.components().collect();
+    let prefix: PathBuf = prefix.components().collect();
+    prefix.as_os_str().is_empty()
+        || key(&path) == key(&prefix)
+        || crate::path_identity::is_under(&path, &prefix)
 }
 impl Scope {
     pub fn validate(&self) -> Result<(), SpaceError> {
         if !self.root.is_absolute()
-            || self
-                .root
-                .to_str()
-                .is_none_or(|s| s.contains('\0') || s.len() > 4096)
+            || self.root.as_os_str().as_encoded_bytes().contains(&0)
+            || self.root.as_os_str().len() > 4096
             || self
                 .root
                 .components()
@@ -108,6 +127,7 @@ impl Scope {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Record {
+    #[serde(with = "crate::path_wire")]
     pub path: PathBuf,
     pub kind: EntryKind,
     pub bytes: u64,
@@ -120,9 +140,11 @@ pub struct ComparisonPoint {
     pub version: u32,
     pub captured_at: u64,
     pub scope: Scope,
+    #[serde(with = "crate::path_wire::option")]
     pub resolved_root: Option<PathBuf>,
     pub entries: Vec<Record>,
     /// Vacío = raíz inaccesible. Una zona desconocida nunca demuestra ausencia.
+    #[serde(with = "crate::path_wire::vec")]
     pub gaps: Vec<PathBuf>,
     pub truncated: bool,
 }

@@ -2,16 +2,17 @@
 // Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
 // SPDX-License-Identifier: MIT
 //
-// Sin telemetría ni red: solo un archivo de texto JUNTO al ejecutable (el mismo
-// `portable_dir()` donde vive settings.json), para poder diagnosticar caídas en VMs y
-// equipos limpios. El panic handler captura el mensaje, la ubicación y el backtrace, los
-// escribe al log y los muestra en un diálogo nativo, en vez de cerrarse en silencio.
+// Sin telemetría ni red: XDG_STATE_HOME en Linux y junto al ejecutable portable en Windows.
+// El hilo UI sólo encola; un worker crea el directorio y escribe el log. El panic handler captura
+// mensaje, ubicación y backtrace y los muestra en un diálogo nativo.
 
 use std::collections::VecDeque;
 use std::fmt::Write as _;
 use std::io::Write as _;
 use std::path::PathBuf;
+use std::sync::mpsc::SyncSender;
 use std::sync::{LazyLock, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 thread_local! {
     /// Profundidad de bloques que contienen panics recuperables de dependencias hostiles. El panic
@@ -52,6 +53,9 @@ const LOG_PREFIX: &str = "naygo";
 /// Si el log supera este tamaño, se trunca al arrancar (evita que crezca sin límite).
 const LOG_MAX_BYTES: u64 = 2 * 1024 * 1024;
 
+/// Directorio de estado ya resuelto al inicio, sin consultar el filesystem desde UI.
+static LOG_DIRECTORY: OnceLock<PathBuf> = OnceLock::new();
+
 /// Capacidad del buffer circular de migas.
 const BREADCRUMB_CAP: usize = 200;
 
@@ -69,6 +73,17 @@ static ENV_INFO: OnceLock<String> = OnceLock::new();
 
 /// Offset del huso local en minutos (lo fija main.rs al arrancar; 0 = UTC si no se pudo).
 static TZ_OFFSET_MIN: OnceLock<i32> = OnceLock::new();
+
+/// Las líneas ordinarias van a un worker con cola acotada: una llamada desde un callback o tick
+/// nunca abre/escribe el archivo ni espera a que un volumen lento responda.
+static LOG_WRITER: OnceLock<Option<SyncSender<LogMessage>>> = OnceLock::new();
+static DROPPED_LOG_LINES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+enum LogMessage {
+    Prepare { path: PathBuf },
+    Write { path: PathBuf, line: String },
+    Flush(std::sync::mpsc::Sender<()>),
+}
 
 /// Resumen barato del estado, para volcar en un panic.
 #[derive(Clone, Default)]
@@ -112,12 +127,15 @@ pub fn tz_offset_secs() -> i64 {
     TZ_OFFSET_MIN.get().copied().unwrap_or(0) as i64 * 60
 }
 
-/// Ruta del archivo de log del día: junto al ejecutable (mismo criterio que la config
-/// portable), con la fecha local en el nombre: `naygo-YYYY-MM-DD.log`. Así cada día (y cada
-/// tanda de pruebas) queda en su propio archivo y no se mezclan las corridas.
+/// Ruta del archivo de log del día: directorio de estado XDG en Linux y carpeta portable en
+/// Windows, con la fecha local en el nombre.
 pub fn log_path() -> PathBuf {
     let name = format!("{LOG_PREFIX}-{}.log", log_date_str());
-    naygo_core::config::portable_dir().join(name)
+    LOG_DIRECTORY
+        .get()
+        .cloned()
+        .unwrap_or_else(naygo_core::config::portable_dir)
+        .join(name)
 }
 
 /// Fecha local de hoy como "YYYY-MM-DD", reutilizando el mismo reloj y huso que las marcas
@@ -128,15 +146,14 @@ fn log_date_str() -> String {
     full.split(' ').next().unwrap_or("0000-00-00").to_string()
 }
 
-/// Inicializa el logging: trunca el log si está muy grande, escribe una línea de arranque e
-/// instala el panic handler. Llamar UNA vez al inicio de `main`, antes de crear la ventana.
-pub fn init() {
+/// Inicializa el logging en el directorio de estado seleccionado por la plataforma. Preparar
+/// carpeta y limitar el tamaño se delegan al worker; el hilo de UI sólo encola eventos.
+/// Llamar UNA vez al inicio de `main`, antes de crear la ventana.
+pub fn init(state_dir: PathBuf) {
+    let _ = LOG_DIRECTORY.set(state_dir);
     let path = log_path();
-    // Truncado por tamaño: si el log viejo es enorme, empezar de cero.
-    if let Ok(meta) = std::fs::metadata(&path) {
-        if meta.len() > LOG_MAX_BYTES {
-            let _ = std::fs::remove_file(&path);
-        }
+    if let Some(sender) = log_writer() {
+        let _ = sender.try_send(LogMessage::Prepare { path });
     }
     log_line(&format!(
         "=== Naygo v{} arrancó ===",
@@ -148,14 +165,104 @@ pub fn init() {
 /// Anexa una línea al log (con marca de tiempo local legible). Nunca falla hacia
 /// afuera: si no se puede escribir (disco lleno, permiso), se ignora en silencio.
 pub fn log_line(msg: &str) {
-    let line = format!("[{}] {msg}\n", local_time_str());
-    if let Ok(mut f) = std::fs::OpenOptions::new()
+    let Some(sender) = log_writer() else {
+        DROPPED_LOG_LINES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        return;
+    };
+    let dropped = DROPPED_LOG_LINES.swap(0, std::sync::atomic::Ordering::Relaxed);
+    let prefix = if dropped == 0 {
+        String::new()
+    } else {
+        format!("[logger] se descartaron {dropped} líneas por cola llena\n")
+    };
+    let line = format!("{prefix}[{}] {msg}\n", local_time_str());
+    if sender
+        .try_send(LogMessage::Write {
+            path: log_path(),
+            line,
+        })
+        .is_err()
+    {
+        DROPPED_LOG_LINES.fetch_add(
+            dropped.saturating_add(1),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+    }
+}
+
+fn log_writer() -> Option<&'static SyncSender<LogMessage>> {
+    LOG_WRITER
+        .get_or_init(|| {
+            let (tx, rx) = std::sync::mpsc::sync_channel::<LogMessage>(512);
+            std::thread::Builder::new()
+                .name("naygo-log-writer".into())
+                .spawn(move || {
+                    while let Ok(message) = rx.recv() {
+                        match message {
+                            LogMessage::Prepare { path } => prepare_log_file(&path),
+                            LogMessage::Write { path, line } => {
+                                append_line(&path, &line);
+                            }
+                            LogMessage::Flush(done) => {
+                                let _ = done.send(());
+                            }
+                        }
+                    }
+                })
+                .ok()?;
+            Some(tx)
+        })
+        .as_ref()
+}
+
+fn append_line(path: &std::path::Path, line: &str) {
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(mut file) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(log_path())
+        .open(path)
     {
-        let _ = f.write_all(line.as_bytes());
+        let _ = file.write_all(line.as_bytes());
     }
+}
+
+/// Crea el directorio y aplica el límite una sola vez al inicio, siempre desde el worker.
+fn prepare_log_file(path: &std::path::Path) {
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if std::fs::metadata(path).is_ok_and(|meta| meta.len() > LOG_MAX_BYTES) {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+/// Vacía la cola antes de salir. Se llama desde el coordinador de cierre fuera del hilo de UI;
+/// si el disco está bloqueado, el cierre continúa al vencer el plazo.
+pub fn flush(timeout: Duration) -> bool {
+    let Some(sender) = log_writer() else {
+        return false;
+    };
+    let deadline = Instant::now() + timeout;
+    let (tx, rx) = std::sync::mpsc::channel();
+    loop {
+        match sender.try_send(LogMessage::Flush(tx.clone())) {
+            Ok(()) => break,
+            Err(std::sync::mpsc::TrySendError::Disconnected(_)) => return false,
+            Err(std::sync::mpsc::TrySendError::Full(_)) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Err(std::sync::mpsc::TrySendError::Full(_)) => return false,
+        }
+    }
+    rx.recv_timeout(deadline.saturating_duration_since(Instant::now()))
+        .is_ok()
+}
+
+/// Escritura de emergencia para el panic hook; no depende de la cola ordinaria que pudo llenarse.
+fn log_line_sync(msg: &str) {
+    append_line(&log_path(), &format!("[{}] {msg}\n", local_time_str()));
 }
 
 /// Hora local legible para el log ("YYYY-MM-DD HH:MM:SS.mmm"). Usa el offset fijado por
@@ -257,7 +364,7 @@ fn install_panic_hook() {
         let bt = std::backtrace::Backtrace::force_capture();
         let _ = writeln!(report, "backtrace:\n{bt}");
 
-        log_line(&report);
+        log_line_sync(&report);
 
         // Diálogo nativo: el usuario VE que pasó algo y dónde está el log, en vez de un
         // cierre fantasma. (rfd ya es dependencia; el diálogo es síncrono y bloqueante.)
@@ -282,6 +389,20 @@ fn install_panic_hook() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn logger_worker_helpers_create_parent_and_enforce_size_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state").join("naygo.log");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, vec![b'x'; (LOG_MAX_BYTES + 1) as usize]).unwrap();
+
+        prepare_log_file(&path);
+        assert!(!path.exists(), "un log sobre el límite se trunca al inicio");
+        append_line(&path, "línea de prueba\n");
+
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "línea de prueba\n");
+    }
 
     #[test]
     fn build_context_block_formato() {

@@ -19,7 +19,11 @@ pub mod undo;
 pub use actions::{
     batch_rename, create, delete, parse_new_folders, rename, transfer, FolderSpec, NewFolderError,
 };
-pub use engine::{run_plan, spawn};
+pub use engine::{
+    disable_tree_replacement_recovery, recover_tree_replacements_in_parent, run_plan,
+    run_plan_with_no_replace_rename, spawn, spawn_with_no_replace_rename, NativeNoReplaceRename,
+    NoReplaceRename,
+};
 pub use journal::{
     journal_path, remove, resume_plan, scan, FileFingerprint, JournalWriter, OpJournal, ResumePlan,
 };
@@ -84,6 +88,209 @@ pub struct OpRequest {
     pub conflict: ConflictPolicy,
 }
 
+/// Prefijo estable de un fallo planificado de CARPETA (no se pudo enumerar). Le sigue, tras
+/// `PLANNED_FAILURE_SEPARATOR`, el texto del error del sistema. core no conoce i18n: la UI
+/// reconoce el prefijo con [`parse_unreadable_folder`] y antepone el contexto traducido.
+pub const UNREADABLE_FOLDER_FAILURE: &str = "naygo:unreadable-folder";
+
+/// Separador (US, no imprimible) entre el prefijo y el motivo de un fallo planificado.
+const PLANNED_FAILURE_SEPARATOR: char = '\u{1f}';
+
+/// Motivo estructurado de una carpeta que no se pudo leer durante la planificación.
+pub fn unreadable_folder_failure(reason: &str) -> String {
+    format!("{UNREADABLE_FOLDER_FAILURE}{PLANNED_FAILURE_SEPARATOR}{reason}")
+}
+
+/// Un enlace (symlink/junction) que Copiar no recrea en el destino. Campo: ruta del origen.
+pub const LINK_NOT_COPIED_FAILURE: &str = "naygo:link-not-copied";
+
+/// Un enlace que Mover no pudo renombrar como enlace (p. ej. otro volumen); quedó en el origen.
+/// Campos: ruta del origen y error del sistema.
+pub const LINK_NOT_MOVED_FAILURE: &str = "naygo:link-not-moved";
+
+/// La copia de un archivo terminó pero no se pudo publicar en su destino. Campo: error del sistema.
+pub const PUBLISH_FAILED_FAILURE: &str = "naygo:publish-failed";
+
+/// El destino existe pero no se pudo comprobar si es el mismo archivo que el origen (hard link,
+/// alias de ruta): el paso falla sin sobrescribir ni mover. Campo: error del sistema.
+pub const IDENTITY_UNKNOWN_FAILURE: &str = "naygo:identity-unknown";
+
+/// Prefijos de los textos previos (journals y resúmenes 0.5.x sin código), que se siguen
+/// reconociendo como fallos de enlace para excluirlos de "Reintentar".
+const LEGACY_LINK_NOT_COPIED: &str = "enlace no copiado: ";
+const LEGACY_LINK_NOT_MOVED: &str = "enlace no movido entre volúmenes: ";
+
+/// Fallo estructurado del motor, ya separado en sus campos. La UI lo traduce; los consumidores
+/// sin i18n usan [`plain_failure_text`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OpFailure<'a> {
+    UnreadableFolder { reason: &'a str },
+    LinkNotCopied { path: &'a str },
+    LinkNotMoved { path: &'a str, reason: &'a str },
+    PublishFailed { reason: &'a str },
+    IdentityUnknown { reason: &'a str },
+}
+
+impl OpFailure<'_> {
+    /// `true` para los fallos de enlace: son el resultado previsto (los enlaces no se recorren
+    /// ni se recrean), no algo que un reintento pueda resolver.
+    pub fn is_link(&self) -> bool {
+        matches!(self, Self::LinkNotCopied { .. } | Self::LinkNotMoved { .. })
+    }
+}
+
+fn coded_failure(code: &str, fields: &[&str]) -> String {
+    let mut out = String::from(code);
+    for field in fields {
+        out.push(PLANNED_FAILURE_SEPARATOR);
+        out.push_str(field);
+    }
+    out
+}
+
+/// Fallo estructurado de un enlace que Copiar no recrea.
+pub fn link_not_copied_failure(path: &Path) -> String {
+    coded_failure(LINK_NOT_COPIED_FAILURE, &[&path.display().to_string()])
+}
+
+/// Fallo estructurado de un enlace que Mover no pudo renombrar.
+pub fn link_not_moved_failure(path: &Path, reason: &str) -> String {
+    coded_failure(
+        LINK_NOT_MOVED_FAILURE,
+        &[&path.display().to_string(), reason],
+    )
+}
+
+/// Fallo estructurado de una comprobación de mismo archivo que no se pudo hacer.
+pub fn identity_unknown_failure(reason: &str) -> String {
+    coded_failure(IDENTITY_UNKNOWN_FAILURE, &[reason])
+}
+
+/// Fallo estructurado de la publicación de una copia (el temporal se descarta).
+pub fn publish_failed_failure(reason: &str) -> String {
+    coded_failure(PUBLISH_FAILED_FAILURE, &[reason])
+}
+
+/// ¿`a` y `b` son el mismo archivo (hard link, `\\?\`, unidad mapeada vs UNC, nombre 8.3)?
+/// Un `Err` significa "no se pudo determinar": quien llama decide fail-closed.
+pub(crate) fn same_identity(a: &Path, b: &Path) -> std::io::Result<bool> {
+    #[cfg(test)]
+    if FORCE_IDENTITY_ERROR.with(std::cell::Cell::get) {
+        return Err(std::io::Error::other("identidad forzada a fallar (test)"));
+    }
+    same_file::is_same_file(a, b)
+}
+
+#[cfg(test)]
+thread_local! {
+    static FORCE_IDENTITY_ERROR: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Tests: mientras viva el guard, `same_identity` falla en ESTE hilo (el motor y el plan
+/// síncronos corren en el hilo del test).
+#[cfg(test)]
+pub(crate) fn force_identity_error_for_tests() -> impl Drop {
+    struct Guard;
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            FORCE_IDENTITY_ERROR.with(|forced| forced.set(false));
+        }
+    }
+    FORCE_IDENTITY_ERROR.with(|forced| forced.set(true));
+    Guard
+}
+
+/// Reintento de una publicación con sobrescritura autorizada que falló (`error`, acceso
+/// denegado) porque el destino es de solo lectura: quita el atributo de `to` y llama una vez
+/// más a `publish`; si ese reintento falla, repone los atributos originales. Si el destino no es
+/// un archivo normal de solo lectura (o es un enlace), devuelve `error` sin tocar nada. Solo se
+/// usa cuando el usuario ya autorizó sobrescribir: sin esa autorización nunca se llama.
+pub fn retry_over_readonly_destination(
+    to: &Path,
+    error: std::io::Error,
+    mut publish: impl FnMut() -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    let Ok(metadata) = std::fs::symlink_metadata(to) else {
+        return Err(error);
+    };
+    if !metadata.is_file()
+        || metadata.file_type().is_symlink()
+        || !metadata.permissions().readonly()
+    {
+        return Err(error);
+    }
+    let original = metadata.permissions();
+    let mut writable = original.clone();
+    // Windows: solo quita FILE_ATTRIBUTE_READONLY y conserva el resto de los atributos.
+    #[allow(clippy::permissions_set_readonly_false)]
+    writable.set_readonly(false);
+    if std::fs::set_permissions(to, writable).is_err() {
+        return Err(error);
+    }
+    match publish() {
+        Ok(()) => Ok(()),
+        Err(retry_error) => {
+            let _ = std::fs::set_permissions(to, original);
+            Err(retry_error)
+        }
+    }
+}
+
+/// Reconoce un fallo estructurado. Un texto sin código (texto del sistema o de un journal viejo)
+/// devuelve `None` y se muestra tal cual.
+pub fn parse_failure(detail: &str) -> Option<OpFailure<'_>> {
+    let (code, rest) = detail.split_once(PLANNED_FAILURE_SEPARATOR)?;
+    match code {
+        UNREADABLE_FOLDER_FAILURE => Some(OpFailure::UnreadableFolder { reason: rest }),
+        LINK_NOT_COPIED_FAILURE => Some(OpFailure::LinkNotCopied { path: rest }),
+        LINK_NOT_MOVED_FAILURE => {
+            let (path, reason) = rest.split_once(PLANNED_FAILURE_SEPARATOR)?;
+            Some(OpFailure::LinkNotMoved { path, reason })
+        }
+        PUBLISH_FAILED_FAILURE => Some(OpFailure::PublishFailed { reason: rest }),
+        IDENTITY_UNKNOWN_FAILURE => Some(OpFailure::IdentityUnknown { reason: rest }),
+        _ => None,
+    }
+}
+
+/// `true` si el detalle es un fallo de enlace, con código o con el texto previo sin código.
+pub fn is_link_failure(detail: &str) -> bool {
+    parse_failure(detail).is_some_and(|failure| failure.is_link())
+        || detail.starts_with(LEGACY_LINK_NOT_COPIED)
+        || detail.starts_with(LEGACY_LINK_NOT_MOVED)
+}
+
+/// Texto de un fallo del motor apto para consumidores SIN traducción (errores de dominio,
+/// logs): quita los códigos estructurados internos y deja el texto del sistema, con el mismo
+/// contexto en español que tenía antes de los códigos. La UI que sí traduce usa
+/// [`parse_failure`] y su propio catálogo.
+pub fn plain_failure_text(detail: &str) -> std::borrow::Cow<'_, str> {
+    use std::borrow::Cow;
+    match parse_failure(detail) {
+        Some(OpFailure::UnreadableFolder { reason }) => Cow::Borrowed(reason),
+        Some(OpFailure::LinkNotCopied { path }) => Cow::Owned(format!("enlace no copiado: {path}")),
+        Some(OpFailure::LinkNotMoved { path, reason }) => {
+            Cow::Owned(format!("enlace no movido: {path}: {reason}"))
+        }
+        Some(OpFailure::PublishFailed { reason }) => {
+            Cow::Owned(format!("no se pudo publicar la copia: {reason}"))
+        }
+        Some(OpFailure::IdentityUnknown { reason }) => Cow::Owned(format!(
+            "no se pudo comprobar si origen y destino son el mismo archivo: {reason}"
+        )),
+        None => Cow::Borrowed(detail),
+    }
+}
+
+/// Si `detail` es un fallo planificado de carpeta ilegible, devuelve el texto del error del
+/// sistema (sin el prefijo) para que la UI lo componga con su traducción.
+pub fn parse_unreadable_folder(detail: &str) -> Option<&str> {
+    match parse_failure(detail)? {
+        OpFailure::UnreadableFolder { reason } => Some(reason),
+        _ => None,
+    }
+}
+
 /// Un paso concreto del plan: copiar/mover un archivo, o crear una carpeta.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct OpStep {
@@ -92,6 +299,12 @@ pub struct OpStep {
     pub to: PathBuf,
     pub bytes: u64,
     pub is_dir: bool,
+    /// Motivo por el que la planificación ya sabe que este paso falla (p. ej. una subcarpeta
+    /// que no se pudo enumerar). El motor lo reporta como `Failed(motivo)` sin tocar el disco:
+    /// no crea el destino ni retira el origen. Se persiste en el journal para que un retomar no
+    /// lo convierta en un paso normal; los journals previos lo leen como `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub planned_failure: Option<String>,
 }
 
 /// Plan completo de una operación: pasos + totales.
@@ -100,12 +313,16 @@ pub struct OpPlan {
     pub steps: Vec<OpStep>,
     pub total_bytes: u64,
     pub total_files: usize,
-    /// Carpetas destino a BORRAR (`remove_dir_all`) antes de copiar, por una decisión
-    /// "Reemplazar" en un conflicto de carpeta. El motor las procesa al inicio de `run_plan`
-    /// (cancelable, error tipado). Vacío en el caso normal. `#[serde(default)]` para que los
-    /// journals viejos (sin este campo) sigan deserializando.
+    /// Raíces destino elegidas para "Reemplazar" en un conflicto de carpeta. El motor prepara
+    /// cada árbol completo en staging junto al destino y sólo entonces publica con rollback del
+    /// destino anterior si falla el rename final. El campo mantiene su nombre serializado para
+    /// compatibilidad con journals 0.5.x; `#[serde(default)]` permite leer planes anteriores.
     #[serde(default)]
     pub pre_delete: Vec<PathBuf>,
+    /// Sólo los planes completos de Move pueden publicar un directorio como unidad.
+    /// Los planes de reintento y reanudación pueden contener sólo algunos descendientes.
+    #[serde(default)]
+    pub allow_directory_rename: bool,
 }
 
 /// Progreso emitido por el motor mientras trabaja.
@@ -325,9 +542,9 @@ pub fn folder_conflicts(req: &OpRequest) -> Vec<FolderConflict> {
 /// - `Merge`: no toca nada (el plan ya copia dentro de la existente).
 /// - `Skip`: excluye todos los pasos cuyo destino cae bajo `dest_root` (no se copia ese
 ///   subárbol) y recalcula los totales del plan.
-/// - `Replace`: agrega `dest_root` a `plan.pre_delete` (el motor lo borra con `remove_dir_all`
-///   ANTES de copiar, de forma cancelable y con error tipado). No quita pasos: tras borrar, la
-///   copia repuebla el destino con SOLO el contenido del origen.
+/// - `Replace`: agrega `dest_root` a `plan.pre_delete`. El motor escribe los pasos en un staging
+///   hermano del destino y lo publica al terminar; cancelar/fallar durante la preparación deja
+///   intacto el destino anterior. No quita pasos: el árbol nuevo contiene sólo el origen.
 ///
 /// `dest_root` es la ruta destino exacta (`dest_dir.join(nombre)`): solo se filtra/borra ESE
 /// destino, nunca el origen ni otra carpeta.
@@ -413,6 +630,29 @@ pub enum OpMsg {
     Cancelled(OpSummary),
     /// Error fatal que impide siquiera empezar (p. ej. plan inválido).
     Failed(String),
+}
+
+/// Helper de tests: crea un enlace de directorio (junction en Windows, symlink en Unix).
+/// Devuelve `false` si no se pudo crear; el test debe retornar temprano.
+#[cfg(test)]
+pub(crate) fn make_junction(link: &std::path::Path, target: &std::path::Path) -> bool {
+    #[cfg(windows)]
+    {
+        // `mklink /J` no exige privilegios ni Developer Mode.
+        std::process::Command::new("cmd")
+            .arg("/C")
+            .arg("mklink")
+            .arg("/J")
+            .arg(link)
+            .arg(target)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, link).is_ok()
+    }
 }
 
 #[cfg(test)]
@@ -629,6 +869,111 @@ mod conflict_prompt_tests {
         );
         assert!(p.existing_modified.is_some(), "fecha del existente leída");
         assert!(p.incoming_modified.is_some(), "fecha del entrante leída");
+    }
+
+    #[test]
+    fn fallos_estructurados_de_enlace_y_publicacion_se_reconocen() {
+        let source = Path::new("C:/src/node_modules");
+        let link = link_not_copied_failure(source);
+        let shown = source.display().to_string();
+        assert_eq!(
+            parse_failure(&link),
+            Some(OpFailure::LinkNotCopied { path: &shown })
+        );
+        assert!(is_link_failure(&link));
+        let moved = link_not_moved_failure(Path::new("C:/src/l"), "otro volumen");
+        assert!(matches!(
+            parse_failure(&moved),
+            Some(OpFailure::LinkNotMoved {
+                reason: "otro volumen",
+                ..
+            })
+        ));
+        assert!(is_link_failure(&moved));
+        let publish = publish_failed_failure("Acceso denegado");
+        assert_eq!(
+            parse_failure(&publish),
+            Some(OpFailure::PublishFailed {
+                reason: "Acceso denegado"
+            })
+        );
+        assert!(!is_link_failure(&publish));
+        for coded in [&link, &moved, &publish] {
+            let plain = plain_failure_text(coded);
+            assert!(
+                !plain.contains("naygo:") && !plain.contains('\u{1f}'),
+                "{plain}"
+            );
+        }
+        assert_eq!(
+            plain_failure_text(&publish),
+            "no se pudo publicar la copia: Acceso denegado"
+        );
+    }
+
+    #[test]
+    fn reintento_sobre_solo_lectura_restaura_el_atributo_si_vuelve_a_fallar() {
+        let dir = tempfile::tempdir().unwrap();
+        let to = dir.path().join("destino.txt");
+        fs::write(&to, b"viejo").unwrap();
+        let mut permissions = fs::metadata(&to).unwrap().permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(&to, permissions).unwrap();
+        let mut calls = 0;
+
+        let result = retry_over_readonly_destination(
+            &to,
+            std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+            || {
+                calls += 1;
+                Err(std::io::Error::other("sigue fallando"))
+            },
+        );
+
+        let readonly = fs::metadata(&to).unwrap().permissions().readonly();
+        let mut permissions = fs::metadata(&to).unwrap().permissions();
+        #[allow(clippy::permissions_set_readonly_false)]
+        permissions.set_readonly(false);
+        fs::set_permissions(&to, permissions).unwrap();
+        assert_eq!(calls, 1, "un solo reintento");
+        assert_eq!(result.unwrap_err().to_string(), "sigue fallando");
+        assert!(readonly, "el solo lectura se restauró");
+        assert_eq!(fs::read(&to).unwrap(), b"viejo");
+    }
+
+    #[test]
+    fn reintento_sobre_destino_escribible_no_reintenta() {
+        let dir = tempfile::tempdir().unwrap();
+        let to = dir.path().join("destino.txt");
+        fs::write(&to, b"viejo").unwrap();
+        let mut calls = 0;
+        let result = retry_over_readonly_destination(
+            &to,
+            std::io::Error::other("acceso denegado por otra causa"),
+            || {
+                calls += 1;
+                Ok(())
+            },
+        );
+        assert_eq!(calls, 0);
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "acceso denegado por otra causa"
+        );
+    }
+
+    /// Los textos previos (sin código) siguen leyéndose igual: se muestran tal cual y los de
+    /// enlace se siguen reconociendo como tales.
+    #[test]
+    fn textos_de_fallo_previos_sin_codigo_se_aceptan_sin_cambios() {
+        let old_copy = "enlace no copiado: C:\\src\\l";
+        let old_move = "enlace no movido entre volúmenes: C:\\src\\l: error";
+        for old in [old_copy, old_move, "Acceso denegado. (os error 5)"] {
+            assert_eq!(parse_failure(old), None);
+            assert_eq!(plain_failure_text(old), old);
+        }
+        assert!(is_link_failure(old_copy) && is_link_failure(old_move));
+        assert!(!is_link_failure("Acceso denegado. (os error 5)"));
     }
 
     #[test]

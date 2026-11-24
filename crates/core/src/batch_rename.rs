@@ -17,6 +17,7 @@
 
 use crate::clipboard::naming::civil_from_epoch;
 use crate::ops::is_valid_name;
+use std::ffi::OsStr;
 use std::path::PathBuf;
 
 /// Transformación de mayúsculas aplicada al final del pipeline.
@@ -79,6 +80,9 @@ pub enum RowStatus {
     Unchanged,
     /// Nombre inválido (caracteres prohibidos, vacío) o regex mala — con motivo.
     Invalid(String),
+    /// El nombre contiene unidades que la interfaz textual actual no puede representar.
+    /// Se conserva una forma escapada para mostrarlo y se bloquea el renombrado.
+    Unrepresentable,
     /// Chocaría con otro resultado del lote, con un archivo existente que no se
     /// libera, o forma un ciclo (swap) — no soportado en v1.
     Collision,
@@ -102,6 +106,25 @@ pub fn preview(
     existing_names: &[String],
     utc_offset_secs: i64,
 ) -> Vec<PreviewRow> {
+    let parent = items
+        .first()
+        .and_then(|item| item.path.parent())
+        .unwrap_or_else(|| std::path::Path::new(""));
+    let paths: Vec<_> = existing_names
+        .iter()
+        .map(|name| parent.join(name))
+        .collect();
+    preview_with_paths(items, spec, &paths, utc_offset_secs)
+}
+
+/// Variante para varios directorios: los nombres ocupados se identifican por ruta completa.
+/// La numeración sigue el orden global de `items`; no consulta el filesystem.
+pub fn preview_with_paths(
+    items: &[BatchItem],
+    spec: &BatchSpec,
+    existing_paths: &[PathBuf],
+    utc_offset_secs: i64,
+) -> Vec<PreviewRow> {
     // Regex compilada una vez; inválida → todas las filas Invalid con el motivo.
     let regex = if spec.use_regex && !spec.find.is_empty() {
         match regex::Regex::new(&spec.find) {
@@ -113,7 +136,11 @@ pub fn preview(
                         path: it.path.clone(),
                         old_name: file_name_of(it),
                         new_name: String::new(),
-                        status: RowStatus::Invalid(format!("regex: {e}")),
+                        status: if is_filename_representable(it) {
+                            RowStatus::Invalid(format!("regex: {e}"))
+                        } else {
+                            RowStatus::Unrepresentable
+                        },
                     })
                     .collect();
             }
@@ -127,6 +154,14 @@ pub fn preview(
         .enumerate()
         .map(|(i, it)| {
             let old_name = file_name_of(it);
+            if !is_filename_representable(it) {
+                return PreviewRow {
+                    path: it.path.clone(),
+                    old_name,
+                    new_name: String::new(),
+                    status: RowStatus::Unrepresentable,
+                };
+            }
             let counter = spec.counter_start + (i as i64) * spec.counter_step;
             let new_name = compute_name(
                 &old_name,
@@ -152,7 +187,7 @@ pub fn preview(
         })
         .collect();
 
-    mark_collisions(&mut rows, existing_names);
+    mark_path_collisions(&mut rows, existing_paths);
     rows
 }
 
@@ -163,7 +198,9 @@ pub fn can_apply(rows: &[PreviewRow]) -> bool {
         match r.status {
             RowStatus::Ok => any_change = true,
             RowStatus::Unchanged => {}
-            RowStatus::Invalid(_) | RowStatus::Collision => return false,
+            RowStatus::Invalid(_) | RowStatus::Unrepresentable | RowStatus::Collision => {
+                return false;
+            }
         }
     }
     any_change
@@ -182,10 +219,73 @@ pub fn execution_order(rows: &[PreviewRow]) -> Vec<usize> {
 // ── internos ────────────────────────────────────────────────────────────────
 
 fn file_name_of(it: &BatchItem) -> String {
-    it.path
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default()
+    let Some(name) = it.path.file_name() else {
+        return String::new();
+    };
+    #[cfg(unix)]
+    if let Some(name) = name.to_str() {
+        return name.to_owned();
+    }
+    display_file_name(name)
+}
+
+fn is_filename_representable(it: &BatchItem) -> bool {
+    let Some(name) = it.path.file_name() else {
+        return false;
+    };
+    #[cfg(unix)]
+    {
+        name.to_str().is_some()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = name;
+        true
+    }
+}
+
+fn display_file_name(name: &OsStr) -> String {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let mut display = String::new();
+        let mut remaining = name.as_bytes();
+        while !remaining.is_empty() {
+            match std::str::from_utf8(remaining) {
+                Ok(valid) => {
+                    append_escaped_text(&mut display, valid);
+                    break;
+                }
+                Err(error) => {
+                    let valid_len = error.valid_up_to();
+                    if valid_len > 0 {
+                        // `valid_up_to` identifies a valid UTF-8 prefix.
+                        let valid = std::str::from_utf8(&remaining[..valid_len])
+                            .expect("valid_up_to must be a UTF-8 boundary");
+                        append_escaped_text(&mut display, valid);
+                    }
+                    let invalid_len = error.error_len().unwrap_or(remaining.len() - valid_len);
+                    for byte in &remaining[valid_len..valid_len + invalid_len] {
+                        use std::fmt::Write as _;
+                        let _ = write!(display, "\\x{byte:02X}");
+                    }
+                    remaining = &remaining[valid_len + invalid_len..];
+                }
+            }
+        }
+        display
+    }
+    #[cfg(not(unix))]
+    {
+        name.to_string_lossy().into_owned()
+    }
+}
+
+#[cfg(unix)]
+fn append_escaped_text(output: &mut String, text: &str) {
+    for character in text.chars() {
+        output.extend(character.escape_default());
+    }
 }
 
 /// Pipeline de un nombre: plantilla → buscar/reemplazar → mayúsculas → re-adjuntar
@@ -320,17 +420,17 @@ fn title_case(s: &str) -> String {
     out
 }
 
-/// Clave de comparación de nombres en Windows (case-insensitive).
-fn key(name: &str) -> String {
-    name.to_lowercase()
-}
-
-/// Conjunto de nombres ocupados al inicio: los existentes del directorio + los
-/// nombres viejos del lote (por si la UI pasó un listado desactualizado).
-fn occupied_from(rows: &[PreviewRow], existing: &[String]) -> std::collections::HashSet<String> {
-    let mut occ: std::collections::HashSet<String> = existing.iter().map(|n| key(n)).collect();
+/// Rutas ocupadas al inicio, incluyendo fuentes que falten en el snapshot de la UI.
+fn occupied_from(
+    rows: &[PreviewRow],
+    existing: &[PathBuf],
+) -> std::collections::HashSet<crate::path_identity::PathIdentityKey> {
+    let mut occ: std::collections::HashSet<_> = existing
+        .iter()
+        .map(|path| crate::path_identity::key(path))
+        .collect();
     for r in rows {
-        occ.insert(key(&r.old_name));
+        occ.insert(crate::path_identity::key(&r.path));
     }
     occ
 }
@@ -342,7 +442,7 @@ fn occupied_from(rows: &[PreviewRow], existing: &[String]) -> std::collections::
 fn simulate(
     rows: &[PreviewRow],
     changed: &[usize],
-    occupied: &std::collections::HashSet<String>,
+    occupied: &std::collections::HashSet<crate::path_identity::PathIdentityKey>,
 ) -> (Vec<usize>, Vec<usize>) {
     let mut occ = occupied.clone();
     let mut pending: Vec<usize> = changed.to_vec();
@@ -350,8 +450,11 @@ fn simulate(
     loop {
         let mut progressed = false;
         pending.retain(|&i| {
-            let new_k = key(&rows[i].new_name);
-            let old_k = key(&rows[i].old_name);
+            let old_k = crate::path_identity::key(&rows[i].path);
+            let Some(parent) = rows[i].path.parent() else {
+                return true;
+            };
+            let new_k = crate::path_identity::key(&parent.join(&rows[i].new_name));
             if !occ.contains(&new_k) || new_k == old_k {
                 occ.remove(&old_k);
                 occ.insert(new_k);
@@ -370,7 +473,7 @@ fn simulate(
 }
 
 /// Marca `Collision` en las filas que la simulación no pudo ejecutar.
-fn mark_collisions(rows: &mut [PreviewRow], existing: &[String]) {
+fn mark_path_collisions(rows: &mut [PreviewRow], existing: &[PathBuf]) {
     let changed: Vec<usize> = (0..rows.len())
         .filter(|&i| rows[i].status == RowStatus::Ok)
         .collect();
@@ -379,6 +482,16 @@ fn mark_collisions(rows: &mut [PreviewRow], existing: &[String]) {
     for i in stuck {
         rows[i].status = RowStatus::Collision;
     }
+}
+
+#[cfg(test)]
+fn mark_collisions(rows: &mut [PreviewRow], existing: &[String]) {
+    let parent = rows
+        .first()
+        .and_then(|row| row.path.parent())
+        .unwrap_or_else(|| std::path::Path::new(""));
+    let paths: Vec<_> = existing.iter().map(|name| parent.join(name)).collect();
+    mark_path_collisions(rows, &paths);
 }
 
 #[cfg(test)]
@@ -548,6 +661,56 @@ mod tests {
     }
 
     #[test]
+    fn carpetas_distintas_admiten_nombres_iguales_y_aislan_colisiones() {
+        let a = BatchItem {
+            path: PathBuf::from("D:/a/original.txt"),
+            modified_epoch_secs: None,
+        };
+        let b = BatchItem {
+            path: PathBuf::from("D:/b/original.txt"),
+            modified_epoch_secs: None,
+        };
+        let items = vec![a, b];
+        let existing = vec![items[0].path.clone(), items[1].path.clone()];
+        let rows = preview_with_paths(&items, &spec("mismo"), &existing, 0);
+        assert!(rows.iter().all(|row| row.status == RowStatus::Ok));
+        assert_eq!(names(&rows), vec!["mismo.txt", "mismo.txt"]);
+        let mut occupied = existing;
+        occupied.push(PathBuf::from("D:/a/mismo.txt"));
+        let rows = preview_with_paths(&items, &spec("mismo"), &occupied, 0);
+        assert_eq!(rows[0].status, RowStatus::Collision);
+        assert_eq!(rows[1].status, RowStatus::Ok);
+        let rows = preview_with_paths(&items, &spec("nuevo{n}"), &[], 0);
+        assert_eq!(names(&rows), vec!["nuevo1.txt", "nuevo2.txt"]);
+    }
+
+    #[test]
+    fn dependencias_se_resuelven_en_cada_directorio_sin_mezclar_nombres() {
+        let items = vec![
+            BatchItem {
+                path: PathBuf::from("D:/a/foto1.jpg"),
+                modified_epoch_secs: None,
+            },
+            BatchItem {
+                path: PathBuf::from("D:/a/foto2.jpg"),
+                modified_epoch_secs: None,
+            },
+            BatchItem {
+                path: PathBuf::from("D:/b/foto1.jpg"),
+                modified_epoch_secs: None,
+            },
+        ];
+        let mut s = spec("foto{n}");
+        s.counter_start = 2;
+        let existing: Vec<_> = items.iter().map(|item| item.path.clone()).collect();
+        let rows = preview_with_paths(&items, &s, &existing, 0);
+        assert!(can_apply(&rows));
+        let order = execution_order(&rows);
+        assert!(order.iter().position(|i| *i == 1) < order.iter().position(|i| *i == 0));
+        assert_eq!(order.len(), 3);
+    }
+
+    #[test]
     fn choque_con_existente_que_no_se_libera_es_colision() {
         let existing = vec!["a.txt".into(), "ocupado.txt".into()];
         let rows = preview(&[item("a.txt", None)], &spec("ocupado"), &existing, 0);
@@ -606,5 +769,40 @@ mod tests {
             0,
         );
         assert!(can_apply(&rows));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn non_utf8_filename_is_escaped_and_cannot_be_renamed() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        let item = BatchItem {
+            path: PathBuf::from(OsString::from_vec(b"/tmp/foto-\xff.jpg".to_vec())),
+            modified_epoch_secs: None,
+        };
+        let rows = preview(&[item], &BatchSpec::default(), &[], 0);
+
+        assert_eq!(rows[0].old_name, r"foto-\xFF.jpg");
+        assert!(rows[0].new_name.is_empty());
+        assert_eq!(rows[0].status, RowStatus::Unrepresentable);
+        assert!(!can_apply(&rows));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn valid_posix_backslash_is_preserved_by_default_template() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        let item = BatchItem {
+            path: PathBuf::from(OsString::from_vec(b"/tmp/foto\\b.jpg".to_vec())),
+            modified_epoch_secs: None,
+        };
+        let rows = preview(&[item], &BatchSpec::default(), &[], 0);
+
+        assert_eq!(rows[0].old_name, r"foto\b.jpg");
+        assert_eq!(rows[0].new_name, r"foto\b.jpg");
+        assert_eq!(rows[0].status, RowStatus::Unchanged);
     }
 }

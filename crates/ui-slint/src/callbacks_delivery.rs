@@ -91,11 +91,10 @@ pub(crate) fn wire_delivery(ui: &AppWindow, ctx: &WireCtx) {
                 1 => {
                     let path = ctrl.borrow().delivery_result_location(false);
                     if let Some(path) = path {
-                        if let Err(error) =
-                            naygo_platform::clipboard::write_text(&path.to_string_lossy())
-                        {
-                            ctrl.borrow_mut().pending_shell_error = Some(format!("{error:?}"));
-                        }
+                        let _ = ctrl
+                            .borrow_mut()
+                            .ops
+                            .write_clipboard_text(&path.to_string_lossy());
                     }
                 }
                 2 => {

@@ -259,15 +259,8 @@ impl WorkspaceCtrl {
             } else if op.token.is_cancelled() {
                 self.config.t("app.cancelled")
             } else {
-                let error = summary
-                    .items
-                    .iter()
-                    .find_map(|item| match &item.outcome {
-                        naygo_core::ops::OpOutcome::Failed(error) => Some(error.as_str()),
-                        _ => None,
-                    })
-                    .unwrap_or("");
-                format!("{}\n{}", self.config.t("delivery.failed"), error)
+                let texts = crate::vm_builders::OpDetailTexts::from_config(&self.config);
+                delivery_failure_message(&self.config.t("delivery.failed"), &texts, summary)
             };
             let job = self.delivery_results.pending.remove(i);
             self.delivery_results.latest = Some(DeliveryReceipt {
@@ -290,10 +283,10 @@ impl WorkspaceCtrl {
             .job
             .sources
             .iter()
-            .map(|p| p.to_string_lossy().replace('/', "\\").to_lowercase())
+            .map(|p| naygo_core::path_identity::key(p))
             .collect();
         for (i, path) in self.basket.items().iter().enumerate() {
-            if keys.contains(&path.to_string_lossy().replace('/', "\\").to_lowercase()) {
+            if keys.contains(&naygo_core::path_identity::key(path)) {
                 self.basket_selection
                     .select(self.basket.items(), i, true, false);
             }
@@ -320,5 +313,55 @@ impl WorkspaceCtrl {
         } else {
             Some(destination.clone())
         }
+    }
+}
+
+/// Mensaje de una entrega fallida: el título traducido y el primer motivo del motor con sus
+/// códigos estructurados (carpeta ilegible, Papelera…) ya traducidos, nunca en crudo.
+fn delivery_failure_message(
+    title: &str,
+    texts: &crate::vm_builders::OpDetailTexts,
+    summary: &naygo_core::ops::OpSummary,
+) -> String {
+    let error = summary
+        .items
+        .iter()
+        .find_map(|item| match &item.outcome {
+            naygo_core::ops::OpOutcome::Failed(error) => Some(texts.localize(error)),
+            _ => None,
+        })
+        .unwrap_or_default();
+    format!("{title}\n{error}")
+}
+
+#[cfg(test)]
+mod failure_message_tests {
+    use super::*;
+
+    #[test]
+    fn el_mensaje_de_entrega_fallida_traduce_los_codigos_internos() {
+        let texts = crate::vm_builders::OpDetailTexts {
+            trash_unconfirmed: String::new(),
+            trash_not_supported: String::new(),
+            trash_restored_elsewhere: String::new(),
+            unreadable_folder: "T-UNREADABLE {reason}".into(),
+            link_not_copied: String::new(),
+            link_not_moved: String::new(),
+            publish_failed: String::new(),
+            identity_unknown: String::new(),
+        };
+        let summary = naygo_core::ops::OpSummary {
+            items: vec![naygo_core::ops::OpItem {
+                dest: std::path::PathBuf::from("d"),
+                src: None,
+                outcome: naygo_core::ops::OpOutcome::Failed(
+                    naygo_core::ops::unreadable_folder_failure("denied"),
+                ),
+            }],
+            ..Default::default()
+        };
+        let message = delivery_failure_message("TITLE", &texts, &summary);
+        assert_eq!(message, "TITLE\nT-UNREADABLE denied");
+        assert!(!message.contains("naygo:") && !message.contains('\u{1f}'));
     }
 }

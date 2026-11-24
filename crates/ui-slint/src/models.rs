@@ -8,6 +8,8 @@
 // estos modelos son ESTABLES y se mutan in situ (ver `sync.rs`). Extraídos de `main.rs` sin
 // cambio de comportamiento (refactor por tamaño de archivo).
 
+use crate::rows_model::RowsModel;
+use crate::tree_rows_model::TreeRowsModel;
 use crate::*;
 use naygo_core::workspace::layout::Rect;
 use naygo_core::workspace::{PaneId, PanePurpose};
@@ -16,12 +18,12 @@ use std::rc::Rc;
 
 /// Modelos de lista ESTABLES de un panel (solo el que aplica a su tipo se usa).
 pub(crate) struct PaneModels {
-    pub(crate) rows: Rc<VecModel<RowData>>,
+    pub(crate) rows: Rc<RowsModel>,
     /// Columnas visibles del panel Files (6C): se actualizan in situ como las filas.
     pub(crate) columns: Rc<VecModel<ColumnVm>>,
     /// TODAS las columnas (para el menú agregar/quitar) (6C).
     pub(crate) col_menu: Rc<VecModel<ColumnToggleVm>>,
-    pub(crate) tree: Rc<VecModel<TreeRow>>,
+    pub(crate) tree: Rc<TreeRowsModel>,
     pub(crate) favs: Rc<VecModel<NavRow>>,
     pub(crate) recents: Rc<VecModel<NavRow>>,
     pub(crate) frequent_dirs: Rc<VecModel<NavRow>>,
@@ -34,10 +36,10 @@ pub(crate) struct PaneModels {
 impl PaneModels {
     pub(crate) fn new() -> PaneModels {
         PaneModels {
-            rows: Rc::new(VecModel::default()),
+            rows: Rc::new(RowsModel::default()),
             columns: Rc::new(VecModel::default()),
             col_menu: Rc::new(VecModel::default()),
-            tree: Rc::new(VecModel::default()),
+            tree: Rc::new(TreeRowsModel::default()),
             favs: Rc::new(VecModel::default()),
             recents: Rc::new(VecModel::default()),
             frequent_dirs: Rc::new(VecModel::default()),
@@ -64,6 +66,8 @@ pub(crate) struct Models {
     pub(crate) groups: Vec<(Vec<PaneId>, usize)>,
     /// Área con la que se construyó la estructura actual (para detectar resize).
     pub(crate) area: Rect,
+    /// VM de la vista previa: lo comparten `sync_rows` y el timer de animación.
+    pub(crate) preview_vm: crate::persistent_models::PreviewVmCache,
 }
 
 impl Models {
@@ -82,6 +86,7 @@ impl Models {
                 w: 0.0,
                 h: 0.0,
             },
+            preview_vm: Default::default(),
         }
     }
 

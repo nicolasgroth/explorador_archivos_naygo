@@ -48,6 +48,88 @@ impl WorkspaceCtrl {
         })
     }
 
+    /// Captura solo destinos Files. Bandeja no admite entregas OLE externas silenciosas.
+    pub fn capture_external_drop_destination(
+        &self,
+        x: f32,
+        y: f32,
+        client_y: f32,
+    ) -> Option<naygo_platform::drop_target::CapturedDropDestination> {
+        let id = self.pane_at(x, y)?;
+        let files = self.ws.pane(id)?.files.as_ref()?;
+        let deep_folder = self.is_deep_active(id);
+        let path = if deep_folder {
+            // No usar hover de otro punto/panel ni inferir destino durante un relistado.
+            if self.drag_over_pane != Some(id) || self.drag_over_client_y != Some(client_y) {
+                return None;
+            }
+            self.deep_hover_folder(id)?
+        } else {
+            files.current_dir.clone()
+        };
+        Some(naygo_platform::drop_target::CapturedDropDestination {
+            pane_id: id.0,
+            panel_path: files.current_dir.clone(),
+            navigation_revision: files.navigation_revision,
+            path,
+            deep_folder,
+        })
+    }
+
+    /// Revalida la identidad capturada tras la preparación asíncrona, sin I/O en UI.
+    pub fn external_destination_still_open(
+        &self,
+        destination: &naygo_platform::drop_target::CapturedDropDestination,
+    ) -> bool {
+        let id = PaneId(destination.pane_id);
+        let Some(files) = self.ws.pane(id).and_then(|pane| pane.files.as_ref()) else {
+            return false;
+        };
+        if files.current_dir != destination.panel_path
+            || files.navigation_revision != destination.navigation_revision
+        {
+            return false;
+        }
+        if !destination.deep_folder {
+            return true;
+        }
+        self.is_deep_active(id)
+            && self
+                .deep_job
+                .as_ref()
+                .is_some_and(|job| job.replacement_items.is_none())
+            && self
+                .deep_position_of(id, &destination.path)
+                .and_then(|position| self.deep_visible_entry(id, position))
+                .is_some_and(|entry| entry.is_dir())
+    }
+
+    /// La fila debe ser la misma carpeta que fue acreditada durante el hover.
+    pub(super) fn deep_hover_folder(&self, target: PaneId) -> Option<PathBuf> {
+        if self.deep_job.as_ref()?.replacement_items.is_some() {
+            return None;
+        }
+        self.drag_over_deep_folder
+            .as_ref()
+            .and_then(|(pane, pos, path)| {
+                (*pane == target && self.drag_over_row == Some((*pane, *pos)))
+                    .then(|| self.deep_visible_entry(*pane, *pos))
+                    .flatten()
+                    .filter(|entry| entry.is_dir() && entry.path == *path)
+                    .map(|entry| entry.path.clone())
+            })
+    }
+
+    /// El hover externo solo marca paneles que aceptan el destino capturado.
+    pub fn drop_hover_pane(&self, x: f32, y: f32, internal_source: bool) -> Option<PaneId> {
+        if internal_source {
+            self.pane_at(x, y)
+        } else {
+            let pane = self.pane_at(x, y)?;
+            self.ws.pane(pane)?.files.as_ref().map(|_| pane)
+        }
+    }
+
     /// Fija el panel resaltado por arrastre (hover de drop). Conserva esta API pequeña para los
     /// callers que no traen coordenadas (y para las pruebas); el camino OLE usa
     /// `set_drag_over_at` para además informar la fila destino a `FilePanel`.
@@ -60,11 +142,16 @@ impl WorkspaceCtrl {
     /// Devuelve `true` cuando Slint debe refrescar los `PaneVm`.
     pub fn set_drag_over_at(&mut self, pane: Option<PaneId>, client_y: Option<f32>) -> bool {
         let changed = self.drag_over_pane != pane || self.drag_over_client_y != client_y;
-        if self.drag_over_pane != pane {
+        if self.drag_over_pane != pane
+            || (self.drag_over_client_y != client_y
+                && pane.is_some_and(|id| self.is_deep_active(id)))
+        {
             self.drag_over_row = None;
+            self.drag_over_deep_folder = None;
         }
         if pane.is_none() {
             self.drag_over_row = None;
+            self.drag_over_deep_folder = None;
         }
         self.drag_over_pane = pane;
         self.drag_over_client_y = client_y;
@@ -93,6 +180,19 @@ impl WorkspaceCtrl {
     pub fn set_drag_over_row(&mut self, pane: PaneId, row: i32) {
         self.drag_over_row =
             (self.drag_over_pane == Some(pane) && row >= 0).then_some((pane, row as usize));
+        self.drag_over_deep_folder = self.drag_over_row.and_then(|(id, pos)| {
+            self.is_deep_active(id)
+                .then(|| self.deep_visible_entry(id, pos))
+                .flatten()
+                .filter(|entry| entry.is_dir())
+                .map(|entry| (id, pos, entry.path.clone()))
+        });
+    }
+
+    pub(crate) fn set_drop_viewport(&mut self, pane: PaneId, viewport: crate::DropViewport) {
+        if self.ws.pane(pane).is_some_and(|p| p.files.is_some()) {
+            self.drop_viewports.insert(pane, viewport);
+        }
     }
 
     /// Handles de splitter (para pintarlos y arrastrarlos).
@@ -230,6 +330,9 @@ impl WorkspaceCtrl {
     }
 
     pub fn set_active(&mut self, id: PaneId) {
+        if self.ws.active_id() != Some(id) {
+            self.close_context_menu();
+        }
         if self.maximized_pane.is_some_and(|solo| solo != id) {
             self.maximized_pane = None;
         }
@@ -318,7 +421,7 @@ impl WorkspaceCtrl {
             .ws
             .active_files()
             .map(|f| f.current_dir.clone())
-            .unwrap_or_else(|| std::path::PathBuf::from("C:/"));
+            .unwrap_or_else(|| self.configured_home_dir());
         let active = self.ws.active_id();
         let new_id = self.ws.add_pane(PanePurpose::Files, dir.clone());
         self.apply_default_table(new_id);
@@ -339,6 +442,36 @@ impl WorkspaceCtrl {
     /// inicializa su `DirTree` desde las unidades del sistema.
     pub fn add_pane_of(&mut self, purpose: PanePurpose, area: Rect) {
         crate::logging::breadcrumb(&format!("abrir panel {:?}", purpose));
+        if matches!(purpose, PanePurpose::Operations) {
+            self.ensure_ops_pane();
+            self.automatic_operations_pane = None;
+            self.automatic_operations_prior.clear();
+            let existing = self
+                .ws
+                .panes()
+                .iter()
+                .find(|p| p.purpose == purpose)
+                .map(|p| p.id);
+            if let Some(id) = existing {
+                self.set_active(id);
+            }
+            return;
+        }
+        if matches!(
+            purpose,
+            PanePurpose::Basket | PanePurpose::Favorites | PanePurpose::Preview
+        ) {
+            let existing = self
+                .ws
+                .panes()
+                .iter()
+                .find(|p| p.purpose == purpose)
+                .map(|p| p.id);
+            if let Some(id) = existing {
+                self.set_active(id);
+                return;
+            }
+        }
         if matches!(purpose, PanePurpose::Search) {
             self.open_search_pane(area);
             return;
@@ -351,7 +484,7 @@ impl WorkspaceCtrl {
             .ws
             .active_files()
             .map(|f| f.current_dir.clone())
-            .unwrap_or_else(|| PathBuf::from("C:/"));
+            .unwrap_or_else(|| self.configured_home_dir());
         let active = self.ws.active_id();
         let new_id = self.ws.add_pane(purpose, dir);
         if matches!(purpose, PanePurpose::Files) {
@@ -363,7 +496,7 @@ impl WorkspaceCtrl {
                 .split_leaf(active, SplitDir::Horizontal, new_id);
         }
         if matches!(purpose, PanePurpose::Tree) {
-            self.trees.insert(new_id, build_tree());
+            self.trees.insert(new_id, self.build_tree());
             // Resalta de entrada la carpeta del panel Files activo y arranca el reveal hacia ella
             // (el árbol nuevo aparece ya expandido hasta la carpeta donde está el usuario).
             if let Some(cur) = self.ws.active_files().map(|f| f.current_dir.clone()) {
@@ -407,7 +540,7 @@ impl WorkspaceCtrl {
             .and_then(|id| self.ws.pane(id))
             .and_then(|p| p.files.as_ref())
             .map(|f| f.current_dir.clone())
-            .unwrap_or_else(|| PathBuf::from("C:/"));
+            .unwrap_or_else(|| self.configured_home_dir());
         let id = self.ws.add_pane(PanePurpose::Search, root);
         if let Some(anchor) = anchor {
             self.ws.layout.split_leaf(anchor, SplitDir::Horizontal, id);
@@ -425,7 +558,7 @@ impl WorkspaceCtrl {
             .and_then(|id| self.ws.pane(id))
             .and_then(|p| p.files.as_ref())
             .map(|f| f.current_dir.clone())
-            .unwrap_or_else(|| PathBuf::from("C:/"));
+            .unwrap_or_else(|| self.configured_home_dir());
         let anchor = self.ws.active_id();
         let files = self.ws.add_pane(PanePurpose::Files, dir.clone());
         self.apply_default_table(files);
@@ -443,7 +576,7 @@ impl WorkspaceCtrl {
         self.ws.layout.swap_split_children(files, tree);
         self.ws.link_tree(tree, files);
 
-        let mut model = build_tree();
+        let mut model = self.build_tree();
         model.set_active(dir.clone());
         self.trees.insert(tree, model);
         self.reveal_targets.insert(tree, dir.clone());
@@ -471,7 +604,7 @@ impl WorkspaceCtrl {
             .ws
             .active_files()
             .map(|f| f.current_dir.clone())
-            .unwrap_or_else(|| PathBuf::from("C:/"));
+            .unwrap_or_else(|| self.configured_home_dir());
         let active = self.ws.active_id();
         let split = active
             .and_then(|id| {
@@ -482,13 +615,57 @@ impl WorkspaceCtrl {
             })
             .unwrap_or(SplitDir::Horizontal);
         let new_id = self.ws.add_pane(PanePurpose::Operations, dir);
-        if let Some(active) = active {
+        if let Some(layout) = self
+            .operations_placement
+            .as_ref()
+            .and_then(|placement| placement.restore(&self.ws.layout, new_id))
+        {
+            self.ws.layout = layout;
+        } else if let Some(active) = active {
             self.ws.layout.split_leaf(active, split, new_id);
         }
+        self.automatic_operations_pane = Some(new_id);
+        self.automatic_operations_prior = self
+            .ops
+            .active_ops
+            .iter()
+            .filter(|op| op.summary.is_some())
+            .map(|op| op.id)
+            .collect();
         // Restaurar el activo previo (el panel de Operaciones no toma el foco).
         if let Some(prev) = prev_active {
             self.set_active(prev);
         }
+    }
+
+    /// Oculta solo el panel automático tras terminar toda la cola sin fallos ni omisiones. El
+    /// historial permanece en OpsCtrl; los paneles abiertos por el usuario no se cierran.
+    pub fn maybe_hide_automatic_operations(&mut self, idle: bool) -> bool {
+        let Some(pane) = self.automatic_operations_pane else {
+            return false;
+        };
+        if !self.config.settings.auto_hide_operations || !idle || self.ops.pending_dialog.is_some()
+        {
+            return false;
+        }
+        let mut relevant = self
+            .ops
+            .active_ops
+            .iter()
+            .filter(|op| !self.automatic_operations_prior.contains(&op.id));
+        if self.ops.has_pending_operation_error()
+            || relevant.any(|op| {
+                op.summary
+                    .as_ref()
+                    .is_none_or(|summary| summary.count_failed() > 0 || summary.count_skipped() > 0)
+            })
+        {
+            self.automatic_operations_pane = None;
+            self.automatic_operations_prior.clear();
+            return false;
+        }
+        self.close_pane(pane);
+        self.ws.pane(pane).is_none()
     }
 
     /// Los paneles que se cierran junto con `id`. Un explorador enlazado Árbol+Files es una
@@ -508,12 +685,21 @@ impl WorkspaceCtrl {
     /// workspace. Se comparte entre el cierre normal y el de una pestaña para que el cierre
     /// de una pareja enlazada no deje workers ni estado visual huérfanos.
     fn release_pane_resources(&mut self, id: PaneId) {
+        self.pending_created_activation.remove(&id);
+        self.creation_selection.remove(&id);
+        if let Some(cancel) = &self.missing_probe_cancel {
+            cancel.cancel();
+        }
+        self.missing_probe_revision = self.missing_probe_revision.wrapping_add(1);
         if self.ws.pane(id).map(|p| p.purpose) == Some(PanePurpose::Search) {
             self.close_search();
         }
         if let Some(l) = self.listings.remove(&id) {
             l.cancel();
         }
+        self.pending_file_listings.remove(&id);
+        self.automatic_listings.remove(&id);
+        self.drop_viewports.remove(&id);
         self.trees.remove(&id);
         self.reveal_targets.remove(&id);
         // Purgar los listados de subcarpetas del árbol de este panel, cancelando sus workers.
@@ -525,6 +711,7 @@ impl WorkspaceCtrl {
                 true
             }
         });
+        self.pending_tree_listings.retain(|(pane, _)| *pane != id);
     }
 
     /// `true` si el panel `id` se puede cerrar. Los miembros de un explorador enlazado cuentan
@@ -544,6 +731,22 @@ impl WorkspaceCtrl {
         if targets.is_empty() || self.ws.panes().len() <= targets.len() {
             return;
         }
+        // La sesión pertenece al panel: al cerrarlo no queda editor que pueda confirmarla
+        // ni cancelarla. Invalidarla antes de desmontarlo evita commits tardíos y que la
+        // guarda global de teclado bloquee los paneles restantes. No se toca el filesystem.
+        if self
+            .rename_active
+            .as_ref()
+            .is_some_and(|rename| targets.contains(&rename.pane))
+        {
+            self.rename_cancel();
+        }
+        let operations = targets.iter().copied().find(|target| {
+            self.ws
+                .pane(*target)
+                .is_some_and(|p| p.purpose == PanePurpose::Operations)
+        });
+        let visible_layout = operations.map(|_| self.ws.layout.clone());
         crate::logging::breadcrumb(&format!(
             "cerrar {}",
             targets
@@ -563,6 +766,17 @@ impl WorkspaceCtrl {
         }
         for target in &targets {
             self.ws.remove_pane(*target);
+        }
+        if let (Some(pane), Some(visible)) = (operations, visible_layout) {
+            self.operations_placement = Some(naygo_core::workspace::layout::ClosedPanePlacement {
+                pane,
+                visible,
+                hidden: self.ws.layout.clone(),
+            });
+            if self.automatic_operations_pane == Some(pane) {
+                self.automatic_operations_pane = None;
+                self.automatic_operations_prior.clear();
+            }
         }
         // Si el último Files activo era parte del bloque cerrado, recomputar.
         if self
@@ -805,7 +1019,8 @@ impl WorkspaceCtrl {
             .pane(origin)
             .and_then(|p| p.files.as_ref())
             .map(|f| f.current_dir.clone());
-        if self.selected_paths().is_empty() {
+        let sources = self.operation_sources();
+        if sources.is_empty() {
             return false;
         }
         use naygo_core::destination_radar::{
@@ -889,14 +1104,96 @@ impl WorkspaceCtrl {
         }
         self.destination_radar = Some(DestinationRadar {
             move_files,
-            sources: self.selected_paths(),
+            sources,
             candidates,
             origin: DestinationRadarOrigin::FilesSelection,
+            drop_staging: None,
+            drop_copy_forced: false,
+            drop_internal_source: false,
+            drop_panes: Vec::new(),
         });
         false
     }
 
+    /// No infiere el panel original: el usuario debe elegir expresamente una carpeta abierta.
+    pub fn open_external_drop_selector(
+        &mut self,
+        paths: Vec<PathBuf>,
+        move_hint: bool,
+        copy_forced: bool,
+        internal_source: bool,
+        staging: Option<naygo_platform::drop_target::StagedDrop>,
+    ) -> bool {
+        if paths.is_empty()
+            || self.destination_radar.is_some()
+            || self.pending_drop.is_some()
+            || self.ops.pending_dialog.is_some()
+            || self.drop_collision_rx.is_some()
+        {
+            return false;
+        }
+        use naygo_core::destination_radar::{DestinationCandidate, DestinationSource};
+        let mut panes = Vec::new();
+        let mut candidates = Vec::new();
+        for (id, _) in self.pane_rects(self.last_area) {
+            if let Some(files) = self.ws.pane(id).and_then(|p| p.files.as_ref()) {
+                panes.push(id);
+                candidates.push(DestinationCandidate {
+                    path: files.current_dir.clone(),
+                    label: format!("{} · {}", self.pane_label(id), id.0),
+                    source: DestinationSource::OpenPanel,
+                });
+            }
+        }
+        if candidates.is_empty() {
+            return false;
+        }
+        self.destination_radar = Some(DestinationRadar {
+            move_files: move_hint,
+            sources: paths,
+            candidates,
+            origin: DestinationRadarOrigin::ExternalDrop,
+            drop_staging: staging,
+            drop_copy_forced: copy_forced,
+            drop_internal_source: internal_source,
+            drop_panes: panes,
+        });
+        true
+    }
+
     pub fn destination_radar_resolve(&mut self, index: usize) {
+        if let Some(radar) = self.destination_radar.as_ref() {
+            if radar.origin == DestinationRadarOrigin::ExternalDrop {
+                let Some((&pane, candidate)) =
+                    radar.drop_panes.get(index).zip(radar.candidates.get(index))
+                else {
+                    return;
+                };
+                let path = candidate.path.clone();
+                if self
+                    .ws
+                    .pane(pane)
+                    .and_then(|p| p.files.as_ref())
+                    .is_none_or(|f| f.current_dir != path)
+                {
+                    self.destination_radar = None;
+                    self.pending_listing_error = Some(self.config.t("drop.check_failed"));
+                    return;
+                }
+                let radar = self.destination_radar.take().expect("radar existe");
+                let internal = radar.drop_internal_source;
+                self.queue_selected_external_drop(
+                    pane,
+                    path,
+                    radar.move_files,
+                    radar.drop_copy_forced,
+                    radar.sources,
+                    radar.drop_staging,
+                );
+                self.pending_drop_external_confirmation = !internal && self.pending_drop.is_some();
+                return;
+            }
+        }
         let Some(radar) = self.destination_radar.take() else {
             return;
         };
@@ -930,6 +1227,7 @@ impl WorkspaceCtrl {
             DestinationRadarOrigin::Basket => {
                 self.basket_transfer_paths(radar.sources, path, radar.move_files);
             }
+            DestinationRadarOrigin::ExternalDrop => { /* selección solo por panel identificado */ }
         }
     }
 
@@ -1052,9 +1350,8 @@ impl WorkspaceCtrl {
     /// etiqueta = letra (p. ej. "C:"), ícono de disco cacheado, ruta = raíz. Clic navega el
     /// panel Files activo a la raíz. Se reconsulta al cambiar los dispositivos (USB).
     pub fn drive_strip(&mut self) -> Vec<NavRow> {
-        let drives = naygo_platform::drives::drives();
-        drives
-            .into_iter()
+        self.drive_snapshot
+            .iter()
             .map(|d| {
                 let icon = self
                     .icons
@@ -1069,42 +1366,6 @@ impl WorkspaceCtrl {
                 }
             })
             .collect()
-    }
-
-    /// ¿La unidad cuya raíz es `root` es extraíble (USB)? Se usa para mostrar el
-    /// botón/menú de expulsión solo en unidades extraíbles. Consulta el tipo de
-    /// la unidad en caliente (barato: una llamada a GetDriveTypeW por unidad).
-    pub fn is_removable(&self, root: &Path) -> bool {
-        naygo_platform::drives::drives()
-            .into_iter()
-            .any(|d| d.path == root && d.kind == naygo_core::icon_kind::DriveKind::Removable)
-    }
-
-    /// Expulsa de forma segura la unidad extraíble cuya raíz es `root`. Devuelve
-    /// `Ok(())` si se desmontó y expulsó sin forzar. Si hay archivos abiertos
-    /// (volumen bloqueado) NO fuerza: devuelve [`EjectOutcome::InUse`]. La UI
-    /// mapea el resultado a un toast localizado.
-    pub fn eject_drive(&self, root: PathBuf) -> EjectOutcome {
-        crate::logging::breadcrumb(&format!("expulsar USB {}", root.display()));
-        // Guardia de seguridad: solo se expulsan unidades extraíbles. Nunca se debe
-        // intentar desmontar una fija/de red aunque la UI lo pidiera por error.
-        if !self.is_removable(&root) {
-            let msg = format!("expulsar USB {}: no es extraíble", root.display());
-            crate::logging::log_line(&msg);
-            return EjectOutcome::Failed("not a removable drive".into());
-        }
-        match naygo_platform::eject::eject_drive(&root) {
-            Ok(()) => EjectOutcome::Ok,
-            Err(naygo_platform::eject::EjectError::InUse) => {
-                crate::logging::log_line(&format!("expulsar USB {}: en uso", root.display()));
-                EjectOutcome::InUse
-            }
-            Err(e) => {
-                let msg = format!("expulsar USB {}: fallo — {}", root.display(), e);
-                crate::logging::log_line(&msg);
-                EjectOutcome::Failed(e.to_string())
-            }
-        }
     }
 
     /// Suelta el handle que la app mantiene sobre la carpeta del panel `id`: cierra su watcher.

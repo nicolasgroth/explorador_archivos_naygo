@@ -5,10 +5,10 @@
 
 use crate::bridge::{
     fav_tree_rows, favorite_rows, frequent_dir_rows, history_rows, inspector_info, recent_rows,
-    rows_from_view, str_to_group_id, tree_rows, FavTreeRow, HistRow, InspectorInfo, NavRow,
-    PlainRow, TreeRow, VisibilityFlags,
+    rows_from_view, rows_from_view_positions, str_to_group_id, tree_rows, FavTreeRow, HistRow,
+    InspectorInfo, NavRow, PlainRow, TreeRow, VisibilityFlags,
 };
-use crate::listing::Listing;
+use crate::listing::{Listing, PollBudget};
 use naygo_core::favorites::{favorites_path, FavNode, Favorites, NodeId};
 use naygo_core::fs_model::{EntryKind, SortKey};
 use naygo_core::keymap::Action;
@@ -20,12 +20,23 @@ use naygo_core::workspace::layout::{
     Rect, SerializableDockLayout, SplitDir, SplitHandle, SplitStep,
 };
 use naygo_core::workspace::{FilePaneState, PaneId, PanePurpose, Workspace};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{
+    mpsc::{self, Receiver, Sender},
+    Mutex,
+};
 use std::time::SystemTime;
 
 const PAGE_ROWS: usize = 20;
+
+#[derive(Default)]
+struct StartupCliOverrides {
+    layout: Option<String>,
+    dir: Option<PathBuf>,
+    dir_arg_raw: Option<String>,
+    theme: Option<String>,
+}
 
 /// Destino resuelto de una acción «hacia otro panel».
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -36,6 +47,16 @@ pub enum PaneTarget {
     Pick(Vec<PaneId>),
     /// No hay otro panel Files: primero hay que dividir el actual.
     NeedsSplit,
+}
+
+/// Resultado terminal o estado del worker de preconsulta de conflictos del drop.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DropProbeEvent {
+    Idle,
+    Waiting,
+    Confirmation,
+    Started,
+    Failed,
 }
 
 /// Resultado de un intento de expulsión segura de una unidad extraíble. La UI lo
@@ -49,6 +70,14 @@ pub enum EjectOutcome {
     InUse,
     /// Otra falla (el mensaje describe el código).
     Failed(String),
+}
+
+/// Resultado de expulsión para aplicar en el hilo UI una vez que termine el worker.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EjectCompletion {
+    pub root: PathBuf,
+    pub panes: Vec<PaneId>,
+    pub outcome: EjectOutcome,
 }
 
 /// Una acción multi-panel pendiente de elegir destino (cuando hay 3+ paneles).
@@ -82,12 +111,17 @@ pub struct DestinationRadar {
     /// La operación que se confirma al elegir un destino. El radar se comparte entre la
     /// selección de un panel Files y la bandeja temporal, sin confundir sus rutas de origen.
     pub origin: DestinationRadarOrigin,
+    pub drop_staging: Option<naygo_platform::drop_target::StagedDrop>,
+    pub drop_copy_forced: bool,
+    pub drop_internal_source: bool,
+    pub drop_panes: Vec<PaneId>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DestinationRadarOrigin {
     FilesSelection,
     Basket,
+    ExternalDrop,
 }
 
 /// Estado estable de una sesión de renombrado inline.
@@ -101,28 +135,94 @@ pub struct RenameRequest {
     pub pos: usize,
     pub source: PathBuf,
     pub name: String,
+    pub is_dir: bool,
     pub stage: u8,
     /// Offsets UTF-8 (bytes), que es la unidad exigida por `LineEdit::set-selection-offsets`.
     pub selection: (usize, usize),
 }
 
+pub(super) struct CreationSelection {
+    pub dir: PathBuf,
+    pub targets: HashSet<PathBuf>,
+    /// Al exceder el límite, preservar la elección frente a cualquier llegada de la carpeta.
+    pub overflow: bool,
+    pub overridden: bool,
+}
+
+impl CreationSelection {
+    fn protects(&self, path: &std::path::Path) -> bool {
+        self.overflow || self.targets.contains(path)
+    }
+}
+
 pub struct WorkspaceCtrl {
     pub ws: Workspace,
+    /// Posición anterior del panel de operaciones cuando se cerró.
+    pub operations_placement: Option<naygo_core::workspace::layout::ClosedPanePlacement>,
+    /// Panel abierto automáticamente, que puede cerrarse al finalizar las operaciones.
+    pub automatic_operations_pane: Option<PaneId>,
+    /// Operaciones ya terminadas al abrir el panel automático; no afectan su cierre posterior.
+    pub automatic_operations_prior: HashSet<u64>,
     /// Presentación temporal; nunca se serializa ni sustituye el layout guardado.
     pub maximized_pane: Option<PaneId>,
     /// Configuración de la app (settings + i18n + temas + atajos), cargada del core y
     /// persistida en el directorio portable. El keymap vive aquí (`config.keymap`).
     pub config: crate::config_ctrl::ConfigCtrl,
+    /// Resultado acotado de la carga inicial; sólo se drena desde el event loop.
+    startup_load_rx: Option<Receiver<Result<crate::startup_load::StartupData, String>>>,
+    startup_async_enabled: bool,
+    startup_load_failed: bool,
+    startup_session_baseline: Option<String>,
+    startup_session_dirty: bool,
+    startup_load_applied: bool,
+    startup_cli_overrides: Option<StartupCliOverrides>,
+    startup_warnings: Vec<String>,
+    startup_pending_theme: Option<String>,
     /// Un listado en curso por panel (la carpeta de cada panel se lista por separado).
     pub listings: HashMap<PaneId, Listing>,
+    /// Admisiones de listados de Files, árbol y sondeo de carpetas ausentes: un cupo local (8) y
+    /// otro remoto (4) para que los shares colgados nunca dejen sin plaza a los discos locales.
+    /// Los máximos evitan un hilo por cada expansión rápida; los permisos viven en los workers
+    /// hasta su salida real. Elegir el cupo usa `drive_snapshot` (sin I/O): ver
+    /// `listing_admission_for`.
+    pub(crate) listing_admissions: naygo_core::listing::ListingAdmissions,
+    /// Última navegación pendiente por panel cuando no hay plaza; una tecla rápida reemplaza la
+    /// ruta pendiente en vez de acumular un worker por cada destino intermedio.
+    pub(crate) pending_file_listings: HashMap<PaneId, PathBuf>,
+    /// Snapshots automáticos de la carpeta visible. Se publican al completar la lectura para
+    /// que el streaming de reconciliación no reemplace filas existentes con una lista parcial.
+    automatic_listings: HashMap<PaneId, Vec<naygo_core::fs_model::Entry>>,
+    /// Protege Enter del foco anterior mientras se confirma y relista una creación solicitada.
+    /// Estado efímero por panel; nunca bloquea workers ni consultas de filesystem.
+    pub(super) pending_created_activation: HashMap<PaneId, PathBuf>,
+    /// Solicita un aviso breve cuando Enter no puede actuar por una creación aún pendiente.
+    pub(super) creation_wait_notice: bool,
+    pub(super) deep_selection_notice: bool,
+    pub(super) listing_export: Option<listing_export::ListingExport>,
+    /// Últimos destinos creados desde cada panel; evita que un resultado o watcher tardío
+    /// reemplace una selección explícita. Se descarta al navegar, cerrar o iniciar otra creación.
+    pub(super) creation_selection: HashMap<PaneId, CreationSelection>,
+    file_listing_cursor: usize,
+    /// Un evento durante el snapshot exige una reconciliación al terminar (sin perderlo).
+    pub(super) dirty_listings: std::collections::HashSet<PaneId>,
     /// Un árbol de carpetas por panel Tree (lazy; se llena con workers solo-dirs).
     pub trees: HashMap<PaneId, DirTree>,
+    /// Snapshot de unidades entregado por el worker. La UI sólo lee este caché; Win32/USB nunca
+    /// se consulta desde callbacks ni al construir/restaurar un árbol.
+    pub drive_snapshot: Vec<naygo_platform::drives::DriveInfo>,
+    drive_refresh_rx: Option<Receiver<Vec<naygo_platform::drives::DriveInfo>>>,
+    drive_refresh_pending: bool,
+    /// Expulsión segura con validación fresca y llamadas Win32 fuera del hilo de UI.
+    eject_rx: Option<Receiver<EjectCompletion>>,
     /// Cursor de teclado por árbol (la fila enfocada para ↑↓←→). Si falta, se siembra con la
     /// carpeta activa del árbol o su primera raíz. Distinto de `active_path` (la carpeta navegada):
     /// el cursor se mueve sin navegar; Enter/→ sí navegan.
     pub tree_cursor: HashMap<PaneId, PathBuf>,
     /// Un worker solo-directorios por rama de árbol en vuelo (clave: panel + carpeta).
     pub tree_listings: HashMap<(PaneId, PathBuf), Listing>,
+    /// Ramas que esperan una plaza de worker, coalescidas por panel y carpeta.
+    pub(crate) pending_tree_listings: std::collections::HashSet<(PaneId, PathBuf)>,
+    tree_listing_cursor: usize,
     /// Destino a "revelar" en cada árbol: al navegar el Files activo, el árbol expande
     /// progresivamente los ancestros hasta esta carpeta (reveal). Se limpia al llegar.
     pub reveal_targets: HashMap<PaneId, PathBuf>,
@@ -131,6 +231,8 @@ pub struct WorkspaceCtrl {
     /// `<config>/favorites.json` al arrancar y se persiste tras cada cambio (anclar/quitar,
     /// nuevo grupo, renombrar, eliminar, mover).
     pub favorites: Favorites,
+    startup_favorites_dirty: std::cell::Cell<bool>,
+    last_favorites_save: Mutex<Option<naygo_core::config::SaveTicket>>,
     /// Grupos EXPANDIDOS del panel de favoritos, por su "ruta de nombres" ("Trabajo/Sub").
     /// Es una clave estable que sobrevive al reordenamiento de índices (a diferencia del
     /// `GroupId` numérico). Estado de UI: no se persiste.
@@ -168,8 +270,12 @@ pub struct WorkspaceCtrl {
     /// Asistente de sincronización en curso (planificación/preview). Todo el recorrido vive en
     /// su worker y se cancela al cerrar o cambiar opciones.
     pub sync_assistant: Option<sync_assistant::SyncAssistantState>,
+    /// Contador de planificaciones del asistente (ver `SyncAssistantState::generation`).
+    sync_generation: u64,
     /// Modal/job de transformación de texto. El diagnóstico y la escritura corren en workers.
     pub text_transform: Option<text_transform::TextTransformState>,
+    /// Worker cancelado al cerrar el diálogo, conservado hasta su mensaje terminal.
+    pub(super) retired_text_transform: Option<text_transform::TextTransformState>,
     /// Selector de panel destino en curso (overlay 1..9), si lo hay.
     pub pending_pick: Option<PanePick>,
     /// Radar F-6 de destinos no limitado a paneles abiertos.
@@ -191,12 +297,26 @@ pub struct WorkspaceCtrl {
     /// hit-test de `body-touch`; `drop_at` la transforma a una carpeta destino si corresponde.
     /// `None` representa encabezado, zona vacía o un panel que no es Files.
     pub drag_over_row: Option<(PaneId, usize)>,
-    /// Drop intra-app (entre paneles) en ESPERA de confirmación del usuario (decisión de Nicolás:
-    /// "confirmar al soltar"). `drop_at` ya validó (destino Files, no es la propia carpeta) y guardó
-    /// aquí la operación; la UI muestra un modal "¿Copiar/Mover N a «destino»?" y, al confirmar,
-    /// llama a `confirm_pending_drop` que arranca la op de verdad. Al cancelar, `cancel_pending_drop`
+    /// Identidad capturada de la carpeta profunda bajo el puntero; no se persiste.
+    pub drag_over_deep_folder: Option<(PaneId, usize, PathBuf)>,
+    /// Geometría publicada por cada lista. El drop interno usa el punto de soltado aunque
+    /// un Leave de OLE ya haya limpiado el hover. La geometría nunca se persiste.
+    pub(crate) drop_viewports: HashMap<PaneId, crate::DropViewport>,
+    /// Drop intra-app (entre paneles) en espera de la preconsulta de conflicto o de confirmación.
+    /// `drop_at` ya validó el destino; el worker decide si corresponde el modal de conflicto o el
+    /// modal genérico "¿Copiar/Mover N a «destino»?". Al cancelar, `cancel_pending_drop`
     /// lo descarta. `None` = no hay drop pendiente. Estado transitorio: no se persiste.
     pub pending_drop: Option<PendingDrop>,
+    /// Worker de la preconsulta de conflictos de drop. Se admite un único probe en vuelo para
+    /// que un share lento no cree hilos ilimitados; los nuevos drops se consumen y notifican.
+    pub drop_collision_rx: Option<Receiver<Result<bool, String>>>,
+    /// Cancelación cooperativa entre rutas del probe de conflictos. No puede interrumpir una
+    /// syscall de filesystem que haya quedado bloqueada dentro del SO.
+    pub drop_collision_cancel: Option<naygo_core::CancellationToken>,
+    /// Drop libre cuya confirmación genérica ya puede abrirse en UI.
+    pub pending_drop_confirmation: bool,
+    /// Exige confirmar el destino completo para un drop OLE externo.
+    pub pending_drop_external_confirmation: bool,
     /// Último clic (panel, posición de vista, instante) para detectar el doble-clic en Rust
     /// sin depender del `double-clicked` de Slint (que con el renderizador por software puede
     /// no dispararse si el rastreo de clics se reinicia). Ver `on_row_clicked`.
@@ -230,6 +350,8 @@ pub struct WorkspaceCtrl {
     /// Plantillas de disposición del usuario + recientes (templates.json). Los built-in viven en
     /// código (`LayoutTemplate::builtins`). Fase 4.
     pub templates: naygo_core::workspace::TemplateStore,
+    startup_templates_dirty: std::cell::Cell<bool>,
+    last_templates_save: Mutex<Option<naygo_core::config::SaveTicket>>,
     /// Ventana de renombrado por lotes abierta (Fase 5): el spec en edición + los ítems objetivo.
     pub batch: Option<BatchRenameState>,
     /// Modal "nueva(s) carpeta(s)" abierto: carpeta destino + texto multilínea en edición.
@@ -293,6 +415,11 @@ pub struct WorkspaceCtrl {
     pub toolbar_menu_requested: Option<ToolbarMenuRequest>,
     /// Error pendiente de una operación Shell; el tick lo convierte en toast localizado.
     pub pending_shell_error: Option<String>,
+    /// Ejecutor único de acciones Shell (abrir, abrir con, runas, carpeta/terminal) en un hilo
+    /// propio: el hilo de UI solo encola y recoge resultados.
+    shell: crate::shell_exec::ShellExecutor,
+    /// Error de listado (puede indicar resultados parciales). El tick lo muestra sin modal.
+    pub pending_listing_error: Option<String>,
     /// Marcas persistentes de la última comparación de dos paneles. El valor distingue
     /// metadatos diferentes (1) de un nombre presente solo en ese lado (2).
     pub comparison: HashMap<PaneId, HashMap<PathBuf, u8>>,
@@ -304,9 +431,11 @@ pub struct WorkspaceCtrl {
     /// Revisión O(1) que invalida el modelo de filas al comparar o limpiar la comparación.
     pub comparison_revision: u64,
     /// Snapshots completos ya listados, solo durante esta sesión (F-7).
-    pub listing_snapshots: HashMap<PathBuf, Vec<naygo_core::fs_model::Entry>>,
+    pub listing_snapshots: naygo_core::listing_snapshot::ListingSnapshotStore,
     /// Cambios de la última visita por panel; los ausentes son solo informativos.
     pub visit_changes: HashMap<PaneId, Vec<naygo_core::listing_changes::ListingChange>>,
+    /// Índice de rutas New/Modified del resultado vigente; evita buscar todos los cambios por fila.
+    visit_highlights: HashMap<PaneId, std::collections::HashSet<PathBuf>>,
     pub visit_changes_revision: u64,
     /// Cache de íconos (PNG → slint::Image, decodificado una vez por set+clave). Lo posee el
     /// controlador para resolver el ícono de cada fila al pintarla. Su set activo lo fija la
@@ -327,15 +456,31 @@ pub struct WorkspaceCtrl {
     /// Se limpia cuando el panel navega a una carpeta válida.
     pub ejected_panes: std::collections::HashSet<u64>,
     /// Caché del estado "carpeta no encontrada" por panel: `(carpeta evaluada, missing,
-    /// has_existing_ancestor)`. Evita el `read_dir`/`exists` SÍNCRONO en el hilo de UI en CADA
+    /// ancestro existente más cercano)`. Evita `read_dir`/`exists` síncronos en UI en CADA
     /// tick de `sync_rows` (un share de red caído podía bloquear la UI segundos). Se recalcula
     /// solo ante eventos reales (navegar, reintentar, expulsar, cambio de discos) vía
     /// `refresh_missing_cache`, que lanza un worker (el I/O tampoco corre en la UI al navegar).
     /// La carpeta evaluada invalida entradas obsoletas al navegar (ver `pane_dir_missing`).
-    missing_cache: std::collections::HashMap<u64, (PathBuf, bool, bool)>,
+    missing_cache: std::collections::HashMap<u64, (PathBuf, bool, Option<PathBuf>)>,
     /// Probe async de "carpeta no encontrada" en vuelo (uno a lo sumo; un refresh nuevo lo
-    /// reemplaza). El tick lo drena con `pump_missing_probe`.
+    /// reemplaza por una marca de refresh pendiente, sin abrir workers adicionales. El tick lo
+    /// drena con `pump_missing_probe`.
     missing_probe: Option<std::sync::mpsc::Receiver<Vec<listing::MissingProbeHit>>>,
+    missing_probe_cancel: Option<naygo_core::cancel::CancellationToken>,
+    missing_probe_refresh_pending: bool,
+    /// Último ámbito solicitado: un panel al navegar o `None` para eventos globales.
+    missing_probe_pending_pane: Option<Option<PaneId>>,
+    missing_probe_revision: u64,
+    /// Decisión de pegado pendiente. Las colisiones de nombres se consultan en un solo worker;
+    /// mientras esté ocupado no se lanza otro para evitar acumular threads contra una red lenta.
+    paste_probe: Option<(
+        PathBuf,
+        std::sync::mpsc::Receiver<Result<naygo_core::clipboard::PastePlan, String>>,
+    )>,
+    /// Error al consultar nombres destino para el pegado, pendiente de mostrarse como toast.
+    pending_paste_probe_error: Option<String>,
+    /// Lectura externa pendiente al pegar elementos en la Cesta.
+    basket_clipboard_rx: Option<std::sync::mpsc::Receiver<naygo_core::clipboard::ClipboardContent>>,
     /// Recientes DIFERIDOS al resultado del listado, por panel. `navigate_active_to` navega sin
     /// chequeo síncrono de navegabilidad (un `read_dir` en la UI congela contra un share caído);
     /// en su lugar registra aquí la carpeta y `pump_listings` la empuja a recientes SOLO si el
@@ -366,6 +511,10 @@ pub enum ToolbarMenuRequest {
 /// Estado del menú contextual abierto.
 #[derive(Clone, Debug)]
 pub struct ContextMenuState {
+    /// Identidad efímera para invalidar callbacks y diálogos nativos de un menú anterior.
+    pub identity: std::rc::Rc<()>,
+    /// Panel que originó el gesto; nunca reutilizar sus rutas al cambiar de panel.
+    pub pane: PaneId,
     pub x: f32,
     pub y: f32,
     pub targets: Vec<PathBuf>,
@@ -377,6 +526,8 @@ pub struct ContextMenuState {
     /// al abrir el menú (no en cada tick): `folder_mode`, o clic sobre una única fila que es un
     /// directorio. Cachearlo evita un `stat` por tick que en un share de red lento sería costoso.
     pub target_is_folder: bool,
+    /// Carpeta del panel cuando se abrió el menú sobre archivos; no sigue cambios posteriores.
+    pub folder_fallback: Option<PathBuf>,
     /// El menú se abrió sobre un breadcrumb/árbol y su carpeta puede diferir de la actual.
     pub show_open_here: bool,
 }
@@ -520,6 +671,68 @@ pub struct SearchRow {
     pub icon: slint::Image,
 }
 
+/// Colección del recorrido profundo con revisión de presentación. Toda referencia mutable
+/// invalida la firma antes de modificar datos; reemplazar la colección obtiene otra identidad.
+pub struct DeepItems {
+    entries: Vec<(naygo_core::fs_model::Entry, u32)>,
+    identity: u64,
+    revision: u64,
+}
+
+impl Default for DeepItems {
+    fn default() -> Self {
+        static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        Self {
+            entries: Vec::new(),
+            identity: NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            revision: 0,
+        }
+    }
+}
+
+impl DeepItems {
+    fn signature(&self) -> (u64, u64) {
+        (self.identity, self.revision)
+    }
+}
+
+impl std::ops::Deref for DeepItems {
+    type Target = Vec<(naygo_core::fs_model::Entry, u32)>;
+    fn deref(&self) -> &Self::Target {
+        &self.entries
+    }
+}
+
+impl std::ops::DerefMut for DeepItems {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.revision = self.revision.wrapping_add(1);
+        &mut self.entries
+    }
+}
+
+impl From<Vec<(naygo_core::fs_model::Entry, u32)>> for DeepItems {
+    fn from(entries: Vec<(naygo_core::fs_model::Entry, u32)>) -> Self {
+        Self {
+            entries,
+            ..Self::default()
+        }
+    }
+}
+
+impl FromIterator<(naygo_core::fs_model::Entry, u32)> for DeepItems {
+    fn from_iter<T: IntoIterator<Item = (naygo_core::fs_model::Entry, u32)>>(iter: T) -> Self {
+        Vec::from_iter(iter).into()
+    }
+}
+
+impl<'a> IntoIterator for &'a DeepItems {
+    type Item = &'a (naygo_core::fs_model::Entry, u32);
+    type IntoIter = std::slice::Iter<'a, (naygo_core::fs_model::Entry, u32)>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.entries.iter()
+    }
+}
+
 /// Listado profundo (vista recursiva) en curso/terminado para un panel. Un solo job a la vez.
 /// Igual que SearchJob, pero las entradas se vuelcan en las filas NORMALES del panel (no en un
 /// overlay): cada una lleva su profundidad.
@@ -529,11 +742,33 @@ pub struct DeepJob {
     pub rx: std::sync::mpsc::Receiver<naygo_core::deep_listing::DeepMsg>,
     pub token: naygo_core::CancellationToken,
     /// Entradas acumuladas con su profundidad (orden de descubrimiento).
-    pub items: Vec<(naygo_core::fs_model::Entry, u32)>,
+    pub items: DeepItems,
+    /// Orden explícito de la vista profunda, independiente del listado normal.
+    deep_sort: Option<naygo_core::fs_model::SortSpec>,
+    deep_view: std::cell::RefCell<Option<deep_view::DeepView>>,
+    /// Snapshot automático en curso. Las filas visibles siguen disponibles hasta reconciliar.
+    replacement_items: Option<Vec<(naygo_core::fs_model::Entry, u32)>>,
+    /// Identidad del cursor profundo, independiente de la selección del listado normal.
+    pub focused_path: Option<PathBuf>,
+    /// Selección y ancla por identidad, independientes del orden de llegada del worker.
+    pub selected_paths: std::collections::HashSet<PathBuf>,
+    pub selection_anchor: Option<PathBuf>,
+    pub selection_revision: u64,
+    /// Contadores visibles del pie; se invalidan con entradas, selección o visibilidad.
+    footer_cache: Option<DeepFooterCache>,
+    /// Inhibe el doble clic nativo si el elemento bajo el puntero cambió entre pulsaciones.
+    pub suppress_native_double: bool,
+    pub last_pointer_path: Option<(PathBuf, std::time::Instant)>,
     pub dirs_scanned: usize,
     pub done: bool,
     pub cancelled: bool,
     pub partial: bool,
+}
+
+struct DeepFooterCache {
+    view: std::sync::Arc<[usize]>,
+    selection_revision: u64,
+    data: naygo_core::footer::FooterData,
 }
 
 /// Búsqueda recursiva en curso/terminada (overlay de resultados). Un solo job a la vez: una
@@ -568,24 +803,9 @@ pub struct SearchJob {
 pub struct BatchRenameState {
     pub spec: naygo_core::batch_rename::BatchSpec,
     pub items: Vec<naygo_core::batch_rename::BatchItem>,
-    pub existing: Vec<String>,
+    pub existing: Vec<PathBuf>,
+    pub base_dir: PathBuf,
     pub tz_offset_secs: i64,
-}
-
-/// Mezcla en `h` TODO lo que de un `Entry` determina su `PlainRow` pintada: nombre, ruta (la usan
-/// `is_cut`/`is_fresh`), tamaño, modificado, creado, y si es directorio. NO incluye `hidden`/
-/// `system` porque la visibilidad ya se hashea aparte y filtra la vista antes de llegar aquí. Sin
-/// allocs: hashea por referencia. La usa `rows_signature` (O-1).
-fn hash_entry_for_row<H: std::hash::Hasher>(e: &naygo_core::fs_model::Entry, h: &mut H) {
-    use std::hash::Hash;
-    e.name.hash(h);
-    e.path.hash(h);
-    // `EntryKind` no deriva Hash en core: su discriminante basta (solo importa Directory vs no).
-    std::mem::discriminant(&e.kind).hash(h);
-    e.size.hash(h);
-    // `SystemTime` implementa Hash; `Option` lo propaga.
-    e.modified.hash(h);
-    e.created.hash(h);
 }
 
 // --- Submódulos por responsabilidad (O-12) ---
@@ -595,11 +815,16 @@ mod basket;
 mod columns;
 mod comparison_points;
 mod context;
+pub(crate) use context::start_terminal_tools_probe;
+mod deep_selection;
+mod deep_view;
 mod delivery;
+mod drive_io;
 mod favorites;
 mod input;
 mod layout_panes;
 mod listing;
+pub(crate) mod listing_export;
 mod meta;
 mod navigation;
 mod ops;
@@ -616,42 +841,110 @@ mod tree;
 impl WorkspaceCtrl {
     /// Arranca con UN panel Files en `start` (el usuario agrega más con el botón). Lanza
     /// su listado inicial. La configuración se carga del directorio portable.
+    #[cfg(test)]
     pub fn new(start: std::path::PathBuf) -> WorkspaceCtrl {
         WorkspaceCtrl::new_in(start, naygo_core::config::portable_dir())
     }
 
+    /// Arranque de producción: recibe el directorio de config resuelto en main sin I/O; evita
+    /// explorar catálogos de usuario en el hilo UI, que se hidratan después desde PackIo.
+    pub fn new_for_ui(
+        start: std::path::PathBuf,
+        config_dir: std::path::PathBuf,
+        data_dir: std::path::PathBuf,
+    ) -> WorkspaceCtrl {
+        let mut ctrl = WorkspaceCtrl::new_with_catalog_mode(start, config_dir, data_dir, false);
+        ctrl.startup_async_enabled = true;
+        ctrl
+    }
+
     /// Como `new`, pero con el directorio de configuración explícito (para tests: permite
     /// usar un directorio temporal en vez del portable).
+    #[cfg(test)]
     pub fn new_in(start: std::path::PathBuf, config_dir: std::path::PathBuf) -> WorkspaceCtrl {
+        WorkspaceCtrl::new_with_catalog_mode(start, config_dir.clone(), config_dir, true)
+    }
+
+    fn new_with_catalog_mode(
+        start: std::path::PathBuf,
+        config_dir: std::path::PathBuf,
+        data_dir: std::path::PathBuf,
+        load_external_catalogs: bool,
+    ) -> WorkspaceCtrl {
         let mut ws = Workspace::new();
         let id = ws.add_pane(PanePurpose::Files, start.clone());
         ws.layout = SerializableDockLayout::single(id);
         ws.set_active(id);
-        let config = crate::config_ctrl::ConfigCtrl::new(config_dir.clone());
+        let config = if load_external_catalogs {
+            crate::config_ctrl::ConfigCtrl::new_with_data_dir(config_dir.clone(), data_dir.clone())
+        } else {
+            crate::config_ctrl::ConfigCtrl::new_for_ui(config_dir.clone(), data_dir)
+        };
         // El uso de disco puede bloquear en un volumen de red. El canal permite que el worker
         // publique el dato sin tocar Slint ni el controlador desde otro hilo.
         let (footer_disk_sender, footer_disk_results) = mpsc::channel();
-        let mut icons =
-            crate::icons::IconCache::new(config.settings.icon_set.clone(), config_dir.clone());
+        let mut icons = crate::icons::IconCache::new_with_legacy(
+            config.settings.icon_set.clone(),
+            config.icon_data_dir.clone(),
+            config_dir.clone(),
+        );
+        icons.set_system_file_icons(config.settings.use_system_file_icons);
         // Sembrar overrides + tinte al construir, para que la primera pintura ya sea correcta.
         icons.set_overrides(config.settings.icon_overrides.clone());
         {
-            let tintable = naygo_core::icon_set::IconSetCatalog::load(&config_dir)
-                .is_tintable(&config.settings.icon_set);
+            let tintable = config.icon_sets.is_tintable(&config.settings.icon_set);
             let rgb = crate::theme_text_rgb(&config.settings, &config.themes);
             icons.set_tint(tintable, rgb);
         }
+        let initial_favorites = if load_external_catalogs {
+            load_favorites(&config_dir)
+        } else {
+            Favorites::new()
+        };
+        let mut task_spaces = task_spaces::TaskSpacesState::default();
+        task_spaces.merge_persisted_recents(config.settings.task_space_recents.clone());
+        task_spaces.global_favorites = initial_favorites.clone();
         let mut c = WorkspaceCtrl {
             ws,
+            operations_placement: None,
+            automatic_operations_pane: None,
+            automatic_operations_prior: HashSet::new(),
             maximized_pane: None,
             config,
+            startup_load_rx: None,
+            startup_async_enabled: false,
+            startup_load_failed: false,
+            startup_session_baseline: None,
+            startup_session_dirty: false,
+            startup_load_applied: false,
+            startup_cli_overrides: None,
+            startup_warnings: Vec::new(),
+            startup_pending_theme: None,
             listings: HashMap::new(),
+            listing_admissions: naygo_core::listing::ListingAdmissions::default(),
+            pending_file_listings: HashMap::new(),
+            automatic_listings: HashMap::new(),
+            file_listing_cursor: 0,
+            dirty_listings: std::collections::HashSet::new(),
+            pending_created_activation: HashMap::new(),
+            creation_wait_notice: false,
+            deep_selection_notice: false,
+            listing_export: None,
+            creation_selection: HashMap::new(),
             trees: HashMap::new(),
+            drive_snapshot: Vec::new(),
+            drive_refresh_rx: None,
+            drive_refresh_pending: false,
+            eject_rx: None,
             tree_cursor: HashMap::new(),
             tree_listings: HashMap::new(),
+            pending_tree_listings: std::collections::HashSet::new(),
+            tree_listing_cursor: 0,
             reveal_targets: HashMap::new(),
             tree_refresh_pending: HashMap::new(),
-            favorites: load_favorites(&config_dir),
+            favorites: initial_favorites.clone(),
+            startup_favorites_dirty: std::cell::Cell::new(false),
+            last_favorites_save: Mutex::new(None),
             fav_expanded: std::collections::HashSet::new(),
             recents: RecentDirs::new(),
             ops: crate::ops_ctrl::OpsCtrl::new(config_dir.clone()),
@@ -663,7 +956,7 @@ impl WorkspaceCtrl {
             basket_selection: Default::default(),
             basket_context: false,
             delivery: Default::default(),
-            task_spaces: Default::default(),
+            task_spaces,
             retry: Default::default(),
             saved_queries: Default::default(),
             comparison_points: Default::default(),
@@ -671,7 +964,9 @@ impl WorkspaceCtrl {
             search_context: false,
             delivery_results: Default::default(),
             sync_assistant: None,
+            sync_generation: 0,
             text_transform: None,
+            retired_text_transform: None,
             pending_pick: None,
             destination_radar: None,
             last_area: Rect {
@@ -683,7 +978,13 @@ impl WorkspaceCtrl {
             drag_over_pane: None,
             drag_over_client_y: None,
             drag_over_row: None,
+            drag_over_deep_folder: None,
+            drop_viewports: HashMap::new(),
             pending_drop: None,
+            drop_collision_rx: None,
+            drop_collision_cancel: None,
+            pending_drop_confirmation: false,
+            pending_drop_external_confirmation: false,
             last_click: None,
             last_open: None,
             typeahead: String::new(),
@@ -695,7 +996,13 @@ impl WorkspaceCtrl {
             shift_down: false,
             context_menu: None,
             column_menu: None,
-            templates: naygo_core::config::load_templates(&config_dir),
+            templates: if load_external_catalogs {
+                naygo_core::config::load_templates(&config_dir)
+            } else {
+                naygo_core::workspace::TemplateStore::default()
+            },
+            startup_templates_dirty: std::cell::Cell::new(false),
+            last_templates_save: Mutex::new(None),
             batch: None,
             new_folder: None,
             help_open: false,
@@ -716,12 +1023,15 @@ impl WorkspaceCtrl {
             open_config_requested: false,
             toolbar_menu_requested: None,
             pending_shell_error: None,
+            shell: crate::shell_exec::ShellExecutor::spawn_system(),
+            pending_listing_error: None,
             comparison: HashMap::new(),
             comparison_pair: None,
             comparison_link_enabled: false,
             comparison_revision: 0,
-            listing_snapshots: HashMap::new(),
+            listing_snapshots: naygo_core::listing_snapshot::ListingSnapshotStore::default(),
             visit_changes: HashMap::new(),
+            visit_highlights: HashMap::new(),
             visit_changes_revision: 0,
             icons,
             footer_disk_cache: std::collections::HashMap::new(),
@@ -731,6 +1041,13 @@ impl WorkspaceCtrl {
             ejected_panes: std::collections::HashSet::new(),
             missing_cache: std::collections::HashMap::new(),
             missing_probe: None,
+            missing_probe_cancel: None,
+            missing_probe_refresh_pending: false,
+            missing_probe_pending_pane: None,
+            missing_probe_revision: 0,
+            paste_probe: None,
+            pending_paste_probe_error: None,
+            basket_clipboard_rx: None,
             pending_recents: HashMap::new(),
             autocomplete: input::AutocompleteState::new(),
             search_autocomplete: input::AutocompleteState::new(),
@@ -742,10 +1059,217 @@ impl WorkspaceCtrl {
         c
     }
 
+    /// Indica que producción inició sincrónicamente sólo con defaults embebidos y espera
+    /// el resultado del worker de carga inicial.
+    pub fn startup_loading(&self) -> bool {
+        self.startup_async_enabled
+    }
+
+    pub(crate) fn start_startup_load(&mut self, waker: naygo_platform::dir_watch::Waker) {
+        if self.startup_async_enabled && self.startup_load_rx.is_none() {
+            self.startup_load_rx = Some(crate::startup_load::spawn(
+                self.config.config_dir.clone(),
+                waker,
+            ));
+        }
+    }
+
+    /// Sella el estado inicial de UI después de aplicar el layout de primera ejecución y los
+    /// argumentos de CLI. La sesión persistida sólo puede reemplazar ese estado si no cambió.
+    pub fn mark_startup_session_baseline(&mut self) {
+        self.startup_session_baseline = Some(self.session_fingerprint());
+    }
+
+    pub fn startup_load_applied(&self) -> bool {
+        self.startup_load_applied
+    }
+
+    pub fn additional_persistence_tickets(&self) -> Vec<naygo_core::config::SaveTicket> {
+        self.last_favorites_save
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
+            .into_iter()
+            .chain(
+                self.last_templates_save
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .clone(),
+            )
+            .collect()
+    }
+
+    pub fn defer_startup_cli_overrides(
+        &mut self,
+        layout: Option<String>,
+        dir: Option<PathBuf>,
+        dir_arg_raw: Option<String>,
+        theme: Option<String>,
+    ) {
+        self.startup_cli_overrides = Some(StartupCliOverrides {
+            layout,
+            dir,
+            dir_arg_raw,
+            theme,
+        });
+    }
+
+    pub fn take_startup_warnings(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.startup_warnings)
+    }
+
+    pub(crate) fn take_startup_pending_theme(&mut self) -> Option<String> {
+        self.startup_pending_theme.take()
+    }
+
+    pub(crate) fn startup_catalog_theme(&self) -> Option<String> {
+        self.startup_pending_theme.clone()
+    }
+
+    /// Drena el único resultado inicial sin esperar. Devuelve true sólo cuando la UI debe
+    /// repintar configuración, layout y filas después de aplicar el snapshot.
+    pub fn pump_startup_load(&mut self) -> bool {
+        let result = match self.startup_load_rx.as_ref() {
+            Some(rx) => match rx.try_recv() {
+                Ok(result) => result,
+                Err(mpsc::TryRecvError::Empty) => return false,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.startup_load_rx = None;
+                    self.startup_async_enabled = false;
+                    self.startup_load_failed = true;
+                    self.config.finish_startup_without_data();
+                    crate::logging::log_line("worker de configuración inicial desconectado");
+                    return false;
+                }
+            },
+            None => return false,
+        };
+        self.startup_load_rx = None;
+        self.startup_async_enabled = false;
+        let data = match result {
+            Ok(data) => data,
+            Err(error) => {
+                self.startup_load_failed = true;
+                self.config.finish_startup_without_data();
+                crate::logging::log_line(&format!(
+                    "falló la carga inicial de configuración: {error}"
+                ));
+                return false;
+            }
+        };
+
+        let persisted_space_recents = data.settings.task_space_recents.clone();
+        self.config.apply_startup_config(
+            data.settings,
+            data.i18n,
+            data.keymap,
+            data.first_launch_save_ticket,
+        );
+        self.task_spaces
+            .merge_persisted_recents(persisted_space_recents);
+        if self.task_spaces.recents != self.config.settings.task_space_recents {
+            self.persist_task_space_recents();
+        }
+        if self.startup_favorites_dirty.get() {
+            let mut loaded = data.favorites;
+            loaded.merge_startup_additions(&self.favorites);
+            self.favorites = loaded;
+            self.task_spaces.global_favorites = self.favorites.clone();
+            self.persist_favorites();
+        } else {
+            self.favorites = data.favorites;
+            self.task_spaces.global_favorites = self.favorites.clone();
+        }
+        if self.startup_templates_dirty.get() {
+            let mut loaded = data.templates;
+            loaded.merge_startup_edits(&self.templates);
+            self.templates = loaded;
+            self.persist_templates();
+        } else {
+            self.templates = data.templates;
+        }
+        let baseline_matches = self
+            .startup_session_baseline
+            .as_ref()
+            .is_some_and(|baseline| baseline == &self.session_fingerprint());
+        if baseline_matches {
+            if let Some(session) = data.workspace {
+                let _ = self.apply_loaded_session(session);
+            }
+            if let Some(cli) = self.startup_cli_overrides.take() {
+                if let Some(name) = cli.layout.as_deref() {
+                    if !self.apply_template_ephemeral(name) {
+                        self.startup_warnings
+                            .push(format!("La plantilla \"{name}\" no existe; se ignoró."));
+                    }
+                }
+                if let Some(dir) = cli.dir {
+                    self.navigate_active_to(dir);
+                } else if let Some(raw) = cli.dir_arg_raw {
+                    self.startup_warnings
+                        .push(format!("La ruta \"{raw}\" no es una carpeta; se ignoró."));
+                }
+                if let Some(id) = cli.theme.as_deref() {
+                    self.startup_pending_theme = Some(id.to_string());
+                }
+            }
+        } else if self.startup_cli_overrides.take().is_some() {
+            self.startup_warnings.push(
+                "Se omitieron argumentos de inicio porque la navegación cambió mientras cargaba la configuración.".to_string(),
+            );
+        }
+        if self.startup_session_dirty {
+            match self.save_session_async() {
+                Ok(_) => self.last_saved_fingerprint = Some(self.session_fingerprint()),
+                Err(error) => crate::logging::log_line(&format!(
+                    "no se pudo encolar la sesión editada durante el arranque: {error}"
+                )),
+            }
+            self.startup_session_dirty = false;
+        }
+
+        self.sync_ops_mode();
+        self.icons
+            .set_overrides(self.config.settings.icon_overrides.clone());
+        let tintable = self
+            .config
+            .icon_sets
+            .is_tintable(&self.config.settings.icon_set);
+        let rgb = crate::theme_text_rgb(&self.config.settings, &self.config.themes);
+        self.icons.set_tint(tintable, rgb);
+        self.icons
+            .set_system_file_icons(self.config.settings.use_system_file_icons);
+        self.startup_load_applied = true;
+        true
+    }
+
     /// Aplica `op` al panel activo (helper para no repetir el match de préstamos).
     pub(super) fn with_active(&mut self, op: impl FnOnce(&mut FilePaneState)) {
+        let overridden = self.ws.active_id().is_some_and(|id| {
+            self.creation_selection
+                .get(&id)
+                .is_some_and(|state| state.overridden)
+        });
         if let Some(f) = self.ws.active_files_mut() {
             op(f);
+            if overridden {
+                f.update_pending_context_after_selection();
+            }
+        }
+    }
+
+    /// Encola una acción Shell sin bloquear; el resultado (y el aviso de error) llegan por
+    /// `pump_folder_shell` cuando el worker termina.
+    pub(super) fn submit_shell(&mut self, job: naygo_platform::open::ShellJob) {
+        if let Err(error) = self.shell.submit(job, true) {
+            self.report_shell_result(Err(error));
+        }
+    }
+
+    /// Como `submit_shell` pero el error no se muestra (botones que históricamente lo ignoraban).
+    pub fn submit_shell_silent(&mut self, job: naygo_platform::open::ShellJob) {
+        if let Err(error) = self.shell.submit(job, false) {
+            crate::logging::log_line(&format!("operación Shell falló: {error}"));
         }
     }
 
@@ -760,6 +1284,7 @@ impl WorkspaceCtrl {
     }
 
     pub fn take_shell_error(&mut self) -> Option<String> {
+        self.pump_folder_shell();
         self.pending_shell_error.take()
     }
 
@@ -785,28 +1310,14 @@ impl WorkspaceCtrl {
     }
 }
 
-/// Construye un `DirTree` inicial con accesos físicos conocidos y una raíz por unidad.
-fn build_tree() -> DirTree {
-    let folders: Vec<(PathBuf, String, String)> = naygo_platform::known_folders::known_folders()
-        .into_iter()
-        .map(|folder| (folder.path, folder.name, folder.icon.tree_tag().to_string()))
-        .collect();
-    let drives: Vec<(PathBuf, String, naygo_core::icon_kind::DriveKind)> =
-        naygo_platform::drives::drives()
-            .into_iter()
-            .map(|d| (d.path, d.label, d.kind))
-            .collect();
-    DirTree::from_folders_and_drives(&folders, &drives)
-}
-
-/// Datos crudos del footer de un panel (todo MENOS el disco) + la raíz de su unidad (para
-/// cachear el disco). Puro sobre el `FilePaneState`: lo llama `footer_text_of` bajo un borrow
+/// Datos crudos del footer de un panel (todo MENOS el disco) + la ruta que identifica el
+/// volumen para consultar/cachear su espacio. Puro sobre el `FilePaneState`: lo llama `footer_text_of` bajo un borrow
 /// inmutable y acotado, así el `&mut self` de la caché no choca con el `&self.ws`.
 fn footer_inputs_of(
     files: &FilePaneState,
 ) -> (naygo_core::footer::FooterData, Option<std::path::PathBuf>) {
     // Selección: `files.selected` son posiciones de VISTA; se mapean a `entries` vía la vista.
-    let view = files.view_indices();
+    let view = files.view_indices_shared();
     let sel_count = files.selected.len();
     let total_count = view.len();
     let marked_bytes: u64 = files
@@ -817,15 +1328,12 @@ fn footer_inputs_of(
         .filter_map(|e| e.size)
         .sum();
     // Conteo de archivos/carpetas sobre TODO el listado (no solo la vista filtrada).
-    let dir_count = files.entries.iter().filter(|e| e.is_dir()).count();
+    let dir_count = files.dir_count();
     let file_count = files.entries.len() - dir_count;
     let item_count = file_count + dir_count;
-    // Raíz de la unidad de la carpeta actual (p. ej. `C:\`), para cachear el disco por unidad.
-    let root = files
-        .current_dir
-        .ancestors()
-        .last()
-        .map(std::path::Path::to_path_buf);
+    // Windows obtiene la raíz de unidad (p. ej. `C:\`). En Linux se pasa la carpeta actual:
+    // statvfs resuelve el montaje que la contiene, incluso si no es `/`.
+    let root = footer_disk_root_of(files);
     let data = naygo_core::footer::FooterData {
         sel_count,
         total_count,
@@ -836,6 +1344,21 @@ fn footer_inputs_of(
         dir_count,
     };
     (data, root)
+}
+
+fn footer_disk_root_of(files: &FilePaneState) -> Option<PathBuf> {
+    #[cfg(target_os = "linux")]
+    {
+        Some(files.current_dir.clone())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        files
+            .current_dir
+            .ancestors()
+            .last()
+            .map(std::path::Path::to_path_buf)
+    }
 }
 
 /// Uso de disco de una unidad (total/libre), o `None` si no se puede leer (red caída,
@@ -871,22 +1394,6 @@ fn load_favorites(config_dir: &Path) -> Favorites {
     match std::fs::read_to_string(&path) {
         Ok(s) => Favorites::from_json(&s),
         Err(_) => Favorites::new(),
-    }
-}
-
-/// Persiste el árbol de favoritos a `<config>/favorites.json` (pretty, diminuto). Crea la
-/// carpeta de config si falta. Un fallo de escritura se registra y se ignora (no es fatal: el
-/// estado en memoria sigue siendo válido para la sesión).
-fn save_favorites(config_dir: &Path, favorites: &Favorites) {
-    let path = favorites_path(config_dir);
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    if let Err(e) = std::fs::write(&path, favorites.to_json()) {
-        crate::logging::log_line(&format!(
-            "guardar favoritos {}: fallo — {e}",
-            path.display()
-        ));
     }
 }
 

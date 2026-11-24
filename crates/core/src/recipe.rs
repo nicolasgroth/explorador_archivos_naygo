@@ -212,13 +212,17 @@ pub fn prepare(
             .parent
             .components()
             .any(|c| matches!(c, Component::ParentDir))
-        || parameters.parent.to_string_lossy().contains('\0')
+        || parameters
+            .parent
+            .as_os_str()
+            .as_encoded_bytes()
+            .contains(&0)
         || (recipe.modified != RelativeDate::Any && lower.is_none())
         || parameters.roots.len() > 64
         || parameters.roots.iter().any(|p| {
             !p.is_absolute()
                 || p.components().any(|c| matches!(c, Component::ParentDir))
-                || p.to_string_lossy().contains('\0')
+                || p.as_os_str().as_encoded_bytes().contains(&0)
         })
     {
         return Err(SpaceError::Invalid.into());
@@ -257,10 +261,7 @@ pub fn prepare(
                 return Err(SpaceError::Invalid.into());
             }
             let metadata = std::fs::symlink_metadata(&path).map_err(SpaceError::Io)?;
-            if !metadata.is_file()
-                || metadata.file_type().is_symlink()
-                || crate::search_many::reparse(&metadata)
-            {
+            if !metadata.is_file() || metadata.file_type().is_symlink() {
                 return Err(RecipeError::SelectionFilesOnly);
             }
             examined += 1;

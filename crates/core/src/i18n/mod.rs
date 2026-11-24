@@ -82,20 +82,16 @@ pub struct I18n {
 }
 
 impl I18n {
+    /// Construye el catálogo sólo con idiomas embebidos; no consulta el filesystem.
+    /// El arranque de UI usa este fallback mientras un worker descubre `lang/*.json`.
+    pub fn embedded(lang: &LangId) -> I18n {
+        Self::from_catalogs(embedded_catalogs(), lang)
+    }
+
     /// Construye con los embebidos (ES/EN) más los `lang/*.json` de `dir`, y activa
     /// `lang` (si no existe, cae a EN, y si tampoco, a ES).
     pub fn load(dir: &Path, lang: &LangId) -> I18n {
-        let mut catalogs: HashMap<String, Catalog> = HashMap::new();
-        catalogs.insert("es".into(), Catalog::from_json("es", ES_JSON));
-        catalogs.insert("en".into(), Catalog::from_json("en", EN_JSON));
-        catalogs.insert("pt".into(), Catalog::from_json("pt", PT_JSON));
-        catalogs.insert("fr".into(), Catalog::from_json("fr", FR_JSON));
-        catalogs.insert("de".into(), Catalog::from_json("de", DE_JSON));
-        catalogs.insert("it".into(), Catalog::from_json("it", IT_JSON));
-        catalogs.insert("zh".into(), Catalog::from_json("zh", ZH_JSON));
-        catalogs.insert("ja".into(), Catalog::from_json("ja", JA_JSON));
-        catalogs.insert("ko".into(), Catalog::from_json("ko", KO_JSON));
-        catalogs.insert("hi".into(), Catalog::from_json("hi", HI_JSON));
+        let mut catalogs = embedded_catalogs();
 
         // Cargar archivos sueltos: dir/lang/*.json (cada uno mergea/añade).
         let lang_dir = dir.join("lang");
@@ -117,6 +113,10 @@ impl I18n {
             }
         }
 
+        Self::from_catalogs(catalogs, lang)
+    }
+
+    fn from_catalogs(catalogs: HashMap<String, Catalog>, lang: &LangId) -> I18n {
         let available: Vec<LangId> = {
             let mut v: Vec<LangId> = catalogs.keys().map(|k| LangId::new(k)).collect();
             v.sort_by(|a, b| a.0.cmp(&b.0));
@@ -168,12 +168,37 @@ impl I18n {
     }
 }
 
+fn embedded_catalogs() -> HashMap<String, Catalog> {
+    let mut catalogs = HashMap::new();
+    catalogs.insert("es".into(), Catalog::from_json("es", ES_JSON));
+    catalogs.insert("en".into(), Catalog::from_json("en", EN_JSON));
+    catalogs.insert("pt".into(), Catalog::from_json("pt", PT_JSON));
+    catalogs.insert("fr".into(), Catalog::from_json("fr", FR_JSON));
+    catalogs.insert("de".into(), Catalog::from_json("de", DE_JSON));
+    catalogs.insert("it".into(), Catalog::from_json("it", IT_JSON));
+    catalogs.insert("zh".into(), Catalog::from_json("zh", ZH_JSON));
+    catalogs.insert("ja".into(), Catalog::from_json("ja", JA_JSON));
+    catalogs.insert("ko".into(), Catalog::from_json("ko", KO_JSON));
+    catalogs.insert("hi".into(), Catalog::from_json("hi", HI_JSON));
+    catalogs
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn i18n_de_prueba() -> I18n {
         I18n::load(Path::new("Z:/no/existe/naygo-test"), &LangId::new("es"))
+    }
+
+    #[test]
+    fn embedded_no_depende_de_archivos_de_usuario() {
+        let i18n = I18n::embedded(&LangId::new("es"));
+        assert_eq!(i18n.active_lang(), LangId::new("es"));
+        assert!(i18n
+            .available()
+            .iter()
+            .any(|lang| lang == &LangId::new("en")));
     }
 
     /// Paridad ES/EN: ambos JSON embebidos deben tener EXACTAMENTE el mismo conjunto de

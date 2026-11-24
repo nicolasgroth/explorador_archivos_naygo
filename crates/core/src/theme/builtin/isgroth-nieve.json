@@ -1,0 +1,22 @@
+{
+  "name": "Nieve",
+  "base": "light",
+  "panel_bg": "#f1f3f5",
+  "toolbar_bg": "#e5e9ef",
+  "active_panel_bg": "#fafbfc",
+  "inactive_panel_bg": "#eef1f5",
+  "row_bg": "#f8fafc",
+  "row_alt_bg": "#f0f3f7",
+  "row_inactive_bg": "#f0f2f5",
+  "text": "#202b3b",
+  "text_dim": "#4c5b6c",
+  "selection_bg": "#dce8f7",
+  "accent": "#275d99",
+  "error": "#b32635",
+  "highlight": "#e0eddf",
+  "border": "#9daaba",
+  "active_bar": "#275d99",
+  "flat_inactive_panels": true,
+  "use_inactive_row_color": true,
+  "icon_accent": "#275d99"
+}

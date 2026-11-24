@@ -15,14 +15,10 @@ path = "src/main.rs"
 [dependencies]
 naygo-core = { path = "../core" }
 naygo-platform = { path = "../platform" }
-slint = { version = "1.16", default-features = false, features = [
-    "compat-1-2",
-    "std",
-    "backend-winit",
-    "renderer-software",
-    # Acceso al handle nativo de la ventana (HWND) para el menú contextual del Shell.
-    "raw-window-handle-06",
-] }
+# UI generada desde los .slint (crate aparte para no recompilarla al tocar código Rust).
+naygo-ui-gen = { path = "../ui-gen" }
+# Features definidas una sola vez en [workspace.dependencies].
+slint.workspace = true
 # Backend winit explícito: forzamos el renderizador por SOFTWARE en código (no por variable de
 # entorno) para que Naygo nunca dependa de GPU. En VMs/equipos sin GPU el backend acelerado
 # producía geometría degenerada (ventana 0x0 → panic en euclid::cast). Mismo crate/versión que
@@ -31,13 +27,12 @@ i-slint-backend-winit = "1.16"
 raw-window-handle = "0.6"
 # Para serializar el nombre de una Action como clave estable en el editor de atajos.
 serde_json.workspace = true
+serde.workspace = true
 # Import/export de packs (idiomas/temas/config) como .zip + selector de archivo nativo.
 zip.workspace = true
 tar = "0.4"
 flate2 = "1"
 rfd = "0.15"
-# Ícono en la bandeja del sistema (mismo crate que usaba la capa egui).
-tray-icon = "0.24.1"
 # Decodificación de imágenes para el panel Preview (mismas familias que la capa egui).
 image.workspace = true
 # Rasterización de SVG para el panel Preview (puro Rust, sin DLLs externas → sigue portable).
@@ -50,11 +45,25 @@ tiny-skia = "0.12"
 # la página, solo muestra el texto y el nº de páginas. Mantiene la app portable.
 pdf-extract = "0.10"
 lopdf.workspace = true
+tempfile.workspace = true
 
 [build-dependencies]
-slint-build = "1.16"
 # Embebe el ícono y los metadatos (producto/versión/autor) en naygo.exe en Windows.
 winresource = "0.1"
 
 [dev-dependencies]
-tempfile.workspace = true
+# Fixture encoders only; these exact versions already belong to the runtime dependency graph.
+png = "0.18.1"
+gif = "0.14.2"
+
+# La implementación de Windows usa tray-icon. Linux carga Ayatana AppIndicator GLib en tiempo
+# de ejecución para no enlazar el backend GTK obsoleto ni exigir sus bindings al compilar.
+[target.'cfg(windows)'.dependencies]
+tray-icon = "0.24.1"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libloading = "0.8.9"
+# Slint 1.16 usa fontique 0.8 para fuentes del sistema. Habilitamos su backend dlopen para que
+# el cross-check Linux no requiera los headers/pkg-config de Fontconfig; el runtime puede usar
+# libfontconfig.so.1 y fontique mantiene su fallback cuando la biblioteca no está disponible.
+fontique = { version = "0.8", default-features = false, features = ["fontconfig-dlopen"] }

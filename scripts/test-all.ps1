@@ -3,8 +3,8 @@
 #
 # Punto de entrada UNICO para verificar el sistema completo de un solo comando.
 # Ejecuta, en orden, las tres puertas que deben estar verdes antes de cada commit:
-#   1. Tests de todo el workspace  (cargo test --workspace)
-#   2. Clippy con warnings = error (cargo clippy --workspace --all-targets -- -D warnings)
+#   1. Tests de todo el workspace  (cargo test --workspace --locked)
+#   2. Clippy con warnings = error (cargo clippy --workspace --all-targets --locked -- -D warnings)
 #   3. Formato                     (cargo fmt --all --check)
 #
 # Imprime un resumen legible (tests por crate, estado de clippy/fmt) y termina con
@@ -15,7 +15,7 @@
 #   scripts\test-all.ps1 -NoLint    # solo tests (salta clippy y fmt; iteracion rapida)
 #   scripts\test-all.ps1 -FailFast  # se detiene en la primera puerta que falle
 #
-# Entorno: PowerShell 5.1 (sin && ni ||). Build con CARGO_BUILD_JOBS=2 (equipos modestos).
+# Entorno: PowerShell 5.1 (sin && ni ||). Build con CARGO_BUILD_JOBS=1 (equipos modestos).
 
 [CmdletBinding()]
 param(
@@ -25,7 +25,7 @@ param(
 
 $ErrorActionPreference = 'Continue'
 # Limitar la paralelizacion del build: la prioridad del proyecto es correr en maquinas modestas.
-$env:CARGO_BUILD_JOBS = '2'
+$env:CARGO_BUILD_JOBS = '1'
 
 # Ubicarse en la raiz del repo (el script vive en scripts\), sin depender del cwd del llamador.
 $repoRoot = Split-Path -Parent $PSScriptRoot
@@ -43,9 +43,9 @@ function Write-Section($title) {
 }
 
 # ─────────────────────────── 1. TESTS ───────────────────────────
-Write-Section 'Tests del workspace (cargo test --workspace)'
+Write-Section 'Tests del workspace (cargo test --workspace --locked)'
 # Capturar la salida para extraer las lineas "test result:" por crate, ademas de mostrarla.
-$testOutput = & cargo test --workspace 2>&1
+$testOutput = & cargo test --workspace --locked 2>&1
 $testExit = $LASTEXITCODE
 $testOutput | ForEach-Object { Write-Host $_ }
 
@@ -77,7 +77,7 @@ if ($testExit -eq 0) {
 # ─────────────────────────── 2. CLIPPY ───────────────────────────
 if (-not $NoLint) {
     Write-Section 'Clippy (warnings = error)'
-    & cargo clippy --workspace --all-targets -- -D warnings 2>&1 | ForEach-Object { Write-Host $_ }
+    & cargo clippy --workspace --all-targets --locked -- -D warnings 2>&1 | ForEach-Object { Write-Host $_ }
     if ($LASTEXITCODE -eq 0) {
         $results['Clippy'] = 'OK  (sin warnings)'
     } else {

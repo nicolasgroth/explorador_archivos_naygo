@@ -186,6 +186,112 @@ pub struct SerializableDockLayout {
     pub root: Option<DockNode>,
 }
 
+/// Posición de un panel cerrado, con el layout resultante para detectar cambios posteriores.
+/// Solo se restaura el árbol original si los demás paneles y su disposición siguen iguales.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ClosedPanePlacement {
+    pub pane: PaneId,
+    pub visible: SerializableDockLayout,
+    pub hidden: SerializableDockLayout,
+}
+
+impl ClosedPanePlacement {
+    /// Reconstruye la posición exacta con un nuevo id, sin sobrescribir cambios posteriores.
+    pub fn restore(
+        &self,
+        current: &SerializableDockLayout,
+        new_id: PaneId,
+    ) -> Option<SerializableDockLayout> {
+        fn same_shape(a: &DockNode, b: &DockNode) -> bool {
+            match (a, b) {
+                (DockNode::Leaf(a), DockNode::Leaf(b)) => a == b,
+                (DockNode::Tabs { members: a, .. }, DockNode::Tabs { members: b, .. }) => a == b,
+                (
+                    DockNode::Split {
+                        dir: ad,
+                        children: ac,
+                        weights: aw,
+                    },
+                    DockNode::Split {
+                        dir: bd,
+                        children: bc,
+                        weights: bw,
+                    },
+                ) => {
+                    ad == bd
+                        && aw == bw
+                        && ac.len() == bc.len()
+                        && ac.iter().zip(bc).all(|(a, b)| same_shape(a, b))
+                }
+                _ => false,
+            }
+        }
+        if !matches!((&current.root, &self.hidden.root), (Some(a), Some(b)) if same_shape(a, b)) {
+            return None;
+        }
+        let current_ids = current.pane_ids();
+        let old_ids = self.visible.pane_ids();
+        if current_ids.contains(&new_id)
+            || old_ids.iter().filter(|id| **id == self.pane).count() != 1
+            || old_ids.len() != current_ids.len() + 1
+        {
+            return None;
+        }
+        let remaining: std::collections::HashSet<_> = old_ids
+            .iter()
+            .copied()
+            .filter(|id| *id != self.pane)
+            .collect();
+        if remaining.len() != current_ids.len()
+            || current_ids.iter().any(|id| !remaining.contains(id))
+        {
+            return None;
+        }
+        fn replace(node: &mut DockNode, old: PaneId, new: PaneId) {
+            match node {
+                DockNode::Leaf(id) if *id == old => *id = new,
+                DockNode::Tabs { members, .. } => {
+                    for id in members {
+                        if *id == old {
+                            *id = new;
+                        }
+                    }
+                }
+                DockNode::Split { children, .. } => {
+                    for child in children {
+                        replace(child, old, new);
+                    }
+                }
+                DockNode::Leaf(_) => {}
+            }
+        }
+        let mut layout = self.visible.clone();
+        replace(layout.root.as_mut()?, self.pane, new_id);
+        // Conservar la pestaña visible que el usuario dejó mientras el panel estaba oculto.
+        fn visible_ids(node: &DockNode, out: &mut Vec<PaneId>) {
+            match node {
+                DockNode::Leaf(id) => out.push(*id),
+                DockNode::Tabs { members, active } => {
+                    if let Some(id) = members.get(*active) {
+                        out.push(*id);
+                    }
+                }
+                DockNode::Split { children, .. } => {
+                    for child in children {
+                        visible_ids(child, out);
+                    }
+                }
+            }
+        }
+        let mut visible = Vec::new();
+        visible_ids(current.root.as_ref()?, &mut visible);
+        for id in visible {
+            layout.set_active_tab(id);
+        }
+        Some(layout)
+    }
+}
+
 /// Rectángulo en píxeles lógicos (sin depender de egui/slint). Origen arriba-izquierda.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Rect {
@@ -915,6 +1021,64 @@ fn collect_groups(node: &DockNode, out: &mut Vec<(Vec<PaneId>, usize)>) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn closed_pane_restores_exact_layout_only_if_other_layout_is_unchanged() {
+        use super::*;
+        let mut visible = SerializableDockLayout::single(PaneId(1));
+        visible.split_leaf_grouped(PaneId(1), SplitDir::Vertical, PaneId(2), 0.7);
+        visible.stack_onto(PaneId(2), PaneId(3));
+        let mut hidden = visible.clone();
+        hidden.remove_leaf(PaneId(3));
+        let placement = ClosedPanePlacement {
+            pane: PaneId(3),
+            visible: visible.clone(),
+            hidden: hidden.clone(),
+        };
+        let restored = placement.restore(&hidden, PaneId(8)).unwrap();
+        assert_eq!(
+            restored.root,
+            Some(DockNode::Split {
+                dir: SplitDir::Vertical,
+                children: vec![
+                    DockNode::Leaf(PaneId(1)),
+                    DockNode::Tabs {
+                        members: vec![PaneId(2), PaneId(8)],
+                        active: 0
+                    }
+                ],
+                weights: vec![0.7, 1.0 - 0.7],
+            })
+        );
+        hidden.split_leaf(PaneId(1), SplitDir::Horizontal, PaneId(4));
+        assert!(placement.restore(&hidden, PaneId(8)).is_none());
+        assert!(placement.restore(&placement.hidden, PaneId(1)).is_none());
+    }
+
+    #[test]
+    fn closed_pane_preserves_the_tab_selected_while_it_was_hidden() {
+        let visible = SerializableDockLayout {
+            root: Some(DockNode::Tabs {
+                members: vec![PaneId(1), PaneId(2), PaneId(3)],
+                active: 1,
+            }),
+        };
+        let mut hidden = visible.clone();
+        hidden.remove_leaf(PaneId(2));
+        let placement = ClosedPanePlacement {
+            pane: PaneId(2),
+            visible,
+            hidden: hidden.clone(),
+        };
+        hidden.set_active_tab(PaneId(3));
+        let restored = placement.restore(&hidden, PaneId(4)).unwrap();
+        assert_eq!(
+            restored.root,
+            Some(DockNode::Tabs {
+                members: vec![PaneId(1), PaneId(4), PaneId(3)],
+                active: 2
+            })
+        );
+    }
     use super::*;
 
     #[test]

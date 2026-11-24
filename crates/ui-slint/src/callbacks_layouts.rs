@@ -40,9 +40,20 @@ pub(crate) fn wire_layouts(ui: &AppWindow, ctx: &WireCtx, refresh_layouts: &Rc<d
     {
         let ctrl = ctrl.clone();
         let refresh_layouts = refresh_layouts.clone();
+        let weak_ui = ui.as_weak();
         ui.on_save_layout(move |name| {
-            ctrl.borrow_mut().save_current_template(name.as_str());
-            refresh_layouts();
+            match ctrl.borrow_mut().save_current_template(name.as_str()) {
+                Ok(()) => refresh_layouts(),
+                Err(naygo_core::workspace::template::TemplateCaptureError::NonUtf8FixedPath) => {
+                    if let Some(ui) = weak_ui.upgrade() {
+                        let message = ui
+                            .global::<Tr>()
+                            .get_layout_save_non_utf8_path()
+                            .to_string();
+                        ui.invoke_show_toast(message.into());
+                    }
+                }
+            }
         });
     }
     // Borrar una plantilla de usuario.

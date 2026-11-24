@@ -27,7 +27,9 @@ impl OpsCtrl {
         record_undo: bool,
         staging_guards: Vec<naygo_platform::drop_target::StagedDrop>,
     ) {
-        use naygo_core::archive_ops::{compress_zip, extract_zip, ExtractConflict};
+        use naygo_core::archive_ops::{
+            compress_zip, compress_zip_relative, extract_zip, ExtractConflict,
+        };
         let token = CancellationToken::new();
         let (tx, rx) = std::sync::mpsc::channel::<OpMsg>();
         // Canal de conflicto REAL para la extracción: el worker emite `OpMsg::Conflict` al chocar un
@@ -77,6 +79,9 @@ impl OpsCtrl {
             trash_receipts_rx: None,
             finished_epoch_secs: None,
             size_map: HashMap::new(),
+            directory_sources: Default::default(),
+            type_count_cursor: 0,
+            type_counts: (0, 0, 0),
             staging_guards,
         });
 
@@ -101,7 +106,28 @@ impl OpsCtrl {
             let result = match &kind {
                 OpKind::Compress { dest_name } => {
                     let dest_zip = dest_dir.join(dest_name);
-                    let r = compress_zip(&sources, &dest_zip, &mut on_progress, &token_worker);
+                    let same_parent =
+                        sources
+                            .first()
+                            .and_then(|p| p.parent())
+                            .is_some_and(|parent| {
+                                let key = naygo_core::path_identity::key(parent);
+                                sources.iter().all(|p| {
+                                    p.parent()
+                                        .is_some_and(|p| naygo_core::path_identity::key(p) == key)
+                                })
+                            });
+                    let r = if same_parent {
+                        compress_zip(&sources, &dest_zip, &mut on_progress, &token_worker)
+                    } else {
+                        compress_zip_relative(
+                            &sources,
+                            &dest_dir,
+                            &dest_zip,
+                            &mut on_progress,
+                            &token_worker,
+                        )
+                    };
                     if record_undo {
                         // El inverso solo toca el ZIP nuevo; nunca los orígenes.
                         let acts = match &r {

@@ -1,0 +1,140 @@
+// Naygo — panel Inspector (Fase 2b): propiedades del ítem enfocado del panel activo.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
+import { InspectorVm, MetaFieldVm } from "types.slint";
+import { Tr } from "i18n.slint";
+import { Theme } from "theme.slint";
+
+// Una fila etiqueta/valor del inspector.
+component PropRow inherits HorizontalLayout {
+    in property <string> label;
+    in property <string> value;
+    spacing: 8px;
+    padding: 2px;
+    Text {
+        text: root.label;
+        color: Theme.text-dim;
+        font-weight: 700;
+        width: 84px;
+        horizontal-alignment: right;
+        vertical-alignment: center;
+    }
+    Text {
+        text: root.value;
+        color: Theme.text;
+        vertical-alignment: center;
+        horizontal-stretch: 1;
+        overflow: elide;
+    }
+}
+
+export component InspectorPanel inherits Rectangle {
+    in property <bool> active;
+    in property <InspectorVm> info;
+    callback focus-pane();   // marcar este panel como activo al hacer clic en cualquier parte
+    callback calc-size();    // pedir el cálculo del tamaño de la carpeta enfocada
+    callback copy-provenance();
+    callback unblock-provenance();
+    background: Theme.active-panel-bg;
+    border-width: 1px;
+    border-color: root.active ? Theme.active-pane-border : Theme.divider;
+
+    // TouchArea de fondo: un clic en el cuerpo (texto o zona vacía) marca el panel como
+    // activo. Va PRIMERO (al fondo) para no robar clics a controles que se monten encima.
+    bg-touch := TouchArea {
+        clicked => { root.focus-pane(); }
+    }
+
+    VerticalLayout {
+        padding: 8px;
+        spacing: 4px;
+        // (Sin título interno: la pestaña del panel ya rotula "Propiedades".)
+        if !root.info.present: Text {
+            text: Tr.inspector-no-selection;
+            color: Theme.text-dim;
+            vertical-alignment: center;
+        }
+        if root.info.present: VerticalLayout {
+            spacing: 2px;
+            PropRow { label: Tr.inspector-name; value: root.info.name; }
+            PropRow { label: Tr.inspector-kind; value: root.info.kind; }
+            if !root.info.is-dir: PropRow { label: Tr.inspector-size; value: root.info.size; }
+            if root.info.is-dir: HorizontalLayout {
+                spacing: 8px;
+                padding: 2px;
+                Text {
+                    text: Tr.inspector-size;
+                    color: Theme.text-dim;
+                    font-weight: 700;
+                    width: 84px;
+                    horizontal-alignment: right;
+                    vertical-alignment: center;
+                }
+                if root.info.size-calc != "": Text {
+                    text: root.info.size-calc;
+                    color: Theme.text;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                    overflow: elide;
+                }
+                if root.info.size-calc == "": Rectangle {
+                    width: 90px;
+                    height: 24px;
+                    accessible-role: button;
+                    accessible-label: Tr.inspector-calc-size;
+                    accessible-action-default => { root.calc-size(); }
+                    border-radius: Theme.radius-md;
+                    background: calc-touch.has-hover ? Theme.hover-bg : Theme.surface-raised;
+                    border-width: 1px;
+                    border-color: Theme.divider;
+                    Text {
+                        text: Tr.inspector-calc-size;
+                        color: Theme.text;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        font-size: 12px;
+                    }
+                    calc-touch := TouchArea { clicked => { root.calc-size(); } }
+                }
+            }
+            PropRow { label: Tr.inspector-modified; value: root.info.modified; }
+            PropRow { label: Tr.inspector-created; value: root.info.created; }
+            PropRow { label: Tr.inspector-path; value: root.info.path; }
+            // Metadata extra por tipo (imagen: dimensiones; exe/dll: versión). La lee un worker
+            // async; mientras tanto se muestra "Leyendo…". Vacío para carpetas o tipos sin dato.
+            if root.info.meta-loading: Text {
+                text: Tr.meta-loading;
+                color: Theme.text-dim;
+                font-size: 11px;
+            }
+            for field in root.info.meta: PropRow { label: field.label; value: field.value; }
+            // Acciones explícitas de Zone.Identifier. Solo aparecen cuando el worker ya entregó
+            // datos de procedencia; desbloquear pide confirmación al handler antes de escribir ADS.
+            if root.info.has-provenance && !root.info.is-dir: HorizontalLayout {
+                spacing: 6px;
+                Rectangle {
+                    width: 74px; height: 24px; border-radius: Theme.radius-md;
+                    accessible-role: button;
+                    accessible-label: Tr.ctx-copy;
+                    accessible-action-default => { root.copy-provenance(); }
+                    background: copy-touch.has-hover ? Theme.hover-bg : Theme.surface-raised;
+                    border-width: 1px; border-color: Theme.divider;
+                    Text { text: Tr.ctx-copy; color: Theme.text; horizontal-alignment: center; vertical-alignment: center; font-size: 11px; }
+                    copy-touch := TouchArea { clicked => { root.copy-provenance(); } }
+                }
+                Rectangle {
+                    width: 30px; height: 24px; border-radius: Theme.radius-md;
+                    accessible-role: button;
+                    accessible-label: Tr.inspector-unblock;
+                    accessible-action-default => { root.unblock-provenance(); }
+                    background: unblock-touch.has-hover ? Theme.hover-bg : Theme.surface-raised;
+                    border-width: 1px; border-color: Theme.divider;
+                    Text { text: "✓"; color: Theme.text; horizontal-alignment: center; vertical-alignment: center; }
+                    unblock-touch := TouchArea { clicked => { root.unblock-provenance(); } }
+                }
+            }
+        }
+        // Empuja el contenido hacia arriba.
+        Rectangle { vertical-stretch: 1; }
+    }
+}

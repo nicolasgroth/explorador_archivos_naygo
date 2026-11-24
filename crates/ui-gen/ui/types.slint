@@ -1,0 +1,790 @@
+// Naygo — tipos compartidos UI<->Rust (Slint).
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
+// Las structs se declaran ANTES de quien las usa (PaneVm las referencia todas).
+export struct RowData {
+    name: string,
+    // Celdas de las columnas visibles distintas de Name, en orden visual (6C).
+    cells: [string],
+    is-dir: bool,
+    // Identidad de la carpeta pintada. Una fila reutilizada no debe redirigir un drop.
+    drop-folder: string,
+    selected: bool,
+    focused: bool,
+    cut: bool,
+    // Apareció recién (watcher): se pinta resaltado unos segundos. Fase 5A.
+    highlight: bool,
+    // Comparación de paneles: 0=normal/igual, 1=distinto, 2=solo en este panel.
+    compare-state: int,
+    // Matchea el filtro visual por tipeo ("contiene", sin caso/tildes): se pinta
+    // con un tinte de acento mientras el filtro esté activo (persiste hasta Esc
+    // o navegar). Sin filtro activo siempre es false.
+    filter-match: bool,
+    // Tramos del nombre alrededor del match (vacíos si no hay): la celda Name pinta
+    // match-pre + match-mid (resaltado) + match-post cuando filter-match es true.
+    match-pre: string,
+    match-mid: string,
+    match-post: string,
+    // Ícono de color por tipo, ya decodificado y cacheado en Rust (6A).
+    icon: image,
+    // Profundidad en la vista profunda (recursiva): 0 = nivel raíz, >0 sangra la fila.
+    // En vista normal/búsqueda es 0 (sin efecto).
+    depth: int,
+}
+
+// Geometría cliente de la lista, en píxeles lógicos. Vive independientemente del hover OLE.
+export struct DropViewport {
+    left: float, top: float, width: float, height: float,
+    scroll-y: float, row-height: float,
+}
+
+// Una columna visible de la tabla (6C): qué es, su etiqueta, ancho y alineación.
+export struct ColumnVm {
+    kind: int,             // 0=Name 1=Extension 2=Size 3=Modified 4=Created
+    label: string,
+    width: length,
+    align-right: bool,     // Size se alinea a la derecha
+    sort-dir: int,         // orden en esta columna: 0=ninguno 1=asc (▲) 2=desc (▼) (F2)
+    has-filter: bool,      // hay un filtro activo en esta columna → embudo (F2)
+}
+
+// Una entrada del menú "Columnas…" (6C): TODAS las columnas con su estado de visibilidad.
+export struct ColumnToggleVm {
+    kind: int,
+    label: string,
+    visible: bool,
+    fixed: bool,           // Name no se puede ocultar (toggle deshabilitado)
+}
+
+// Una extensión marcable en el editor de filtro de tipos (F2): la extensión ("" = sin
+// extensión, se muestra como "(sin extensión)"), su conteo en la carpeta, y si está marcada.
+export struct ExtRowVm {
+    ext: string,
+    label: string,
+    count: int,
+    checked: bool,
+}
+
+// Estado del menú/editor de columna (clic derecho en el header, F2). `mode`: 0=menú de acciones,
+// 1=editor de filtro. El `kind` elige qué editor de filtro mostrar. Los campos de borrador son
+// el espejo de ColumnMenuState del controlador.
+export struct ColumnMenuVm {
+    active: bool,
+    x: length,
+    y: length,
+    kind: int,             // 0=Name 1=Extension 2=Size 3=Modified 4=Created
+    label: string,         // etiqueta de la columna (para el título del editor)
+    mode: int,             // 0=menú 1=filtro
+    has-filter: bool,      // la columna ya tiene un filtro (habilita "quitar filtro")
+    can-hide: bool,        // Name no se puede ocultar
+    // Borradores del editor de filtro:
+    text-draft: string,    // filtro de texto (Name)
+    text-case: bool,       // sensible a mayúsculas
+    min-draft: string,     // extremo mínimo (Size/fecha)
+    max-draft: string,     // extremo máximo (Size/fecha)
+    exts: [ExtRowVm],      // extensiones marcables (Extension)
+}
+
+// Una plantilla de disposición en el menú de Layouts (F4): nombre + si es built-in (no borrable).
+export struct LayoutRow {
+    name: string,
+    builtin: bool,
+}
+
+// Una fila del preview de batch-rename (F5): nombre antes→después + estado.
+// status: 0=Ok 1=SinCambio 2=Inválido 3=Colisión 4=Nombre no representable.
+export struct BatchRowVm {
+    old-name: string,
+    new-name: string,
+    parent: string,
+    status: int,
+}
+
+// Estado de la ventana de batch-rename (F5). Los campos del spec son el espejo de BatchSpec;
+// `rows` es el preview en vivo; `can-apply` habilita el botón Aplicar.
+export struct BatchRenameVm {
+    active: bool,
+    show-parent: bool,
+    template: string,
+    find: string,
+    replace: string,
+    use-regex: bool,
+    include-ext: bool,
+    case: int,              // 0=ninguna 1=minúsculas 2=MAYÚSCULAS 3=Título
+    counter-start: string,
+    counter-step: string,
+    rows: [BatchRowVm],
+    count: int,             // nº de ítems del lote
+    can-apply: bool,
+}
+
+// Una fila de la tabla de atajos en la ayuda (F1): acción legible + su combinación.
+export struct HelpRowVm {
+    label: string,
+    chord: string,
+}
+
+// Fila de navegación (favorito, reciente o unidad de disco): etiqueta visible +
+// ruta completa. `removable` solo es relevante para la tira de unidades: marca las
+// unidades extraíbles (USB) para mostrar el botón/menú de expulsión segura.
+export struct NavRow {
+    label: string,
+    path: string,
+    icon: image,           // ícono de carpeta/disco cacheado (6B)
+    removable: bool,       // true para unidades extraíbles (USB) en la tira de discos
+}
+
+// Fila del árbol de favoritos (panel editable + menú ▾ del toolbar). `is-group` distingue
+// grupo de favorito; `depth` da la sangría; `group-id` es el GroupId serializado ("0/2") del
+// grupo (vacío en favoritos); `name-path` la ruta de nombres (clave estable de expansión);
+// `expanded`/`has-children` solo aplican a grupos (chevron ▸/▾). `path` es la ruta del favorito.
+export struct FavTreeRow {
+    depth: int,
+    is-group: bool,
+    name: string,
+    path: string,
+    path-hint: string, // ruta absoluta comprimida por el medio; vacía para grupos
+    group-id: string,
+    name-path: string,
+    expanded: bool,
+    has-children: bool,
+    icon: image,
+}
+
+// Un segmento de la barra de ruta (breadcrumb): etiqueta visible + ruta acumulada a la que
+// navegar si se clickea. Ej: ("Empresas", "D:\Empresas").
+export struct PathSeg {
+    label: string,
+    path: string,
+}
+
+// --- Operaciones de archivo (Fase 3) ---
+
+// Estado del modal de operaciones activo. `kind`: 0=ninguno 1=confirmar-borrado
+// 2=conflicto 3=pedir-nombre 4=pegar-preview 5=retomar.
+export struct OpDialogVm {
+    kind: int,
+    // Confirmar borrado:
+    del-count: int,
+    del-permanent: bool,
+    del-preview: string,
+    // Conflicto (por-ítem):
+    conflict-name: string,
+    // Tipo de la operación EN CONFLICTO (para anteponer la acción al encabezado del modal):
+    // 0=copiar 1=mover 2=borrar 3=comprimir 4=extraer 5=otro. Aplica a kind==2 (archivo).
+    op-kind: int,
+    // Carpetas de origen y destino de la operación en conflicto (de dónde a dónde), para mostrar
+    // el contexto bajo el "Ya existe «X»". Vacías si no se conocen. Aplican a kind==2 (archivo) y
+    // kind==6 (carpeta).
+    conflict-from: string,
+    conflict-to: string,
+    // Comparación LADO A LADO del conflicto de archivo (kind==2): "Existente" | "Nuevo". Cada lado
+    // trae nombre/tamaño/fecha YA formateados y la extensión en mayúsculas (`*-ext`, vacía si no
+    // tiene); `*-is-dir` indica si es carpeta. La UI compone la etiqueta de tipo con i18n
+    // (carpeta/extensión/archivo).
+    existing-name: string,
+    existing-size: string,
+    existing-date: string,
+    existing-ext: string,
+    existing-is-dir: bool,
+    incoming-name: string,
+    incoming-size: string,
+    incoming-date: string,
+    incoming-ext: string,
+    incoming-is-dir: bool,
+    // Pedir nombre (nuevo/renombrar):
+    name-title: string,
+    name-value: string,
+    name-valid: bool,
+    // Nombre original del archivo en conflicto cuando el modal de nombre se abre para
+    // "Renombrar" un choque (BUG 1). Vacío en los demás casos; la UI lo usa para el título
+    // traducido "Nuevo nombre para «X»".
+    name-conflict-for: string,
+    // `true` si el modal de nombre se abrió para comprimir en .zip; la UI usa el título
+    // traducido (Tr.zipname-title) en vez de `name-title`.
+    name-is-compress: bool,
+    // Pegar preview (texto/imagen):
+    paste-name: string,
+    paste-is-image: bool,
+    // Conflicto de carpeta (P3):
+    folder-name: string,
+    folder-more: bool,
+}
+
+// Estado del modal de mensajes simple (avisos/confirmaciones temáticos, reemplazo de
+// los diálogos nativos rfd). `kind`: 0=oculto 1=confirmación(2 botones) 2=aviso(1 botón).
+// `level`: 0=info 1=warning 2=error (tiñe la franja del título).
+export struct MessageVm {
+    kind: int,
+    level: int,
+    title: string,
+    body: string,
+    confirm-label: string,
+    cancel-label: string,
+    danger: bool,
+}
+
+// Estado del menú contextual (clic derecho). Posición en coords de la ventana.
+export struct ContextMenuVm {
+    active: bool,
+    deep-mode: bool,
+    single-target: bool,
+    x: length,
+    y: length,
+    has-native: bool,
+    has-wt: bool,       // Windows Terminal (wt.exe) disponible → ofrecer "Abrir Windows Terminal aquí"
+    // Modo CARPETA: clic derecho en la zona vacía del panel. Oculta las acciones de archivo
+    // (copiar/cortar/renombrar/eliminar/copiar-nombre/ruta) y muestra "Abrir en Explorador" +
+    // "Nueva carpeta". Pegar y terminales siguen, que aplican a la carpeta.
+    folder-mode: bool,
+    // La selección es EXACTAMENTE un archivo `.zip` → mostrar "Extraer aquí" / "Extraer en…".
+    is-single-zip: bool,
+    // Hay al menos un ítem seleccionado → mostrar "Comprimir en .zip…". (En modo archivo el menú
+    // solo se abre con selección, pero hacerlo explícito evita mostrar el ítem si esa invariante
+    // cambia.)
+    has-selection: bool,
+    // El objetivo del menú es una carpeta: true si es folder-mode (clic en zona vacía) O si el
+    // único target (clic sobre una fila) es un directorio. Habilita el submenú "Abrir ▸" con
+    // Abrir / Abrir en otro panel / Abrir en panel nuevo / Abrir en el Explorador de Windows.
+    target-is-folder: bool,
+    // Folder-mode con una ruta EXPLÍCITA (breadcrumb/árbol): permite navegar "Abrir aquí".
+    show-open-here: bool,
+    // El objetivo único es un .exe/.com: habilita "Ejecutar como administrador".
+    target-is-executable: bool,
+}
+
+// Fila del modal "retomar tras cierre inesperado": id del journal + etiqueta.
+export struct ResumeRowVm {
+    id: string,
+    label: string,
+}
+
+// Entrada del historial interno de portapapeles: resumen visible y semántica copia/corte.
+export struct ClipboardHistoryRowVm {
+    label: string,
+    detail: string,
+    cut: bool,
+}
+
+// Una tarjeta de set en la galería (preview estilo temas).
+export struct IconSetCardVm {
+    id: string,
+    label: string,
+    samples: [image],   // ~5 íconos de muestra del set, ya teñidos
+    selected: bool,
+}
+
+// Una tarjeta de tema en la galería de selección (config → Apariencia). Trae el id estable,
+// el nombre legible, si es el activo, y cuatro muestras de color representativas.
+export struct ThemeCardVm {
+    id: string,
+    name: string,
+    active: bool,
+    // ¿Es un tema de fábrica? Decide los botones de la tarjeta: builtin → "Personalizar" (duplica);
+    // de usuario → "Editar" + "Eliminar".
+    is-builtin: bool,
+    sw-panel: color,
+    sw-accent: color,
+    sw-row: color,
+    sw-text: color,
+    sw-highlight: color,
+}
+
+// Estado del modal "carpeta no encontrada" (USB desconectado / red caída / carpeta borrada).
+export struct MissingFolderVm {
+    active: bool,
+    lost-path: string,   // la ruta que dejó de existir
+}
+
+// Una coincidencia del panel de búsqueda recursiva: nombre del archivo/carpeta, su carpeta
+// contenedora relativa a la raíz de búsqueda (dónde está), tamaño/fecha ya formateados, si es
+// carpeta, y el ícono cacheado. La acción "abrir" se hace por índice, no por ruta.
+export struct SearchHitVm {
+    selected: bool,
+    name: string,
+    rel-dir: string,     // carpeta contenedora relativa a la raíz ("" = en la raíz)
+    detail: string,      // tamaño + fecha ya formateados (columna secundaria)
+    is-dir: bool,
+    icon: image,
+}
+
+// Estado del panel de búsqueda F3. Sus criterios se conservan mientras el panel está abierto,
+// de modo que el usuario puede ajustar y relanzar sin perder la raíz ni las opciones.
+export struct SearchVm {
+    advanced: bool,
+    focused-row: int,
+    marked-count: int,
+    active: bool,
+    query: string,
+    root-label: string,
+    content-query: string,
+    ignore-case: bool,
+    use-wildcards: bool,
+    recursive: bool,
+    running: bool,       // worker aún en vuelo (muestra el spinner/Detener)
+    hits: [SearchHitVm],
+    status: string,
+}
+
+export struct PointRowVm { path: string, status: string, actionable: bool, selected: bool }
+export struct QueryDraftVm {
+    name: string,
+    roots: string,
+    name-query: string,
+    content-query: string,
+    min-bytes: string,
+    max-bytes: string,
+    modified: int,
+    ignore-case: bool,
+    use-wildcards: bool,
+    recursive: bool,
+}
+
+// Estado del modal "nueva(s) carpeta(s)".
+export struct NewFolderVm {
+    active: bool,
+    dir: string,        // carpeta destino (encabezado)
+    text: string,       // texto multilínea en edición (una carpeta por línea)
+    status: string,     // resumen: cuántas se crearán / cuántas inválidas
+    can-create: bool,   // hay al menos una línea válida
+}
+
+// Fila del panel de progreso: una operación en curso/en cola/terminada (historial).
+export struct OpRowVm {
+    has-errors: bool,
+    index: int,
+    label: string,
+    percent: float,        // 0..100
+    status: string,        // "en cola" / "en curso…" / "pausada" / "hecho: N…" / "cancelada"
+    running: bool,
+    paused: bool,          // la op está pausada (token.is-paused)
+    bytes-done: string,    // ya formateado, p. ej. "12,4 GB"
+    bytes-total: string,   // ya formateado, p. ej. "94,9 GB"
+    files-done: int,
+    files-total: int,
+    current-file: string,  // nombre del archivo en curso
+    speed: string,         // velocidad media, p. ej. "123 MB/s"
+    speed-peak: string,    // velocidad pico, p. ej. "126 MB/s"
+    eta: string,           // tiempo restante estimado, p. ej. "11:08" o ""
+    elapsed: string,       // transcurrido, p. ej. "01:48"
+    kind: int,             // 0=en curso 1=en cola 2=historial
+    op-kind: int,          // tipo de operación para el ícono/verbo: 0=copiar 1=mover 2=borrar 3=comprimir 4=extraer 5=otro
+    when: string,          // fecha de fin ya formateada (solo en filas de historial); vacío en las demás
+    // Detalle de QUÉ archivos se procesaron (solo en filas de historial):
+    files-summary: string, // nombres inline si son 1-2 ("a.txt, b.txt"); vacío si son más o ninguno
+    has-file-list: bool,   // true si hay 3+ archivos → la fila ofrece "Ver archivos" (abre popup)
+    files-done-count: int, // total de entradas concretadas
+    known-files: int,
+    known-directories: int,
+    unknown-entries: int,
+}
+
+// Una fila del popup "Archivos de la operación": ruta relativa + tamaño + estado (PUNTO 3).
+export struct OpFileVm {
+    name: string,     // solo el nombre (respaldo)
+    rel-path: string, // ruta relativa al destino ("sub/config.txt") — lo que se muestra
+    size: string,     // tamaño ya formateado ("2,0 KB"); vacío si carpeta/desconocido
+    status: int,      // 0=hecho 1=saltado 2=fallido (color)
+    detail: string,   // motivo del fallo (solo status==2)
+}
+
+// Encabezado del popup "Archivos de la operación" (PUNTO 3): tipo + carpetas origen/destino +
+// estadísticas. Lo arma Rust desde el request + summary de la op.
+export struct OpFileContextVm {
+    kind: int,         // 0=Copiar 1=Mover 2=otra (la UI compone la etiqueta con i18n)
+    origin: string,    // carpeta de origen
+    dest: string,      // carpeta de destino
+    total-files: int,
+    done: int,
+    skipped: int,
+    failed: int,
+    total-size: string, // tamaño total transferido ya formateado
+}
+
+// Fila del historial de deshacer.
+export struct HistRow {
+    id: int,
+    label: string,
+    when: string,
+    count: int,
+    undoable: bool,
+    // `true` si la entrada YA se deshizo (acción aplicada). La UI lo pinta como
+    // "Deshecho ✓" en color de acento, para distinguirlo del caso "no deshacible".
+    undone: bool,
+    reason: string,
+}
+
+// Fila del árbol aplanado: sangría por `depth`, estado de carga/expansión, disco (-1 = n/a).
+export struct TreeRow {
+    depth: int,
+    name: string,
+    path: string,
+    expanded: bool,
+    has-children: bool,
+    is-drive: bool,
+    active: bool,
+    loading: bool,
+    error: bool,
+    disk-percent: int,
+    // Texto de espacio del disco ("120 GB libre / 500 GB · 76%"); vacío si no es disco / sin dato.
+    disk-detail: string,
+    // Acceso especial físico: desktop/documents/downloads/pictures/music/videos/cloud; vacío = normal.
+    special-icon: string,
+    // Ícono de color cacheado (carpeta o disco) (6A).
+    icon: image,
+}
+
+// Un campo de metadata por tipo (dimensiones de una imagen, versión de un exe, …): la etiqueta
+// ya traducida + el valor ya formateado. Lo llena un worker async y lo puebla `sync_rows`.
+export struct MetaFieldVm {
+    label: string,
+    value: string,
+}
+
+// Datos del inspector (propiedades del ítem enfocado del panel activo).
+export struct InspectorVm {
+    present: bool,
+    name: string,
+    kind: string,
+    path: string,
+    size: string,
+    modified: string,
+    created: string,
+    is-dir: bool,
+    size-calc: string,
+    // Metadata extra por tipo (imagen: dimensiones; exe/dll: versión). Vacío para carpetas o
+    // tipos sin proveedor. `meta-loading` es true mientras el worker aún la lee.
+    meta: [MetaFieldVm],
+    meta-loading: bool,
+    // Hay al menos un dato real de Zone.Identifier; no confundir con metadata de imagen/EXE.
+    has-provenance: bool,
+}
+
+// Un segmento coloreado de una línea de código resaltado (un Text por segmento en la UI).
+export struct HlSpanVm {
+    text: string,
+    color: color,
+}
+
+// Una línea de código resaltado = sus segmentos en orden de izquierda a derecha.
+export struct HlLineVm {
+    spans: [HlSpanVm],
+}
+
+// Vista de preview: modo 0=vacío 1=texto 2=imagen 3=mensaje.
+export struct PreviewVm {
+    mode: int,
+    text: string,
+    truncated: bool,
+    text-info: string,
+    image: image,
+    message: string,
+    // Resaltado de código: si `highlighted`, se pintan `hl-lines` (un Text por segmento) en vez
+    // del `text` plano. `path` es la ruta del archivo en preview ("" = ninguno) para "abrir con el
+    // programa del sistema".
+    highlighted: bool,
+    hl-lines: [HlLineVm],
+    path: string,
+    // Metadata extra por tipo del archivo en preview (imagen: dimensiones; exe/dll: versión).
+    // Vacío para tipos sin proveedor. `meta-loading` es true mientras el worker aún la lee.
+    meta: [MetaFieldVm],
+    meta-loading: bool,
+    // STL/3MF: la imagen puede girarse con arrastre y acercarse con rueda/touchpad.
+    mesh-interactive: bool,
+    mesh-busy: bool,
+    mesh-color: int,
+    mesh-surface: int,
+    // Mientras el worker todavía no entrega contenido para el archivo enfocado, la UI muestra
+    // una señal discreta. Cancelar incluye debounce/espera/3D; reintentar es explícito.
+    loading: bool,
+    can-cancel: bool,
+    can-retry: bool,
+    // 0 static/loading/error, 1 playing, 2 paused, 3 finished (Repeat).
+    animation-state: int,
+}
+
+// Una ruta reunida en la bandeja temporal.
+export struct BasketRowVm {
+    name: string,
+    path: string,
+    // La referencia fue leída desde .naygolist, pero ya no existe según el worker de importación.
+    // Sigue siendo operable/visible: la marca evita perderla de forma silenciosa.
+    missing: bool,
+    // La selección de la bandeja alimenta Preview y Propiedades, igual que una fila Files.
+    selected: bool,
+    icon: image,
+}
+
+export struct SyncRowVm {
+    path: string,
+    action: string,
+    selected: bool,
+    enabled: bool,
+}
+
+export struct SyncVm {
+    active: bool,
+    left: string,
+    right: string,
+    mode: int,
+    delete-extras: bool,
+    planning: bool,
+    error: string,
+    rows: [SyncRowVm],
+    can-apply: bool,
+}
+
+export struct TextTransformVm {
+    active: bool,
+    count: int,
+    source: string,
+    target-line: int,
+    target-encoding: int,
+    final-newline: int,
+    trim: bool,
+    running: bool,
+    finished: bool,
+    status: string,
+    can-apply: bool,
+}
+
+// Una pestaña dentro de la barra de un grupo: su PaneId, etiqueta y si es la activa.
+export struct TabVm {
+    id: int,
+    label: string,
+    active: bool,
+}
+
+// Un candidato del selector de panel destino (overlay 1..9): su rect + el número a pintar.
+export struct PickVm {
+    x: length,
+    y: length,
+    w: length,
+    h: length,
+    number: int,
+}
+
+// Una opción del radar de destinos: máximo nueve, elegible con 1..9 o clic.
+export struct DestinationRadarRowVm {
+    number: int,
+    label: string,
+    path: string,
+}
+
+// Una opción del selector de ícono: el mismo objeto renderizado en un set de fábrica.
+export struct IconChoiceVm {
+    set-id: string,
+    set-label: string,
+    icon: image,    // el objeto en ese set (ya teñido si corresponde)
+}
+
+// Una fila de la grilla "íconos por objeto" en Configuración.
+export struct IconRowVm {
+    key: string,        // clave estable ("action_back", "file_image", …)
+    label: string,      // nombre traducido del objeto ("Atrás", "Imagen")
+    icon: image,        // ícono efectivo actual (ya teñido)
+    origin: string,     // "Lucide (base)" / "Material · override"
+    overridden: bool,   // tiene override
+    group: int,         // 0 = acción de barra, 1 = tipo de archivo
+}
+
+// Ajustes editables en la ventana de configuración (espejo de los campos de core::Settings
+// que tocamos en la UI Slint). Las listas son los idiomas/temas disponibles para los combos.
+export struct SettingsVm {
+    interface-font: string,
+    listings-font: string,
+    preview-font: string,
+    bar-position: int,        // 0=arriba 1=costado
+    icon-only: bool,
+    show-parent: bool,
+    ops-mode: int,            // 0=cola 1=paralelo
+    window-title-mode: int,   // 0=solo app 1=app+ruta del panel 2=solo ruta
+    confirm-trash: bool,
+    confirm-drop-between-panes: bool,
+    confirm-external-drops: bool,
+    skip-external-drop-confirmation-session: bool,
+    show-op-summary: bool,
+    auto-hide-operations: bool,
+    size-no-subdirs: bool,
+    autostart: bool,
+    autostart-minimized: bool,
+    paste-confirm: bool,
+    paste-text-name: string,
+    paste-text-ext: string,
+    date-format: int,         // 0=ISO min, 1=ISO fecha, 2=DMY min, 3=DMY fecha
+    size-format: int,         // 0=Auto, 1=Bytes, 2=KB, 3=MB
+    row-density: int,         // 0=compacta, 1=cómoda
+    // Avanzado (F3c):
+    ops-display: int,         // 0=panel 1=modal 2=siempre visible
+    paste-image-fmt: int,     // 0=PNG 1=JPG
+    paste-image-name: string,
+    paste-jpg-quality: int,   // 0-100
+    tray-enabled: bool,
+    close-to-tray: bool,
+    global-hotkey-enabled: bool,
+    global-hotkey-text: string,   // el chord activo formateado, p. ej. "Ctrl+Alt+Z"
+    new-items-at-end: bool,
+    low-power-mode: int,      // 0=auto 1=siempre 2=nunca
+    default-table-on: bool,   // hay plantilla de tabla por defecto guardada (C4)
+    row-h: length,            // alto de fila resuelto (22/26px) — lo usan tabla y árbol
+    language: string,         // código del idioma activo
+    language-index: int,      // índice del idioma activo dentro de languages/language-codes
+    theme: string,            // id del tema activo
+    icon-set: string,         // id del set de íconos activo
+    use-system-file-icons: bool,
+    system-file-icons-supported: bool,
+    languages: [string],      // nombres nativos disponibles (para mostrar en el combo)
+    language-codes: [string], // códigos correspondientes a languages (mismo orden)
+    themes: [string],         // ids disponibles
+    icon-sets: [string],      // ids de sets de íconos disponibles (embebidos + packs)
+    icon-set-tintable: bool,  // el set activo admite teñido por color de acento
+    icon-rows: [IconRowVm],   // filas de la grilla "íconos por objeto"
+    icon-set-labels: [string], // nombres traducidos de los sets (mismo orden que icon-sets)
+    // Selector de ícono por objeto: clave del objeto en edición ("" = cerrado) + opciones.
+    icon-picker-key: string,
+    icon-picker-choices: [IconChoiceVm],
+    // Galería de sets de íconos (una tarjeta por set con ~5 muestras).
+    icon-set-cards: [IconSetCardVm],
+}
+
+// Una regla de previsualización editable (C3): extensión, si se previsualiza, y el modo de vista
+// forzado. `view-index`: 0=Auto 1=Texto 2=Imagen 3=Código. `lang-index`: posición en CodeLang::all()
+// (solo relevante cuando view-index==3).
+export struct PreviewRuleVm {
+    ext: string,
+    enabled: bool,
+    view-index: int,
+    lang-index: int,
+}
+
+// Una fila del editor de atajos: la clave estable de la acción, su nombre legible y el chord
+// actual como texto. `conflict` se setea tras una reasignación que pisó otra acción.
+export struct ShortcutRowVm {
+    action-key: string,
+    label: string,
+    chord-text: string,
+    conflict: string,         // vacío = sin conflicto; si no, mensaje a mostrar
+}
+
+// Una barra de splitter colocada: su rect (px) + si el corte es horizontal (arrastra en x).
+export struct SplitVm {
+    index: int,
+    divider: int,
+    x: length,
+    y: length,
+    w: length,
+    h: length,
+    horizontal: bool,
+}
+
+// Un panel colocado. El tipo (espejo de PanePurpose de core) elige qué datos usar:
+// 0=Files 1=Tree 2=Inspector 3=History 4=Favorites 5=Preview 6=Operations 7=Basket.
+export struct PaneVm {
+    id: int,
+    x: length,
+    y: length,
+    w: length,
+    h: length,
+    path: string,
+    active: bool,
+    // Se está ARRASTRANDO un archivo sobre ESTE panel (Files) ahora mismo: la UI lo resalta con un
+    // borde marcado + el título remarcado, para indicar dónde caerá el drop. Solo true para el
+    // panel bajo el cursor durante el arrastre; se limpia al salir/soltar. Lo puebla `sync_rows`
+    // desde `drag_over_pane` del controlador (true sii el id coincide).
+    drag-over: bool,
+    // Y de cliente lógica del cursor OLE. FilePanel la cruza con la geometría real de su ListView
+    // para detectar una carpeta destino dentro del mismo panel (D-1).
+    drag-client-y: length,
+    comparison-active: bool,
+    comparison-link-available: bool,
+    comparison-link-active: bool,
+    purpose: int,
+    title: string,            // título visible en la barra del panel (nombre de carpeta/tipo)
+    link-member: bool,        // participa en una pareja Tree↔Files
+    tree-linked: bool,        // Tree dedicado (false = árbol común)
+    tree-link-label: string,  // "Común" o el panel Files enlazado
+    // Índice visible de la carpeta activa del árbol. Cambia al activar otro Files para revelar
+    // la selección correcta dentro del viewport del árbol común.
+    tree-reveal-row: int,
+    // Ruta de la misma selección: fuerza la revelación aunque dos carpetas ocupen el mismo índice
+    // visible tras un refresco del árbol.
+    tree-reveal-key: string,
+    // Datos según el `purpose` (cada panel usa solo el suyo; los demás van vacíos):
+    rows: [RowData],          // Files
+    // Índice de VISTA de la fila enfocada (-1 = ninguna). Lo pasa Rust desde `f.focused`; el
+    // FilePanel observa su cambio (`changed focused-row`) para que el scroll siga al cursor al
+    // navegar por teclado (la ListView ya no es interactiva, así que no auto-scrollea sola).
+    focused-row: int,
+    // Fila que debe quedar en el borde superior al volver por historial (-1 = sin restauración).
+    // Se calcula por la ruta del ancla guardada, por lo que tolera reordenamientos del listado.
+    restore-scroll-row: int,
+    columns: [ColumnVm],      // Files: columnas visibles (orden/ancho/alineación)
+    col-menu: [ColumnToggleVm],// Files: TODAS las columnas para el menú "Columnas…"
+    is-favorite: bool,        // Files: la carpeta actual está en favoritos (★ de la path-bar)
+    no-matches: bool,         // Files: hay filtro activo pero la vista quedó vacía (F2)
+    // Files: la carpeta del panel NO existe / es ilegible (USB sacado, red caída, ruta muerta).
+    // Muestra el aviso "carpeta no encontrada" IN-PLACE con sus opciones. `missing-path` es la
+    // ruta perdida (para mostrarla).
+    missing: bool,
+    missing-path: string,
+    // ¿Hay un ancestro existente real al que subir? Si la unidad entera se desconectó es false y
+    // el aviso oculta el botón "subir un nivel" (no tendría sentido: caería al HOME).
+    missing-has-ancestor: bool,
+    // ¿La carpeta se perdió porque se expulsó un disco? Cambia el texto del aviso
+    // ("Disco expulsado" en vez del genérico "Carpeta no encontrada").
+    missing-ejected: bool,
+    deep-active: bool,        // Files: la vista profunda (recursiva) está activa en este panel
+    footer-text: string,      // Files: texto de la barra inferior (selección/disco), vacío si está deshabilitado
+    // Espacio de la unidad del panel, separado para poder alinearlo a la derecha sin comprimir el
+    // resumen de selección. Vacío cuando el preset ya lo incorpora o el volumen no responde.
+    footer-disk-text: string,
+    // Historial propio del panel. Cada FilePanel usa estos flags en sus controles compactos de ruta;
+    // no depende del panel que esté activo globalmente.
+    can-go-back: bool,
+    can-go-forward: bool,
+    // Files: etiqueta del filtro visual por tipeo activo en este panel (p. ej. `filtro: "beta"
+    // · 2 coincidencias`), ya traducida. Vacío = sin filtro → la mini-barra no se muestra.
+    filter-label: string,
+    // El filtro visual dejó fuera de la vista las no-coincidencias.
+    filter-hiding: bool,
+    segments: [PathSeg],      // Files: breadcrumbs de la barra de ruta
+    tree-rows: [TreeRow],     // Tree
+    favs: [NavRow],           // Favorites (sección favoritos — sin usar; reemplazado por fav-tree)
+    recents: [NavRow],        // Historial global de carpetas recientes
+    frequent-dirs: [NavRow],  // Ranking de carpetas más usadas
+    fav-tree: [FavTreeRow],   // Favorites (árbol editable de favoritos con grupos)
+    hist-rows: [HistRow],     // History
+    inspector: InspectorVm,   // Inspector
+    preview: PreviewVm,       // Preview
+    basket-rows: [BasketRowVm], // Basket
+    // Si este panel es la pestaña ACTIVA de un grupo, `tabs` lista las pestañas del grupo
+    // (vacío si el panel no está agrupado). La UI pinta la barra arriba del contenido.
+    active-tab-index: int,
+    tabs: [TabVm],
+}
+
+// Una subsección de "Novedades" del Acerca de: una categoría y sus viñetas.
+export struct NewsSection {
+    category: string,
+    items: [string],
+}
+
+// Un segmento del label de un resultado de la paleta: texto + si está resaltado (match).
+export struct PaletteSpanVm {
+    text: string,
+    hit: bool,
+}
+
+// Un resultado de la paleta de comandos (Ctrl+P).
+export struct PaletteItemVm {
+    label: string,            // texto legible de la misma etiqueta visible, separado del payload
+    spans: [PaletteSpanVm],   // el label partido en segmentos resaltados/normales
+    category: int,            // 0=Acción 1=Archivo 2=Reciente 3=Favorito 4=Tema 5=Config
+    shortcut: string,         // "Ctrl+C" o ""
+}
+
+// Una entrada del menú de historial (▾) de Atrás/Adelante.
+export struct HistoryItemVm {
+    name: string,             // nombre de la carpeta
+    path: string,             // ruta completa (atenuada)
+}

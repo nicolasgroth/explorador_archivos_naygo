@@ -1,0 +1,10 @@
+# Naygo — etiquetas de runner reconocidas por actionlint.
+# Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+# SPDX-License-Identifier: MIT
+
+# actionlint 1.7.12 aún no incluye la etiqueta oficial ubuntu-26.04 en su catálogo.
+# GitHub la publica como runner hosted x64; se declara aquí para validar el workflow sin
+# ignorar el diagnóstico de etiqueta desconocida.
+self-hosted-runner:
+  labels:
+    - ubuntu-26.04

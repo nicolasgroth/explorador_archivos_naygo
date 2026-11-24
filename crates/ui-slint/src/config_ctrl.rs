@@ -17,13 +17,14 @@ use naygo_core::keymap::{Action, Chord, KeyCode, KeyMap};
 use naygo_core::theme::{
     is_builtin_id, theme_slug, Theme, ThemeBase, ThemeCatalog, ThemeColor, ThemeId,
 };
-use std::path::PathBuf;
+use std::{collections::HashSet, path::PathBuf, sync::Mutex, time::Duration};
 
 /// Cantidad de tokens de color editables de un tema (orden fijo, ver `set_token_color`).
-pub const THEME_TOKEN_COUNT: usize = 15;
+pub const THEME_TOKEN_COUNT: usize = 16;
 
 /// Estado del tema que se está editando (duplicado de un builtin o de uno de usuario). El editor
 /// muta este `Theme` en memoria, aplica el preview en vivo, y al guardar lo escribe a disco.
+#[derive(Clone)]
 struct ThemeEditState {
     /// El tema en construcción (sus tokens + nombre + base se editan en vivo).
     theme: Theme,
@@ -38,13 +39,39 @@ struct ThemeEditState {
     origin_id: Option<ThemeId>,
 }
 
+/// Snapshot serializado del tema editado. El disco se escribe por `PackIo`; este valor sólo
+/// contiene datos propios y se crea sin tocar el filesystem.
+pub(crate) struct ThemeSaveRequest {
+    pub id: String,
+    pub old_id: Option<String>,
+    pub json: String,
+}
+
 /// Estado de configuración de la app: ajustes + idioma + temas + atajos.
 pub struct ConfigCtrl {
     pub settings: Settings,
+    /// Preferencia efímera: omitir la confirmación de drops OLE externos hasta cerrar Naygo.
+    /// No se serializa para que la opción de sesión vuelva a preguntar tras reiniciar.
+    pub skip_external_drop_confirmation_session: bool,
     pub i18n: I18n,
     pub themes: ThemeCatalog,
+    /// Catálogo de sets de íconos descubierto al cargar o importar packs; callbacks lo consultan
+    /// en memoria para no reexplorar el directorio en cada cambio de tema/set.
+    pub icon_sets: naygo_core::icon_set::IconSetCatalog,
     pub keymap: KeyMap,
     pub config_dir: PathBuf,
+    /// Directorio XDG data (igual al portable en Windows) para packs y assets de usuario.
+    pub icon_data_dir: PathBuf,
+    /// Snapshot/dirty fields detect edits made while startup I/O is still pending.
+    startup_saved_settings: std::cell::RefCell<Settings>,
+    startup_dirty_settings: Mutex<HashSet<String>>,
+    startup_keymap_dirty: Mutex<bool>,
+    startup_settings_pending: std::cell::Cell<bool>,
+    startup_load_failed: std::cell::Cell<bool>,
+    /// Ticket más reciente de settings para coordinar el cierre fuera del hilo de UI.
+    last_settings_save: Mutex<Option<config::SaveTicket>>,
+    /// Ticket más reciente del mapa de atajos para coordinar el cierre fuera de UI.
+    last_keymap_save: Mutex<Option<config::SaveTicket>>,
     /// Tema en edición (editor de temas). `None` mientras no haya un editor abierto.
     editing: Option<ThemeEditState>,
 }
@@ -54,8 +81,49 @@ impl ConfigCtrl {
     /// directorio vacío o archivos corruptos caen a defaults sin panic. En el PRIMER arranque
     /// (no hay settings.json) detecta el idioma del SO y lo deja persistido.
     pub fn new(config_dir: PathBuf) -> ConfigCtrl {
+        Self::new_with_data_dir(config_dir.clone(), config_dir)
+    }
+
+    pub fn new_with_data_dir(config_dir: PathBuf, data_dir: PathBuf) -> ConfigCtrl {
+        Self::new_with_catalog_mode(config_dir, data_dir, true)
+    }
+
+    /// Inicialización sin I/O para el hilo UI. Settings, idioma, temas, sets y atajos parten de
+    /// defaults/recursos embebidos; el worker de arranque carga los datos persistidos después.
+    pub(crate) fn new_for_ui(config_dir: PathBuf, data_dir: PathBuf) -> ConfigCtrl {
+        let settings = Settings::default();
+        let keymap = KeyMap::defaults();
+        ConfigCtrl {
+            skip_external_drop_confirmation_session: false,
+            i18n: I18n::embedded(&settings.language),
+            settings: settings.clone(),
+            themes: ThemeCatalog::embedded(),
+            icon_sets: naygo_core::icon_set::IconSetCatalog::embedded(),
+            keymap,
+            config_dir,
+            icon_data_dir: data_dir,
+            startup_saved_settings: std::cell::RefCell::new(settings),
+            startup_dirty_settings: Mutex::new(HashSet::new()),
+            startup_keymap_dirty: Mutex::new(false),
+            startup_settings_pending: std::cell::Cell::new(true),
+            startup_load_failed: std::cell::Cell::new(false),
+            last_settings_save: Mutex::new(None),
+            last_keymap_save: Mutex::new(None),
+            editing: None,
+        }
+    }
+
+    fn new_with_catalog_mode(
+        config_dir: PathBuf,
+        data_dir: PathBuf,
+        load_external_catalogs: bool,
+    ) -> ConfigCtrl {
         let first_launch = !config_dir.join("settings.json").exists();
-        let (mut settings, _recovered) = config::load_settings_flagged(&config_dir);
+        let (mut settings, _recovered) = if load_external_catalogs {
+            config::load_settings_flagged_with_data_dir(&config_dir, &data_dir)
+        } else {
+            config::load_settings_flagged_deferred_icon_set(&config_dir)
+        };
         let mut i18n = I18n::load(&config_dir, &settings.language);
         if first_launch {
             // Elegir el idioma según el locale del SO (es-CL → es, en-US → en, …) entre los
@@ -68,14 +136,33 @@ impl ConfigCtrl {
                 }
             }
         }
-        let themes = ThemeCatalog::load(&config_dir, &settings.theme);
+        let themes = if load_external_catalogs {
+            ThemeCatalog::load(&config_dir, &settings.theme)
+        } else {
+            ThemeCatalog::embedded()
+        };
+        let icon_sets = if load_external_catalogs {
+            naygo_core::icon_set::IconSetCatalog::load_with_legacy(&data_dir, Some(&config_dir))
+        } else {
+            naygo_core::icon_set::IconSetCatalog::embedded()
+        };
         let keymap = config::load_keymap(&config_dir);
         ConfigCtrl {
+            skip_external_drop_confirmation_session: false,
+            startup_saved_settings: std::cell::RefCell::new(settings.clone()),
+            startup_dirty_settings: Mutex::new(HashSet::new()),
+            startup_keymap_dirty: Mutex::new(false),
+            startup_settings_pending: std::cell::Cell::new(false),
+            startup_load_failed: std::cell::Cell::new(false),
             settings,
             i18n,
             themes,
+            icon_sets,
             keymap,
             config_dir,
+            icon_data_dir: data_dir,
+            last_settings_save: Mutex::new(None),
+            last_keymap_save: Mutex::new(None),
             editing: None,
         }
     }
@@ -93,9 +180,161 @@ impl ConfigCtrl {
         self.themes.get(&self.settings.theme)
     }
 
-    /// Persiste los settings actuales (escritura chica de JSON).
+    /// Encola los settings actuales. La escritura atómica corre en el worker JSON compartido;
+    /// los guardados rápidos se coalescen por archivo y los errores quedan en el log.
     pub fn save(&self) {
-        config::save_settings(&self.config_dir, &self.settings);
+        self.record_startup_settings_edits();
+        if self.startup_settings_pending.get() || self.startup_load_failed.get() {
+            return;
+        }
+        match config::save_settings_async(&self.config_dir, &self.settings) {
+            Ok(ticket) => {
+                *self
+                    .last_settings_save
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = Some(ticket);
+            }
+            Err(error) => {
+                crate::logging::log_line(&format!(
+                    "no se pudo encolar el guardado de settings: {error}"
+                ));
+            }
+        }
+    }
+
+    /// Ticket más reciente, leído por la coordinación de salida que espera fuera de UI.
+    pub fn settings_save_ticket(&self) -> Option<config::SaveTicket> {
+        self.last_settings_save
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// Tickets pendientes más recientes de todos los archivos de configuración administrados.
+    pub fn persistence_tickets(&self) -> Vec<config::SaveTicket> {
+        self.settings_save_ticket()
+            .into_iter()
+            .chain(
+                self.last_keymap_save
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone(),
+            )
+            .collect()
+    }
+
+    /// Espera un guardado sólo para pruebas o coordinación fuera del hilo de UI.
+    pub fn wait_for_settings_save(&self, timeout: Duration) -> Result<(), String> {
+        self.settings_save_ticket()
+            .map(|ticket| config::wait_settings_saved(&ticket, timeout))
+            .unwrap_or(Ok(()))
+    }
+
+    fn save_keymap(&self) {
+        *self
+            .startup_keymap_dirty
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = true;
+        if self.startup_settings_pending.get() || self.startup_load_failed.get() {
+            return;
+        }
+        match config::save_keymap_async(&self.config_dir, &self.keymap) {
+            Ok(ticket) => {
+                *self
+                    .last_keymap_save
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = Some(ticket);
+            }
+            Err(error) => crate::logging::log_line(&format!(
+                "no se pudo encolar el guardado del keymap: {error}"
+            )),
+        }
+    }
+
+    /// Fusiona la configuración cargada con los campos editados durante el arranque.
+    /// Un campo que volvió explícitamente a su default también se conserva si fue guardado.
+    pub(crate) fn apply_startup_config(
+        &mut self,
+        loaded: Settings,
+        i18n: I18n,
+        keymap: KeyMap,
+        first_launch_save_ticket: Option<config::SaveTicket>,
+    ) {
+        let defaults = Settings::default();
+        let current = serde_json::to_value(&self.settings).unwrap_or_default();
+        let defaults = serde_json::to_value(&defaults).unwrap_or_default();
+        let mut loaded = serde_json::to_value(loaded).unwrap_or_default();
+        let dirty = self
+            .startup_dirty_settings
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone();
+        if let (Some(current), Some(defaults), Some(loaded)) = (
+            current.as_object(),
+            defaults.as_object(),
+            loaded.as_object_mut(),
+        ) {
+            for (name, value) in current {
+                if dirty.contains(name) || defaults.get(name) != Some(value) {
+                    loaded.insert(name.clone(), value.clone());
+                }
+            }
+        }
+        self.settings = serde_json::from_value(loaded).unwrap_or_else(|_| self.settings.clone());
+        if let Some(ticket) = first_launch_save_ticket {
+            *self
+                .last_settings_save
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()) = Some(ticket);
+        }
+        self.i18n = i18n;
+        let _ = self.i18n.set_language(&self.settings.language);
+        let keymap_dirty = *self
+            .startup_keymap_dirty
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if !keymap_dirty && self.keymap == KeyMap::defaults() {
+            self.keymap = keymap;
+        }
+        self.startup_settings_pending.set(false);
+        *self.startup_saved_settings.borrow_mut() = self.settings.clone();
+        self.startup_dirty_settings
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clear();
+        if !dirty.is_empty() {
+            self.save();
+        }
+        if keymap_dirty {
+            self.save_keymap();
+        }
+    }
+
+    pub(crate) fn finish_startup_without_data(&mut self) {
+        self.startup_settings_pending.set(false);
+        // Si el snapshot no llegó, defaults embebidos no pueden sobrescribir archivos
+        // existentes cuyo contenido el worker no alcanzó a leer.
+        self.startup_load_failed.set(true);
+    }
+
+    fn record_startup_settings_edits(&self) {
+        let current = serde_json::to_value(&self.settings).unwrap_or_default();
+        let mut previous = self.startup_saved_settings.borrow_mut();
+        let previous_value = serde_json::to_value(&*previous).unwrap_or_default();
+        if let (Some(current), Some(previous_value)) =
+            (current.as_object(), previous_value.as_object())
+        {
+            let mut dirty = self
+                .startup_dirty_settings
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            for (name, value) in current {
+                if previous_value.get(name) != Some(value) {
+                    dirty.insert(name.clone());
+                }
+            }
+        }
+        *previous = self.settings.clone();
     }
 
     /// Cambia el idioma activo y persiste. Devuelve `true` si efectivamente cambió (el core
@@ -135,11 +374,11 @@ impl ConfigCtrl {
 
     // --- Editor de temas (galería de Apariencia) ---
     //
-    // Los 15 tokens de color de un `Theme` se exponen por un índice estable 0..15. El ORDEN ES
+    // Los 16 tokens de color de un `Theme` se exponen por un índice estable 0..16. El ORDEN ES
     // FIJO y debe coincidir entre `editing_token_hex` y `set_token_color` (y con la lista de la
     // UI): 0=accent, 1=panel_bg, 2=row_bg, 3=row_alt_bg, 4=text, 5=text_dim, 6=selection_bg,
     // 7=active_bar, 8=error, 9=highlight, 10=border, 11=row_inactive_bg,
-    // 12=active_panel_bg, 13=inactive_panel_bg, 14=toolbar_bg.
+    // 12=active_panel_bg, 13=inactive_panel_bg, 14=toolbar_bg, 15=icon_accent.
 
     /// Lee el token `idx` de un tema. Fuera de rango → `accent` (defensivo, nunca panic).
     fn token_of(theme: &Theme, idx: usize) -> ThemeColor {
@@ -159,6 +398,7 @@ impl ConfigCtrl {
             12 => theme.active_panel_bg,
             13 => theme.inactive_panel_bg,
             14 => theme.toolbar_bg,
+            15 => theme.icon_accent,
             _ => theme.accent,
         }
     }
@@ -181,6 +421,7 @@ impl ConfigCtrl {
             12 => theme.active_panel_bg = c,
             13 => theme.inactive_panel_bg = c,
             14 => theme.toolbar_bg = c,
+            15 => theme.icon_accent = c,
             _ => {}
         }
     }
@@ -359,51 +600,35 @@ impl ConfigCtrl {
         self.editing.as_ref().map(|e| &e.theme)
     }
 
-    /// Guarda el tema en edición: lo serializa a `<config>/themes/<slug>.json`, recarga el
-    /// catálogo, lo deja activo y persiste settings. Devuelve el id guardado, o `None` si no había
-    /// editor o falló la escritura. Limpia el estado de edición.
-    pub fn save_editing_theme(&mut self) -> Option<ThemeId> {
-        let state = self.editing.take()?;
-        let theme = state.theme;
-        // Resolver el id de destino según el origen del editor:
-        //  - Edición IN-PLACE de un tema de usuario (botón "Editar"): se sobrescribe ese mismo id.
-        //    Si el usuario cambió el nombre y el slug ya no coincide, se asigna un slug nuevo
-        //    (único, sin pisar a otro tema) y se borra el `<id viejo>.json` para no dejar huérfanos.
-        //  - Tema nuevo (duplicado): siempre un id-slug único.
+    /// Prepara el guardado del tema en edición sin I/O. Conserva el editor hasta que el worker
+    /// confirme el commit, así un fallo no descarta los cambios del usuario.
+    pub(crate) fn prepare_theme_save(&self) -> Result<Option<ThemeSaveRequest>, String> {
+        let Some(state) = self.editing.as_ref() else {
+            return Ok(None);
+        };
+        let theme = &state.theme;
         let new_slug = theme_slug(&theme.name);
-        let (id, old_to_delete): (String, Option<String>) = match &state.origin_id {
-            Some(origin) if origin.as_str() == new_slug => {
-                // Mismo slug → sobrescribir en sitio, sin borrar nada.
-                (origin.as_str().to_string(), None)
-            }
-            Some(origin) => {
-                // Renombrado: id nuevo único + borrar el .json del id viejo.
-                (
-                    self.unique_slug(&theme.name),
-                    Some(origin.as_str().to_string()),
-                )
-            }
+        let (id, old_id) = match &state.origin_id {
+            Some(origin) if origin.as_str() == new_slug => (origin.as_str().to_string(), None),
+            Some(origin) => (
+                self.unique_slug(&theme.name),
+                Some(origin.as_str().to_string()),
+            ),
             None => (self.unique_slug(&theme.name), None),
         };
-        let theme_dir = self.config_dir.join("themes");
-        if std::fs::create_dir_all(&theme_dir).is_err() {
-            return None;
-        }
-        let path = theme_dir.join(format!("{id}.json"));
-        let json = serde_json::to_string_pretty(&theme).ok()?;
-        if std::fs::write(&path, json).is_err() {
-            return None;
-        }
-        // Borrar el .json del id viejo tras escribir el nuevo (ignorando el error, igual que
-        // `delete_user_theme` con `.is_ok()`: si ya no está, no pasa nada).
-        if let Some(old) = old_to_delete {
-            let _ = std::fs::remove_file(theme_dir.join(format!("{old}.json")));
-        }
+        let json = serde_json::to_string_pretty(theme)
+            .map_err(|error| format!("no se pudo serializar el tema: {error}"))?;
+        Ok(Some(ThemeSaveRequest { id, old_id, json }))
+    }
+
+    /// Completa en UI un guardado confirmado por el worker.
+    pub(crate) fn finish_theme_save(&mut self, id: String, catalog: ThemeCatalog) -> ThemeId {
+        self.editing.take();
+        self.themes = catalog;
         let new_id = ThemeId::new(&id);
-        self.themes = ThemeCatalog::load(&self.config_dir, &new_id);
         self.settings.theme = new_id.clone();
         self.save();
-        Some(new_id)
+        new_id
     }
 
     /// Cancela el editor: descarta el tema en edición y devuelve el id del tema que estaba activo
@@ -443,29 +668,22 @@ impl ConfigCtrl {
         e.theme.active_bar = factory.active_bar;
         e.theme.error = factory.error;
         e.theme.highlight = factory.highlight;
+        e.theme.icon_accent = factory.icon_accent;
         e.theme.border = factory.border;
         e.theme.flat_inactive_panels = factory.flat_inactive_panels;
         e.theme.use_inactive_row_color = factory.use_inactive_row_color;
         e.theme.base = factory.base;
     }
 
-    /// Borra un tema de USUARIO: elimina `<config>/themes/<id>.json`, recarga el catálogo, y si era
-    /// el activo cae al default. Para builtins no hace nada (no son borrables). Devuelve `true` si
-    /// borró algo.
-    pub fn delete_user_theme(&mut self, id: &str) -> bool {
-        if is_builtin_id(id) {
-            return false;
-        }
-        let path = self.config_dir.join("themes").join(format!("{id}.json"));
-        let removed = std::fs::remove_file(&path).is_ok();
-        // Recargar el catálogo (refleja el borrado) y, si el borrado era el activo, caer al default.
-        let active = self.settings.theme.clone();
-        self.themes = ThemeCatalog::load(&self.config_dir, &active);
-        if active.as_str() == id {
+    /// Completa en UI un borrado de tema de usuario confirmado por el worker (`PackIo`): adopta el
+    /// catálogo recargado y, si el tema borrado era el activo, cae al default y persiste. Los
+    /// builtins no son borrables: el callback de la UI ni siquiera encola el borrado.
+    pub(crate) fn finish_theme_delete(&mut self, id: &str, removed: bool, catalog: ThemeCatalog) {
+        self.themes = catalog;
+        if removed && self.settings.theme.as_str() == id {
             self.settings.theme = ThemeCatalog::default_id();
             self.save();
         }
-        removed
     }
 
     // --- Setters de ajustes (cada uno persiste). Los usa la ventana de configuración. ---
@@ -502,9 +720,25 @@ impl ConfigCtrl {
         self.save();
     }
 
+    /// Preguntar antes de aceptar arrastres desde aplicaciones externas (OLE).
+    pub fn set_confirm_external_drops(&mut self, v: bool) {
+        self.settings.confirm_external_drops = v;
+        self.save();
+    }
+
+    /// Omitir la confirmación de arrastres externos hasta cerrar Naygo. Solo estado de sesión.
+    pub fn set_skip_external_drop_confirmation_session(&mut self, v: bool) {
+        self.skip_external_drop_confirmation_session = v;
+    }
+
     /// Mostrar el resumen al terminar una operación.
     pub fn set_show_op_summary(&mut self, v: bool) {
         self.settings.show_op_summary = v;
+        self.save();
+    }
+
+    pub fn set_auto_hide_operations(&mut self, enabled: bool) {
+        self.settings.auto_hide_operations = enabled;
         self.save();
     }
 
@@ -520,10 +754,16 @@ impl ConfigCtrl {
         self.save();
     }
 
+    /// Preferir asociaciones de iconos de Windows para archivos; conserva un cache acotado.
+    pub fn set_use_system_file_icons(&mut self, v: bool) {
+        self.settings.use_system_file_icons = v;
+        self.save();
+    }
+
     pub fn set_font(&mut self, role: i32, family: &str) {
         self.settings.fonts.set(role, family);
         // El ajuste se aplica en memoria; el guardado no bloquea el hilo de UI.
-        let _ = config::save_settings_async(&self.config_dir, &self.settings);
+        self.save();
     }
 
     /// Posición de la barra: 0 = arriba, 1 = al costado.
@@ -597,8 +837,7 @@ impl ConfigCtrl {
     /// Set de íconos por id (de los disponibles en el catálogo: embebidos + packs sueltos).
     /// Lo coacciona contra el catálogo (un id inexistente cae a "lucide") y persiste.
     pub fn set_icon_set(&mut self, id: String) {
-        let catalog = naygo_core::icon_set::IconSetCatalog::load(&self.config_dir);
-        self.settings.icon_set = catalog.resolve(&id);
+        self.settings.icon_set = self.icon_sets.resolve(&id);
         self.save();
     }
 
@@ -723,6 +962,36 @@ impl ConfigCtrl {
     pub fn set_auto_highlight_code(&mut self, v: bool) {
         self.settings.auto_highlight_code = v;
         self.save();
+    }
+
+    pub fn set_preview_economical(&mut self, v: bool) {
+        self.settings.preview_economical = v;
+        self.save();
+    }
+
+    /// Índice estable de la opción de bytes por lectura de texto en el preview.
+    pub fn preview_text_limit_index(&self) -> i32 {
+        let value =
+            naygo_core::preview::normalize_text_max_bytes(self.settings.preview_text_max_bytes);
+        naygo_core::preview::TEXT_MAX_BYTES_OPTIONS
+            .iter()
+            .position(|candidate| *candidate == value)
+            .unwrap_or(1) as i32
+    }
+
+    /// Cambia y persiste el límite de lectura, aceptando solo opciones visibles en Configuración.
+    pub fn set_preview_text_limit_index(&mut self, index: i32) {
+        let Some(value) = (index >= 0)
+            .then_some(index as usize)
+            .and_then(|i| naygo_core::preview::TEXT_MAX_BYTES_OPTIONS.get(i))
+            .copied()
+        else {
+            return;
+        };
+        if self.settings.preview_text_max_bytes != value {
+            self.settings.preview_text_max_bytes = value;
+            self.save();
+        }
     }
 
     /// ¿Activar animaciones adicionales de mayor costo (p. ej. el brillo de la barra del panel de operaciones)?
@@ -935,20 +1204,20 @@ impl ConfigCtrl {
             self.keymap.unbind(action, &c);
         }
         let displaced = self.keymap.bind(action, chord);
-        config::save_keymap(&self.config_dir, &self.keymap);
+        self.save_keymap();
         displaced
     }
 
     /// Restaura los atajos por defecto de una acción y persiste.
     pub fn reset_shortcut(&mut self, action: Action) {
         self.keymap.reset_action(action);
-        config::save_keymap(&self.config_dir, &self.keymap);
+        self.save_keymap();
     }
 
     /// Restaura TODOS los atajos a sus valores por defecto y persiste.
     pub fn reset_all_shortcuts(&mut self) {
         self.keymap.reset_all();
-        config::save_keymap(&self.config_dir, &self.keymap);
+        self.save_keymap();
     }
 
     /// Clave estable de una acción (el nombre de la variante, p. ej. "Copy"). Sirve de
@@ -986,6 +1255,68 @@ impl ConfigCtrl {
 mod tests {
     use super::*;
 
+    /// Guarda el tema en edición por el MISMO camino que la UI: `prepare_theme_save` → worker
+    /// `PackIo` (escritura atómica en disco) → `finish_theme_save`. Devuelve el id guardado.
+    fn save_editing_theme_via_worker(c: &mut ConfigCtrl) -> Option<ThemeId> {
+        let request = c.prepare_theme_save().ok()??;
+        let (wake_tx, wake_rx) = std::sync::mpsc::sync_channel(2);
+        let worker = crate::packs::PackIo::new(std::sync::Arc::new(move || {
+            let _ = wake_tx.try_send(());
+        }));
+        worker
+            .submit(crate::packs::PackJob::SaveTheme {
+                config_dir: c.config_dir.clone(),
+                id: request.id,
+                old_id: request.old_id,
+                json: request.json,
+            })
+            .ok()?;
+        wake_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("el worker avisa al terminar");
+        let outcomes = worker.drain();
+        let Some(crate::packs::PackOutcome::SaveTheme(Ok((id, catalog)))) =
+            outcomes.into_iter().next()
+        else {
+            return None;
+        };
+        Some(c.finish_theme_save(id, catalog))
+    }
+
+    /// Borra un tema de usuario por el camino de la UI: worker `PackIo` → `finish_theme_delete`.
+    fn delete_user_theme_via_worker(c: &mut ConfigCtrl, id: &str) -> bool {
+        if is_builtin_id(id) {
+            return false; // el callback de la UI no encola el borrado de un builtin
+        }
+        let (wake_tx, wake_rx) = std::sync::mpsc::sync_channel(2);
+        let worker = crate::packs::PackIo::new(std::sync::Arc::new(move || {
+            let _ = wake_tx.try_send(());
+        }));
+        worker
+            .submit(crate::packs::PackJob::DeleteTheme {
+                config_dir: c.config_dir.clone(),
+                id: id.to_string(),
+            })
+            .unwrap();
+        wake_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("el worker avisa al terminar");
+        let outcomes = worker.drain();
+        let Some(crate::packs::PackOutcome::DeleteTheme {
+            result: Ok((removed, catalog)),
+            ..
+        }) = outcomes.into_iter().next()
+        else {
+            panic!("se esperaba el resultado del borrado");
+        };
+        c.finish_theme_delete(id, removed, catalog);
+        removed
+    }
+
+    fn flush_settings(c: &ConfigCtrl) {
+        c.wait_for_settings_save(Duration::from_secs(5)).unwrap();
+    }
+
     #[test]
     fn carga_defaults_en_dir_vacio() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1004,6 +1335,7 @@ mod tests {
             let mut c = ConfigCtrl::new(dir.clone());
             c.set_theme(ThemeId::new("winxp"));
             assert_eq!(c.settings.theme, ThemeId::new("winxp"));
+            flush_settings(&c);
         }
         // Reabrir: el tema persistió.
         let c2 = ConfigCtrl::new(dir);
@@ -1019,6 +1351,7 @@ mod tests {
             c.set_ops_mode(1);
             c.set_confirm_trash(true);
             c.set_paste_text_ext("md".into());
+            flush_settings(&c);
         }
         let c2 = ConfigCtrl::new(dir);
         assert_eq!(c2.settings.ops_mode, OpsMode::Parallel);
@@ -1040,6 +1373,7 @@ mod tests {
             c.set_new_items_at_end(true);
             c.set_tray_enabled(false);
             c.set_close_to_tray(true);
+            flush_settings(&c);
         }
         let c2 = ConfigCtrl::new(dir);
         assert_eq!(c2.settings.ops_display, OpsDisplay::AlwaysVisible);
@@ -1061,6 +1395,7 @@ mod tests {
             let chord = Chord::ctrl_alt(KeyCode::Char('w'));
             assert!(c.set_global_hotkey(chord).is_ok());
             assert_eq!(c.settings.global_hotkey, chord);
+            flush_settings(&c);
         }
         let c2 = ConfigCtrl::new(dir);
         assert!(!c2.settings.global_hotkey_enabled);
@@ -1099,6 +1434,7 @@ mod tests {
             c.set_show_hidden(false);
             c.set_show_system(false);
             c.set_hide_dotfiles(true);
+            flush_settings(&c);
         }
         let c2 = ConfigCtrl::new(dir);
         assert!(!c2.show_hidden());
@@ -1114,6 +1450,7 @@ mod tests {
         c.set_confirm_trash(true);
         c.set_ops_mode(1);
         c.factory_reset();
+        flush_settings(&c);
         let defaults = naygo_core::config::Settings::default();
         assert_eq!(c.settings, defaults, "factory reset = defaults exactos");
         // Y persistió: reabrir da los defaults.
@@ -1195,6 +1532,28 @@ mod tests {
     }
 
     #[test]
+    fn icon_accent_is_independent_persisted_and_factory_restorable() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut c = ConfigCtrl::new(tmp.path().to_path_buf());
+        c.duplicate_theme("isgroth-nieve");
+        let recent = c.editing_token_hex(9);
+        let original = c.editing_token_hex(15);
+        assert_ne!(recent, original);
+        c.set_token_color(15, "#123456");
+        assert_eq!(c.editing_token_hex(9), recent);
+        assert_eq!(c.editing_token_hex(15), "#123456");
+        c.restore_factory_editing();
+        assert_eq!(c.editing_token_hex(15), original);
+        assert_eq!(THEME_TOKEN_COUNT, 16);
+        c.set_token_color(15, "#123456");
+        assert!(save_editing_theme_via_worker(&mut c).is_some());
+        flush_settings(&c);
+        let reloaded = ConfigCtrl::new(tmp.path().to_path_buf());
+        assert_eq!(reloaded.active_theme().icon_accent.to_hex(), "#123456");
+        assert_eq!(reloaded.active_theme().highlight.to_hex(), recent);
+    }
+
+    #[test]
     fn guardar_tema_escribe_json_y_lo_activa() {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().to_path_buf();
@@ -1204,7 +1563,7 @@ mod tests {
             c.duplicate_theme("dark-blue");
             c.set_editing_name("Mi Tema".into());
             c.set_token_color(0, "#112233"); // accent
-            let id = c.save_editing_theme().expect("guarda");
+            let id = save_editing_theme_via_worker(&mut c).expect("guarda");
             saved_id = id.as_str().to_string();
             assert!(!c.is_editing_theme(), "el editor se cierra al guardar");
             // Quedó activo y en el catálogo.
@@ -1256,15 +1615,15 @@ mod tests {
         // Crear un tema de usuario guardándolo.
         c.duplicate_theme("dark-blue");
         c.set_editing_name("Borrame".into());
-        let id = c.save_editing_theme().unwrap();
+        let id = save_editing_theme_via_worker(&mut c).unwrap();
         let id_str = id.as_str().to_string();
         assert!(c.themes.available().iter().any(|t| t.as_str() == id_str));
         // Era el activo (save lo dejó activo) → al borrar cae al default.
-        assert!(c.delete_user_theme(&id_str));
+        assert!(delete_user_theme_via_worker(&mut c, &id_str));
         assert!(!c.themes.available().iter().any(|t| t.as_str() == id_str));
         assert_eq!(c.settings.theme, ThemeCatalog::default_id());
         // Un builtin no se borra.
-        assert!(!c.delete_user_theme("dark-blue"));
+        assert!(!delete_user_theme_via_worker(&mut c, "dark-blue"));
         assert!(c
             .themes
             .available()
@@ -1280,7 +1639,7 @@ mod tests {
         // Crear un tema de usuario.
         c.duplicate_theme("dark-blue");
         c.set_editing_name("Mi Tema".into());
-        let id = c.save_editing_theme().unwrap();
+        let id = save_editing_theme_via_worker(&mut c).unwrap();
         let id_str = id.as_str().to_string();
         let themes_dir = dir.join("themes");
         // Editar IN-PLACE ese tema, cambiar un color, NO renombrar, guardar.
@@ -1290,7 +1649,7 @@ mod tests {
             "abre el editor con su id"
         );
         c.set_token_color(0, "#abcdef"); // accent
-        let saved = c.save_editing_theme().unwrap();
+        let saved = save_editing_theme_via_worker(&mut c).unwrap();
         // Mismo id: NO se creó "<id>-2".
         assert_eq!(saved.as_str(), id_str, "reusa el mismo id (no duplica)");
         assert!(themes_dir.join(format!("{id_str}.json")).exists());
@@ -1317,14 +1676,14 @@ mod tests {
         let mut c = ConfigCtrl::new(dir.clone());
         c.duplicate_theme("dark-blue");
         c.set_editing_name("Original".into());
-        let old = c.save_editing_theme().unwrap();
+        let old = save_editing_theme_via_worker(&mut c).unwrap();
         let old_str = old.as_str().to_string();
         let themes_dir = dir.join("themes");
         assert!(themes_dir.join(format!("{old_str}.json")).exists());
         // Editar y RENOMBRAR (el slug cambia).
         c.edit_user_theme(&old_str);
         c.set_editing_name("Renombrado".into());
-        let new = c.save_editing_theme().unwrap();
+        let new = save_editing_theme_via_worker(&mut c).unwrap();
         assert_ne!(new.as_str(), old_str, "el id nuevo refleja el nombre nuevo");
         // El .json viejo se borró; el nuevo existe.
         assert!(
@@ -1357,10 +1716,10 @@ mod tests {
         // Guardar dos temas con el mismo nombre → ids distintos (sufijo -2).
         c.duplicate_theme("dark-blue");
         c.set_editing_name("Repe".into());
-        let a = c.save_editing_theme().unwrap();
+        let a = save_editing_theme_via_worker(&mut c).unwrap();
         c.duplicate_theme("dark-blue");
         c.set_editing_name("Repe".into());
-        let b = c.save_editing_theme().unwrap();
+        let b = save_editing_theme_via_worker(&mut c).unwrap();
         assert_ne!(a.as_str(), b.as_str());
         assert_eq!(a.as_str(), "repe");
         assert_eq!(b.as_str(), "repe-2");
@@ -1382,6 +1741,75 @@ mod tests {
         assert_eq!(
             c.keymap.action_for(&Chord::ctrl(KeyCode::Char('c'))),
             Some(Action::Copy)
+        );
+    }
+
+    #[test]
+    fn carga_inicial_respeta_ajuste_revertido_y_carga_los_no_editados() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut c = ConfigCtrl::new_for_ui(tmp.path().to_path_buf(), tmp.path().to_path_buf());
+        c.settings.hide_dotfiles = true;
+        c.save();
+        c.settings.hide_dotfiles = false;
+        c.save();
+
+        let loaded = Settings {
+            hide_dotfiles: true,
+            icon_only: true,
+            ..Settings::default()
+        };
+        c.apply_startup_config(
+            loaded,
+            I18n::embedded(&LangId::new("es")),
+            KeyMap::defaults(),
+            None,
+        );
+
+        assert!(
+            !c.settings.hide_dotfiles,
+            "el cambio explícito al default gana"
+        );
+        assert!(
+            c.settings.icon_only,
+            "se aplican los campos que nadie editó"
+        );
+    }
+
+    #[test]
+    fn carga_inicial_no_reemplaza_keymap_editado() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut c = ConfigCtrl::new_for_ui(tmp.path().to_path_buf(), tmp.path().to_path_buf());
+        c.rebind(Action::Cut, Chord::ctrl(KeyCode::Char('c')));
+        let edited = c.keymap.clone();
+
+        c.apply_startup_config(
+            Settings::default(),
+            I18n::embedded(&LangId::new("es")),
+            KeyMap::defaults(),
+            None,
+        );
+
+        assert_eq!(c.keymap, edited);
+    }
+
+    #[test]
+    fn fallo_de_carga_inicial_no_sobrescribe_settings_persistidos() {
+        let tmp = tempfile::tempdir().unwrap();
+        let persisted = Settings {
+            hide_dotfiles: true,
+            ..Settings::default()
+        };
+        config::save_settings(tmp.path(), &persisted);
+
+        let mut c = ConfigCtrl::new_for_ui(tmp.path().to_path_buf(), tmp.path().to_path_buf());
+        c.settings.hide_dotfiles = false;
+        c.finish_startup_without_data();
+        c.save();
+
+        let (reloaded, _) = config::load_settings_flagged(tmp.path());
+        assert!(
+            reloaded.hide_dotfiles,
+            "el valor previo se conserva intacto"
         );
     }
 }

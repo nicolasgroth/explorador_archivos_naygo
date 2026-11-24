@@ -33,6 +33,7 @@ use std::path::{Path, PathBuf};
 /// la migración del formato plano antiguo.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Favorite {
+    #[serde(with = "crate::path_wire")]
     pub path: PathBuf,
     pub label: String,
 }
@@ -45,7 +46,11 @@ pub struct Favorite {
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum FavNode {
     /// Hoja: una carpeta anclada.
-    Favorite { path: PathBuf, label: String },
+    Favorite {
+        #[serde(with = "crate::path_wire")]
+        path: PathBuf,
+        label: String,
+    },
     /// Rama: un grupo con nombre y sus hijos (favoritos u otros grupos).
     Group {
         name: String,
@@ -84,7 +89,7 @@ pub type GroupId = Vec<usize>;
 /// clave `items` (desconocida aquí), así que su parse como `Favorites` FALLA y
 /// [`Favorites::from_json`] cae al camino de migración. Un `{ "roots": [] }` válido
 /// sí se acepta como árbol nuevo (vacío) sin confundirse con el viejo.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Favorites {
     #[serde(default)]
@@ -95,7 +100,7 @@ pub struct Favorites {
 /// para raíces de unidad ("D:\" no tiene `file_name`).
 fn default_label(path: &Path) -> String {
     path.file_name()
-        .map(|n| n.to_string_lossy().into_owned())
+        .map(crate::path_display::display_os_str)
         .unwrap_or_else(|| path.display().to_string())
 }
 
@@ -159,9 +164,37 @@ impl Favorites {
         Self::default()
     }
 
+    /// Une nodos agregados mientras se cargaba el archivo persistido. Los nodos guardados
+    /// conservan su orden; las adiciones nuevas se anexan y las etiquetas editadas ganan.
+    pub fn merge_startup_additions(&mut self, additions: &Favorites) {
+        merge_startup_nodes(&mut self.roots, &additions.roots);
+    }
+
     /// Los nodos de la raíz del árbol (para que la UI dibuje la estructura).
     pub fn roots(&self) -> &[FavNode] {
         &self.roots
+    }
+
+    /// Reescribe las rutas de las hojas sin cambiar el orden, los grupos ni sus alias.
+    /// Si el mapper falla, puede haber hojas previas ya convertidas; los callers que
+    /// requieren atomicidad deben invocarlo sobre un clon.
+    pub fn try_map_paths<E>(
+        &mut self,
+        map: &mut impl FnMut(&Path) -> Result<PathBuf, E>,
+    ) -> Result<(), E> {
+        fn map_nodes<E>(
+            nodes: &mut [FavNode],
+            map: &mut impl FnMut(&Path) -> Result<PathBuf, E>,
+        ) -> Result<(), E> {
+            for node in nodes {
+                match node {
+                    FavNode::Favorite { path, .. } => *path = map(path)?,
+                    FavNode::Group { children, .. } => map_nodes(children, map)?,
+                }
+            }
+            Ok(())
+        }
+        map_nodes(&mut self.roots, map)
     }
 
     /// ¿La ruta ya es favorita (en cualquier grupo)?
@@ -427,6 +460,37 @@ pub fn favorites_path(config_dir: &Path) -> PathBuf {
     config_dir.join("favorites.json")
 }
 
+fn merge_startup_nodes(target: &mut Vec<FavNode>, additions: &[FavNode]) {
+    for addition in additions {
+        match addition {
+            FavNode::Favorite { path, label } => {
+                if let Some(FavNode::Favorite {
+                    label: target_label,
+                    ..
+                }) = target.iter_mut().find(|node| {
+                    matches!(node, FavNode::Favorite { path: existing, .. } if existing == path)
+                }) {
+                    *target_label = label.clone();
+                } else {
+                    target.push(addition.clone());
+                }
+            }
+            FavNode::Group { name, children } => {
+                if let Some(FavNode::Group {
+                    children: target_children,
+                    ..
+                }) = target.iter_mut().find(|node| {
+                    matches!(node, FavNode::Group { name: existing, .. } if existing == name)
+                }) {
+                    merge_startup_nodes(target_children, children);
+                } else {
+                    target.push(addition.clone());
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -442,6 +506,23 @@ mod tests {
         assert!(f.contains(&p("D:/a")));
         f.remove(&p("D:/a"));
         assert!(!f.contains(&p("D:/a")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn favorito_posix_no_utf8_conserva_bytes_y_etiqueta_escapada_en_json() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let path = PathBuf::from(std::ffi::OsString::from_vec(b"/tmp/favorito-\xff".to_vec()));
+        let mut favorites = Favorites::default();
+        favorites.add_favorite(&path);
+
+        let json = favorites.to_json();
+        assert!(json.contains(r#""encoding":"unix-bytes-v1""#));
+        assert!(json.contains(r#"favorito-\xFF"#));
+        let restored = Favorites::from_json(&json);
+        assert_eq!(restored.list_flat()[0].path, path);
+        assert_eq!(restored.list_flat()[0].label, r"favorito-\xFF");
     }
 
     #[test]

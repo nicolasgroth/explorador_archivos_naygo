@@ -1,0 +1,174 @@
+// Naygo — modal de mensaje temático (aviso/confirmación). Reemplaza los diálogos
+// nativos rfd con la ventana viva. Mismo look que op-dialogs: velo + tarjeta centrada.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
+import { MessageVm } from "types.slint";
+import { Tr } from "i18n.slint";
+import { Theme } from "theme.slint";
+import { CheckBox, ScrollView } from "std-widgets.slint";
+
+// Botón de diálogo reutilizable (copia del de op-dialogs para no acoplar los archivos).
+component DlgBtn inherits Rectangle {
+    in property <string> label;
+    in property <bool> primary: false;
+    in property <bool> danger: false;
+    callback clicked();
+    width: txt.preferred-width + 24px;
+    height: 28px;
+    border-radius: 4px;
+    background: touch.has-hover
+        ? (root.danger ? Theme.error : Theme.selection-bg)
+        : (root.danger ? Theme.error : (root.primary ? Theme.selection-bg : Theme.row-bg));
+    txt := Text {
+        text: root.label;
+        color: white;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
+export component MessageModal inherits Rectangle {
+    in property <MessageVm> vm;
+    in property <bool> external-drop: false;
+    callback message-confirm();
+    callback message-cancel();
+    callback drop-confirm(int);
+
+    visible: root.vm.kind > 0;
+    background: #000000aa;
+
+    // Espejo de `vm.kind` para detectar la APARICIÓN del modal. Un `changed` sobre un campo de un
+    // struct (`vm.kind`) NO dispara en Slint; espejarlo en una property propia sí dispara `changed k`.
+    // Mismo patrón que op-dialogs.slint (ver su `changed k`).
+    property <int> k: root.vm.kind;
+    // Alcance elegido en el diálogo de arrastre: 0=solo esta vez, 1=sesión, 2=permanente.
+    // Solo se aplica al confirmar la copia/movimiento; cancelar no modifica preferencias.
+    property <int> drop-confirm-scope: 0;
+    // Al APARECER el modal (k pasa de 0 a >0) forzamos el foco al FocusScope. Sin esto, el modal se
+    // pinta pero el FocusScope no tiene el foco: el PRIMER clic del usuario se gasta en dar foco (y
+    // recién el SEGUNDO acciona el botón) — el bug del "doble clic" que reportó Nicolás. op-dialogs
+    // ya hacía esto; el MessageModal (kind 3 = confirmar drop, kind 4 = cancelar todo) faltaba.
+    changed k => {
+        if (root.k > 0) {
+            msg-focus.focus();
+        }
+        if (root.k == 3) {
+            root.drop-confirm-scope = 0;
+        }
+    }
+
+    // Velo: clic fuera de la tarjeta. En confirmaciones de 2 botones (kind 1 = aviso/expulsar,
+    // kind 3 = confirmar drop entre paneles, kind 4 = cancelar todas las operaciones, kind 5 =
+    // confirmar deshacer) cancela (opción segura: NO ejecuta la acción). En el aviso de 1 botón
+    // (kind 2) cierra (que equivale a confirmar el único botón).
+    veil := TouchArea {
+        clicked => {
+            if (root.vm.kind == 1 || root.vm.kind == 3 || root.vm.kind == 4 || root.vm.kind == 5) { root.message-cancel(); }
+            if (root.vm.kind == 2) { root.message-confirm(); }
+        }
+    }
+
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 380px;
+        height: card.preferred-height + 32px;
+        background: Theme.row-bg;
+        border-color: Theme.selection-bg;
+        border-width: 1px;
+        border-radius: 8px;
+        // Captura los clics dentro de la tarjeta (no propaga al velo).
+        TouchArea {}
+        card := VerticalLayout {
+            padding: 16px;
+            spacing: 14px;
+
+            // Título con franja de color según level.
+            HorizontalLayout {
+                spacing: 10px;
+                Rectangle {
+                    width: 3px;
+                    border-radius: 1.5px;
+                    background: root.vm.level == 0 ? Theme.accent : Theme.error;
+                }
+                Text {
+                    text: root.vm.title;
+                    color: white;
+                    font-size: 15px;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                }
+            }
+
+            ScrollView {
+                width: 100%;
+                height: min(220px, max(36px, message-body.preferred-height));
+                message-body := Text {
+                    text: root.vm.body;
+                    color: Theme.text;
+                    width: 100%;
+                    wrap: word-wrap;
+                }
+            }
+
+            if root.vm.kind == 3 && root.external-drop: VerticalLayout {
+                spacing: 4px;
+                CheckBox {
+                    text: Tr.drop-no-ask-session;
+                    checked: root.drop-confirm-scope == 1;
+                    toggled => {
+                        root.drop-confirm-scope = self.checked ? 1 : 0;
+                    }
+                }
+                CheckBox {
+                    text: Tr.drop-no-ask-always;
+                    checked: root.drop-confirm-scope == 2;
+                    toggled => {
+                        root.drop-confirm-scope = self.checked ? 2 : 0;
+                    }
+                }
+            }
+
+            HorizontalLayout {
+                alignment: end;
+                spacing: 8px;
+                // Botón Cancelar: solo en confirmaciones de 2 botones (kind 1, 3, 4 y 5).
+                if root.vm.kind == 1 || root.vm.kind == 3 || root.vm.kind == 4 || root.vm.kind == 5: DlgBtn {
+                    label: root.vm.cancel-label;
+                    clicked => { root.message-cancel(); }
+                }
+                DlgBtn {
+                    label: root.vm.confirm-label;
+                    primary: root.vm.kind == 1 || root.vm.kind == 3 || root.vm.kind == 4 || root.vm.kind == 5;
+                    danger: root.vm.danger;
+                    clicked => {
+                        if root.vm.kind == 3 {
+                            root.drop-confirm(root.drop-confirm-scope);
+                        } else {
+                            root.message-confirm();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Esc cierra/cancela.
+    forward-focus: msg-focus;
+    msg-focus := FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.Escape) {
+                // kind 1 (confirmación), 3 (confirmar drop), 4 (cancelar todo) y 5 (confirmar
+                // deshacer) → Esc CANCELA (la opción segura: en el drop, cancelar = no copia nada; en
+                // el deshacer, no deshace). kind 2 (aviso de 1 botón) → Esc lo acepta/cierra.
+                // Coherente con el velo, que para 1/3/4/5 también cancela.
+                if (root.vm.kind == 1 || root.vm.kind == 3 || root.vm.kind == 4 || root.vm.kind == 5) { root.message-cancel(); }
+                if (root.vm.kind == 2) { root.message-confirm(); }
+            }
+            accept
+        }
+    }
+}

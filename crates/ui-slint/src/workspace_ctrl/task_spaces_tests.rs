@@ -4,16 +4,35 @@
 use super::*;
 
 #[test]
-fn recent_spaces_are_bounded_deduplicated_and_session_only() {
+fn recent_spaces_are_bounded_deduplicated_and_persistable() {
+    let dir = tempfile::tempdir().unwrap();
     let mut state = TaskSpacesState::default();
     for n in 0..15 {
-        state.remember(PathBuf::from(format!("{n}.naygospace")));
+        state.remember(dir.path().join(format!("{n}.naygospace")));
     }
     assert_eq!(state.recents.len(), 10);
-    state.remember(PathBuf::from("9.naygospace"));
-    assert_eq!(state.recents[0], PathBuf::from("9.naygospace"));
+    state.remember(dir.path().join("9.naygospace"));
+    assert_eq!(state.recents[0], dir.path().join("9.naygospace"));
     assert_eq!(state.recents.len(), 10);
-    assert!(TaskSpacesState::default().recents.is_empty());
+
+    let saved = state.recents.clone();
+    let mut reopened = TaskSpacesState::default();
+    reopened.merge_persisted_recents(saved.clone());
+    assert_eq!(reopened.recents, saved, "MRU restores after a new session");
+    reopened.remember(dir.path().join("Work.naygospace"));
+    reopened.merge_persisted_recents(saved.clone());
+    assert_eq!(
+        reopened.recents[0],
+        dir.path().join("Work.naygospace"),
+        "a recent created during asynchronous startup stays first"
+    );
+    assert!(reopened.recents.contains(&saved[0]));
+    reopened.clear_recents();
+    reopened.merge_persisted_recents(saved);
+    assert!(
+        reopened.recents.is_empty(),
+        "explicit clear wins over startup merge"
+    );
 }
 
 #[test]
@@ -35,9 +54,37 @@ fn recent_space_requires_review_and_confirm_and_can_be_cleared() {
     assert!(c.task_spaces.has_pending());
     c.spaces_apply_pending();
     assert!(c.basket.is_empty());
-    c.task_spaces.recents.clear();
+    c.spaces_clear_recents();
     c.spaces_read_recent(0, None);
     assert!(!c.task_spaces.busy());
+}
+
+#[test]
+fn quick_recent_applies_when_clean_and_requires_review_when_dirty() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut c = controller(dir.path());
+    c.spaces_open();
+    c.spaces_save(Some(dir.path().join("Trabajo.naygospace")), None, false);
+    drain(&mut c);
+    c.spaces_save(Some(dir.path().join("Vacaciones.naygospace")), None, false);
+    drain(&mut c);
+    assert_eq!(c.task_spaces.recents[0].file_stem().unwrap(), "Vacaciones");
+    assert_eq!(c.task_spaces.recents[1].file_stem().unwrap(), "Trabajo");
+    assert!(!c.task_spaces.dirty, "saved current space should be clean");
+
+    c.spaces_close();
+    c.spaces_quick_select_recent(1);
+    drain(&mut c);
+    assert_eq!(c.task_spaces.name(), "Trabajo");
+    assert!(!c.task_spaces.open);
+    assert!(!c.task_spaces.has_pending());
+
+    c.basket.add([dir.path().join("unsaved.txt")]);
+    c.spaces_quick_select_recent(1);
+    drain(&mut c);
+    assert!(c.task_spaces.open);
+    assert!(c.task_spaces.has_pending());
+    assert_eq!(c.basket.len(), 1, "dirty quick switch must await review");
 }
 
 fn drain(c: &mut WorkspaceCtrl) {
@@ -90,6 +137,73 @@ fn explicit_roundtrip_keeps_layout_filter_basket_and_does_not_load_until_confirm
     );
     assert!(!c.task_spaces.dirty);
     assert!(!c.task_spaces.open);
+}
+
+#[test]
+fn per_space_favorites_do_not_change_global_tree_and_return_with_workspace() {
+    use naygo_core::task_space::FavoriteScope;
+
+    let dir = tempfile::tempdir().unwrap();
+    let global = dir.path().join("global");
+    let private = dir.path().join("private");
+    let global_space_path = dir.path().join("Global.naygospace");
+    let private_space_path = dir.path().join("Private.naygospace");
+    let mut c = controller(dir.path());
+    c.favorites.add_favorite(&global);
+    c.task_spaces.global_favorites = c.favorites.clone();
+
+    c.spaces_save_with_scope(
+        Some(private_space_path.clone()),
+        None,
+        false,
+        Some(FavoriteScope::PerSpace),
+    );
+    drain(&mut c);
+    assert_eq!(c.favorites, c.task_spaces.global_favorites);
+    let stored = task_space::read(&private_space_path, &CancellationToken::new())
+        .unwrap()
+        .0;
+    assert_eq!(stored.favorite_scope, FavoriteScope::PerSpace);
+    assert_eq!(
+        stored.favorites.as_ref().unwrap().list_flat()[0].path,
+        global,
+        "private favorites start from a copy of the global tree"
+    );
+
+    c.favorites.add_favorite(&private);
+    c.persist_favorites();
+    assert!(c.favorites.contains(&private));
+    assert!(c.task_spaces.global_favorites.contains(&global));
+    assert!(!c.task_spaces.global_favorites.contains(&private));
+    c.spaces_save(None, None, false);
+    drain(&mut c);
+
+    c.spaces_save_with_scope(
+        Some(global_space_path.clone()),
+        None,
+        false,
+        Some(FavoriteScope::Global),
+    );
+    drain(&mut c);
+    assert_eq!(c.favorites, c.task_spaces.global_favorites);
+    assert!(c.favorites.contains(&global));
+    assert!(!c.favorites.contains(&private));
+
+    c.spaces_open();
+    c.spaces_read(private_space_path, None);
+    drain(&mut c);
+    assert!(c.task_spaces.has_pending());
+    c.spaces_apply_pending();
+    assert!(c.favorites.contains(&global));
+    assert!(c.favorites.contains(&private));
+    assert!(!c.task_spaces.dirty, "{}", c.task_spaces.report);
+
+    c.spaces_open();
+    c.spaces_read(global_space_path, None);
+    drain(&mut c);
+    c.spaces_apply_pending();
+    assert!(c.favorites.contains(&global));
+    assert!(!c.favorites.contains(&private));
 }
 
 #[test]

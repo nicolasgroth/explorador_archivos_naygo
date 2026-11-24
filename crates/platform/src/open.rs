@@ -1,13 +1,13 @@
-// Naygo — abrir archivos con su programa por defecto (Win32 ShellExecuteW), aislado.
+// Naygo — abrir archivos con su programa por defecto, aislado por plataforma.
 // Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
 // SPDX-License-Identifier: MIT
 
-//! `open_default` abre un archivo con la app asociada (verbo "open"); `open_with_dialog`
+//! `open_default` abre un archivo con la app asociada del escritorio; `open_with_dialog`
 //! lanza el diálogo "Abrir con…" de Windows (verbo "openas"). Tolerante: devuelve un
 //! `Result` tipado, nunca tumba el proceso. La política de Naygo es abrir con el SO,
 //! no reproducir/editar.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Error al pedirle al Shell que abra un archivo.
 #[derive(Debug)]
@@ -41,8 +41,97 @@ pub enum Terminal {
     Wsl,
 }
 
+/// Una acción explícita sobre una carpeta capturada por la interfaz.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FolderAction {
+    Explorer,
+    Terminal(Terminal),
+}
+
+/// Ejecutar solo en el worker Shell (COM ya en STA vía [`shell_job_runner`]): tanto metadata
+/// como el Shell pueden bloquear. No se
+/// canonicaliza ni se sustituye la ruta. La comprobación no es atómica con el lanzamiento.
+pub fn open_folder_action(dir: &Path, action: FolderAction) -> Result<(), ShellError> {
+    let metadata = std::fs::metadata(dir)
+        .map_err(|error| ShellError::Failed(format!("{}: {error}", dir.display())))?;
+    if !metadata.is_dir() {
+        return Err(ShellError::Failed(format!(
+            "{}: not a directory",
+            dir.display()
+        )));
+    }
+    match action {
+        FolderAction::Explorer => open_default(dir),
+        FolderAction::Terminal(term) => open_terminal(dir, term),
+    }
+}
+
+/// Orden para el ejecutor de acciones Shell (un hilo worker propio). Todas pueden bloquear
+/// (handlers lentos, shares de red caídos), por eso nunca deben correr en el hilo de UI.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ShellJob {
+    /// Abrir con el programa por defecto (verbo "open").
+    Open(PathBuf),
+    /// Diálogo "Abrir con…" (verbo "openas").
+    OpenWith(PathBuf),
+    /// Ejecutar con elevación UAC (verbo "runas").
+    RunAsAdministrator(PathBuf),
+    /// Acción sobre una carpeta (Explorer o terminal); valida que sea carpeta.
+    Folder { dir: PathBuf, action: FolderAction },
+}
+
+/// Ejecuta una orden en el hilo actual. Debe llamarse desde un worker con COM en STA (ver
+/// [`shell_job_runner`]).
+pub fn run_shell_job(job: ShellJob) -> Result<(), ShellError> {
+    match job {
+        ShellJob::Open(path) => open_default(&path),
+        ShellJob::OpenWith(path) => open_with_dialog(&path),
+        ShellJob::RunAsAdministrator(path) => run_as_administrator(&path),
+        ShellJob::Folder { dir, action } => open_folder_action(&dir, action),
+    }
+}
+
+/// Se invoca DENTRO del hilo worker: inicializa COM en STA (lo exige ShellExecute para las
+/// extensiones del Shell) y devuelve el ejecutor de órdenes. COM se libera cuando el closure
+/// se descarta al terminar el hilo. Si COM falla, cada orden devuelve ese error en vez de
+/// ejecutar el Shell sin STA.
+pub fn shell_job_runner() -> impl FnMut(ShellJob) -> Result<(), ShellError> {
+    #[cfg(windows)]
+    let com_error = {
+        use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+        let hr = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+        hr.is_err().then(|| format!("COM: {hr:?}"))
+    };
+    #[cfg(not(windows))]
+    let com_error: Option<String> = None;
+    let guard = ComGuard(com_error.is_none());
+    move |job| {
+        let _keep = &guard;
+        match &com_error {
+            Some(message) => Err(ShellError::Failed(message.clone())),
+            None => run_shell_job(job),
+        }
+    }
+}
+
+/// Libera COM al descartarse (solo si la inicialización tuvo éxito).
+struct ComGuard(bool);
+
+impl Drop for ComGuard {
+    fn drop(&mut self) {
+        #[cfg(windows)]
+        if self.0 {
+            // SAFETY: empareja el CoInitializeEx exitoso hecho en el mismo hilo.
+            unsafe { windows::Win32::System::Com::CoUninitialize() };
+        }
+        #[cfg(not(windows))]
+        let _ = self.0;
+    }
+}
+
 impl Terminal {
     /// El ejecutable que lanza esta terminal.
+    #[cfg(windows)]
     fn exe(self) -> &'static str {
         match self {
             Terminal::PowerShell => "powershell.exe",
@@ -53,7 +142,12 @@ impl Terminal {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+pub fn open_default(path: &Path) -> Result<(), ShellError> {
+    linux_impl::open_default(path)
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
 pub fn open_default(_path: &Path) -> Result<(), ShellError> {
     Err(ShellError::NotSupported)
 }
@@ -83,6 +177,109 @@ pub fn wsl_available() -> bool {
     false
 }
 
+#[cfg(any(target_os = "linux", test))]
+mod linux_impl {
+    #[cfg(target_os = "linux")]
+    use super::ShellError;
+    use std::path::Path;
+    use std::process::{Command, Stdio};
+
+    /// Construye argv para `xdg-open` sin shell. Hacer absoluta una ruta relativa impide que
+    /// nombres que empiezan por `-` se interpreten como opciones y conserva los bytes del path.
+    /// No canonicaliza: symlinks y componentes `..` siguen siendo responsabilidad del escritorio.
+    fn command(path: &Path, current_dir: &Path) -> Command {
+        let absolute = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            current_dir.join(path)
+        };
+        let mut command = Command::new("xdg-open");
+        command
+            .arg(absolute)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        command
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(super) fn open_default(path: &Path) -> Result<(), ShellError> {
+        let current_dir = std::env::current_dir().map_err(|error| {
+            ShellError::Failed(format!("No se pudo leer la carpeta actual: {error}"))
+        })?;
+        command(path, &current_dir)
+            .spawn()
+            .map(|_child| ())
+            .map_err(|error| {
+                if error.kind() == std::io::ErrorKind::NotFound {
+                    ShellError::NotSupported
+                } else {
+                    ShellError::Failed(format!("No se pudo iniciar xdg-open: {error}"))
+                }
+            })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::command;
+        use std::ffi::OsStr;
+        use std::path::{Path, PathBuf};
+
+        fn absolute_test_dir() -> PathBuf {
+            #[cfg(windows)]
+            {
+                PathBuf::from(r"C:\naygo\pruebas")
+            }
+            #[cfg(not(windows))]
+            {
+                PathBuf::from("/home/naygo/pruebas")
+            }
+        }
+
+        #[test]
+        fn xdg_open_recibe_una_ruta_relativa_como_un_argumento_absoluto() {
+            let current_dir = absolute_test_dir();
+            let relative = Path::new("- archivo 'con' % y ñ\n.txt");
+            let command = command(relative, &current_dir);
+            let args: Vec<_> = command.get_args().collect();
+            let expected = current_dir.join(relative);
+
+            assert_eq!(command.get_program(), OsStr::new("xdg-open"));
+            assert_eq!(args, [expected.as_os_str()]);
+        }
+
+        #[test]
+        fn xdg_open_no_canonicaliza_rutas_absolutas() {
+            let absolute = absolute_test_dir()
+                .join("link")
+                .join("..")
+                .join("- file.txt");
+            let command = command(&absolute, &absolute_test_dir());
+
+            assert_eq!(
+                command.get_args().collect::<Vec<_>>(),
+                [absolute.as_os_str()]
+            );
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn xdg_open_conserva_bytes_no_utf8_de_la_ruta() {
+            use std::os::unix::ffi::OsStrExt;
+
+            let current_dir = Path::new("/tmp");
+            let relative = Path::new(OsStr::from_bytes(b"-bad-\xff-name"));
+            let command = command(relative, current_dir);
+            let expected = current_dir.join(relative);
+
+            assert_eq!(
+                command.get_args().collect::<Vec<_>>(),
+                [expected.as_os_str()]
+            );
+        }
+    }
+}
+
 #[cfg(windows)]
 pub fn open_default(path: &Path) -> Result<(), ShellError> {
     windows_impl::shell_execute(path, "open")
@@ -100,12 +297,19 @@ pub fn run_as_administrator(path: &Path) -> Result<(), ShellError> {
     windows_impl::shell_execute(path, "runas")
 }
 
-/// Indica si una ruta representa un ejecutable que Naygo puede ofrecer para elevación.
-/// Es una comprobación puramente léxica (sin I/O), segura incluso sobre shares lentos.
+/// Indica si una ruta representa un ejecutable que Naygo puede ofrecer para elevación en Windows.
+/// Es una comprobación puramente léxica (sin I/O), segura incluso sobre shares lentos. En otras
+/// plataformas la acción no está soportada y debe permanecer oculta en la interfaz.
+#[cfg(windows)]
 pub fn can_run_as_administrator(path: &Path) -> bool {
     path.extension()
         .and_then(|ext| ext.to_str())
         .is_some_and(|ext| ext.eq_ignore_ascii_case("exe") || ext.eq_ignore_ascii_case("com"))
+}
+
+#[cfg(not(windows))]
+pub fn can_run_as_administrator(_path: &Path) -> bool {
+    false
 }
 
 /// Abre `term` con la carpeta de trabajo en `dir`. Para Windows Terminal se pasa `-d <dir>`
@@ -116,7 +320,7 @@ pub fn open_terminal(dir: &Path, term: Terminal) -> Result<(), ShellError> {
     let params = match term {
         // `wt -d <dir>` abre una pestaña ya posicionada en la carpeta.
         Terminal::WindowsTerminal => Some(format!("-d \"{}\"", dir.display())),
-        // PowerShell/CMD/WSL arrancan en el `lpDirectory` que pasamos a ShellExecuteW (WSL mapea
+        // PowerShell/CMD/WSL arrancan en el `lpDirectory` que pasamos a ShellExecuteExW (WSL mapea
         // ese cwd de Windows a su `/mnt/...` automáticamente).
         Terminal::PowerShell | Terminal::Cmd | Terminal::Wsl => None,
     };
@@ -141,7 +345,9 @@ mod windows_impl {
     use std::os::windows::ffi::OsStrExt;
     use windows::core::PCWSTR;
     use windows::Win32::Foundation::HWND;
-    use windows::Win32::UI::Shell::ShellExecuteW;
+    use windows::Win32::UI::Shell::{
+        ShellExecuteExW, SEE_MASK_FLAG_NO_UI, SEE_MASK_NOASYNC, SHELLEXECUTEINFOW,
+    };
     use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
     /// Codifica una cadena a UTF-16 NUL-terminada (para los PCWSTR de Win32).
@@ -156,23 +362,53 @@ mod windows_impl {
             .collect()
     }
 
-    /// Ejecuta `verb` sobre `path`. ShellExecuteW devuelve un HINSTANCE cuyo valor
-    /// numérico > 32 indica éxito; <= 32 es un código de error (SE_ERR_*).
-    pub fn shell_execute(path: &Path, verb: &str) -> Result<(), ShellError> {
-        let verb_w = wide(verb);
-        let path_w = wide_path(path);
-        // SAFETY: punteros válidos a cadenas NUL-terminadas; HWND nulo = sin ventana padre.
-        let hinst = unsafe {
-            ShellExecuteW(
-                Some(HWND(std::ptr::null_mut())),
-                PCWSTR(verb_w.as_ptr()),
-                PCWSTR(path_w.as_ptr()),
-                PCWSTR::null(),
-                PCWSTR::null(),
-                SW_SHOWNORMAL,
-            )
+    /// Máscara de toda llamada al Shell desde el worker. `SEE_MASK_NOASYNC`: el worker no tiene
+    /// bucle de mensajes, así que las activaciones asíncronas (verbos DDE, algunos handlers
+    /// delegados) deben completarse antes de que `ShellExecuteExW` vuelva; es lo que la
+    /// documentación pide a todo llamador desde un hilo de fondo. `SEE_MASK_FLAG_NO_UI`: igual que
+    /// el `ShellExecuteW` anterior, los errores vuelven como código y no como diálogo del Shell.
+    pub(super) fn execute_mask() -> u32 {
+        SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI
+    }
+
+    /// `ShellExecuteExW` con verbo, archivo, parámetros y directorio de trabajo opcionales.
+    fn execute(
+        verb: &[u16],
+        file: &[u16],
+        params: Option<&[u16]>,
+        dir: Option<&[u16]>,
+    ) -> Result<(), ShellError> {
+        let mut info = SHELLEXECUTEINFOW {
+            cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
+            fMask: execute_mask(),
+            hwnd: HWND(std::ptr::null_mut()),
+            lpVerb: PCWSTR(verb.as_ptr()),
+            lpFile: PCWSTR(file.as_ptr()),
+            lpParameters: params.map_or(PCWSTR::null(), |p| PCWSTR(p.as_ptr())),
+            lpDirectory: dir.map_or(PCWSTR::null(), |d| PCWSTR(d.as_ptr())),
+            nShow: SW_SHOWNORMAL.0,
+            ..Default::default()
         };
-        check(hinst.0 as usize)
+        // SAFETY: `info` y todas las cadenas UTF-16 NUL-terminadas que referencia viven durante
+        // la llamada síncrona; `cbSize` es el tamaño real de la estructura.
+        match unsafe { ShellExecuteExW(&mut info) } {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                // Con error, `hInstApp` trae el código SE_ERR_* de siempre (<= 32): se mapea igual
+                // que antes. Si no lo trae, se informa el error de Windows.
+                let code = info.hInstApp.0 as usize;
+                if (1..=32).contains(&code) {
+                    check(code)
+                } else {
+                    Err(ShellError::Failed(format!("ShellExecuteExW: {error}")))
+                }
+            }
+        }
+    }
+
+    /// Ejecuta `verb` sobre `path` con el Shell.
+    pub fn shell_execute(path: &Path, verb: &str) -> Result<(), ShellError> {
+        execute(&wide(verb), &wide_path(path), None, None)
     }
 
     /// Ejecuta `file` (un ejecutable o documento) con verbo "open", parámetros opcionales y un
@@ -182,34 +418,18 @@ mod windows_impl {
         params: Option<&str>,
         dir: Option<&Path>,
     ) -> Result<(), ShellError> {
-        let verb_w = wide("open");
-        let file_w = wide(file);
         let params_w = params.map(wide);
         let dir_w = dir.map(wide_path);
-        let params_ptr = params_w
-            .as_ref()
-            .map(|v| PCWSTR(v.as_ptr()))
-            .unwrap_or(PCWSTR::null());
-        let dir_ptr = dir_w
-            .as_ref()
-            .map(|v| PCWSTR(v.as_ptr()))
-            .unwrap_or(PCWSTR::null());
-        // SAFETY: todos los punteros refieren cadenas vivas hasta el fin de la llamada.
-        let hinst = unsafe {
-            ShellExecuteW(
-                Some(HWND(std::ptr::null_mut())),
-                PCWSTR(verb_w.as_ptr()),
-                PCWSTR(file_w.as_ptr()),
-                params_ptr,
-                dir_ptr,
-                SW_SHOWNORMAL,
-            )
-        };
-        check(hinst.0 as usize)
+        execute(
+            &wide("open"),
+            &wide(file),
+            params_w.as_deref(),
+            dir_w.as_deref(),
+        )
     }
 
-    /// Traduce el código de retorno de ShellExecuteW a `Result`.
-    fn check(code: usize) -> Result<(), ShellError> {
+    /// Traduce un código SE_ERR_* (o un HINSTANCE > 32 de éxito) a `Result`.
+    pub(super) fn check(code: usize) -> Result<(), ShellError> {
         if code > 32 {
             return Ok(());
         }
@@ -218,7 +438,9 @@ mod windows_impl {
         if code == SE_ERR_NOASSOC || code == SE_ERR_ASSOCINCOMPLETE {
             Err(ShellError::NoAssociation)
         } else {
-            Err(ShellError::Failed(format!("ShellExecuteW devolvió {code}")))
+            Err(ShellError::Failed(format!(
+                "ShellExecuteExW devolvió {code}"
+            )))
         }
     }
 
@@ -235,6 +457,7 @@ mod windows_impl {
 mod tests {
     use super::*;
 
+    #[cfg(windows)]
     #[test]
     fn elevacion_solo_para_ejecutables_windows() {
         assert!(can_run_as_administrator(Path::new("C:/Apps/tool.exe")));
@@ -243,12 +466,59 @@ mod tests {
         assert!(!can_run_as_administrator(Path::new("C:/Apps/readme.txt")));
     }
 
+    #[cfg(not(windows))]
+    #[test]
+    fn no_ofrece_elevacion_windows_en_otras_plataformas() {
+        assert!(!can_run_as_administrator(Path::new("/tmp/tool.exe")));
+        assert!(!can_run_as_administrator(Path::new("/tmp/tool.com")));
+    }
+
     #[cfg(windows)]
     #[test]
     fn terminal_exe_mapea_cada_variante() {
         assert_eq!(Terminal::PowerShell.exe(), "powershell.exe");
         assert_eq!(Terminal::Cmd.exe(), "cmd.exe");
         assert_eq!(Terminal::WindowsTerminal.exe(), "wt.exe");
+    }
+
+    /// El worker de Shell no bombea mensajes: toda llamada pide `SEE_MASK_NOASYNC` (las
+    /// activaciones DDE/delegadas terminan antes de volver) y conserva `SEE_MASK_FLAG_NO_UI`
+    /// (los errores vuelven como `Result`, sin diálogos del Shell).
+    #[cfg(windows)]
+    #[test]
+    fn shell_execute_ex_pide_noasync_y_sin_ui() {
+        use windows::Win32::UI::Shell::{SEE_MASK_FLAG_NO_UI, SEE_MASK_NOASYNC};
+        assert_eq!(
+            windows_impl::execute_mask(),
+            SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI
+        );
+    }
+
+    /// Los códigos SE_ERR_* que deja `hInstApp` se mapean como antes.
+    #[cfg(windows)]
+    #[test]
+    fn codigos_de_error_del_shell_se_mapean_igual() {
+        assert!(windows_impl::check(42).is_ok());
+        assert!(matches!(
+            windows_impl::check(31),
+            Err(ShellError::NoAssociation)
+        ));
+        assert!(matches!(
+            windows_impl::check(27),
+            Err(ShellError::NoAssociation)
+        ));
+        assert!(matches!(windows_impl::check(2), Err(ShellError::Failed(_))));
+    }
+
+    /// Una ruta inexistente falla con error (sin diálogo, sin abrir nada) por el camino real.
+    #[cfg(windows)]
+    #[test]
+    fn abrir_ruta_inexistente_devuelve_error_sin_ui() {
+        let missing = std::env::temp_dir()
+            .join("naygo-no-existe-7f3a9c")
+            .join("x.naygo-test");
+        let result = open_default(&missing);
+        assert!(matches!(result, Err(ShellError::Failed(_))), "{result:?}");
     }
 
     // Smoke test manual: abre PowerShell en C:\Windows. `#[ignore]` para no abrir ventanas en CI.

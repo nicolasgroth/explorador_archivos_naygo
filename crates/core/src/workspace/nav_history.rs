@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct NavContext {
     pub focused_path: Option<PathBuf>,
+    pub selection_anchor_path: Option<PathBuf>,
     pub selected_paths: Vec<PathBuf>,
     pub scroll_anchor_path: Option<PathBuf>,
     pub table: Option<crate::columns::TableState>,

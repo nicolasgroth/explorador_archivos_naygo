@@ -83,6 +83,7 @@ impl SyncPlan {
                 to,
                 bytes: item.bytes,
                 is_dir: item.is_dir,
+                planned_failure: None,
             });
             if !item.is_dir {
                 total_files += 1;
@@ -93,6 +94,7 @@ impl SyncPlan {
             steps,
             total_bytes,
             total_files,
+            allow_directory_rename: false,
             pre_delete: Vec::new(),
         }
     }
@@ -251,7 +253,7 @@ fn duration_between(a: SystemTime, b: SystemTime) -> Duration {
         .unwrap_or_default()
 }
 
-type Inventory = HashMap<String, (PathBuf, ItemMeta)>;
+type Inventory = HashMap<crate::path_identity::PathIdentityKey, (PathBuf, ItemMeta)>;
 
 fn inventory(root: &Path, token: &CancellationToken) -> Result<Inventory, SyncError> {
     let metadata = fs::metadata(root).map_err(|_| SyncError::Unreadable(root.to_path_buf()))?;
@@ -339,8 +341,8 @@ fn compact_directories(items: &mut Vec<SyncItem>) {
     });
 }
 
-fn relative_key(path: &Path) -> String {
-    path.to_string_lossy().replace('/', "\\").to_lowercase()
+fn relative_key(path: &Path) -> crate::path_identity::PathIdentityKey {
+    crate::path_identity::key(path)
 }
 
 fn same_path(left: &Path, right: &Path) -> bool {

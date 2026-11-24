@@ -15,7 +15,8 @@ pero está **subordinado a la velocidad**.
 
 **Hace bien una cosa:** navegar, ver y operar archivos rápido. NO reproduce media,
 NO es editor, NO hace de todo. Abre el archivo con su programa por defecto cuando
-el usuario lo pide.
+el usuario lo pide. Excepción aprobada el 2026-09-09: animaciones ligeras de imágenes
+en el preview (RP-5A; alcance y validación en el estado vigente); no habilita reproducción de audio/vídeo.
 
 ## Autoría y licencia
 
@@ -37,11 +38,13 @@ gente le saque provecho dando a conocer el nombre de Nicolás Groth y de ISGroth
 - Interop Windows: crate **`windows`** (oficial de Microsoft) para Shell32 / COM /
   OLE
 - Serialización: **serde / serde_json**
-- Todas las dependencias **libres** (MIT/Apache/ISC/CC0) o royalty-free (Slint).
-  Cero regalías.
+- Windows y la edición general conservan MIT; dependencias libres (MIT/Apache/ISC/CC0) o
+  royalty-free (Slint), sin regalías. Excepción aprobada Linux-only para la alfa: el backend
+  Ayatana GLib puede requerir GPL-3 y condicionar la distribución Linux bajo GPL-3, con fuente
+  correspondiente y notices tras revisar derechos de contribución. No cambia la licencia Windows.
 - Build: `cargo` desde terminal.
 
-## Arquitectura (3 crates — ver spec)
+## Arquitectura (4 crates — ver spec)
 
 - **`core`** (`naygo-core`): lógica pura, sin UI ni Windows. Testeable al 100%.
   Contiene `fs_model`, `listing` / `deep_listing` (streaming incremental), `ops`
@@ -53,6 +56,11 @@ gente le saque provecho dando a conocer el nombre de Nicolás Groth y de ISGroth
   y portapapeles COM/OLE), `context_menu` (menú del Shell), `trash` (papelera),
   `open` (ShellExecute), `device_watch` / `dir_watch` (vigilancia), `global_hotkey`,
   `window` / `window_geometry`, `autostart`, `single_instance`, `exe_meta`.
+- **`ui-gen`** (`naygo-ui-gen`): solo los `.slint` (`ui/`) y el código Rust que
+  Slint genera desde ellos (`AppWindow`, structs, globals). Crate aparte para que
+  tocar un `.rs` no recompile ese código (~32 MiB); `ui-slint` lo re-exporta con
+  `pub use naygo_ui_gen::*;`. Las features de `slint` se definen una vez en el
+  `[workspace.dependencies]`.
 - **`ui-slint`** (`naygo-ui-slint`, binario **`naygo`**): la UI oficial en Slint,
   sin lógica de negocio. `main` (arranque + modelos estables), `bridge` (puente
   core↔Slint), `workspace_ctrl` / `listing` / `ops_ctrl` / `config_ctrl`
@@ -104,13 +112,21 @@ Build 1): miniaturas, visor de contenido (imágenes/texto/PDF), comprimir/
 descomprimir, batch-rename avanzado, caché de carpetas visitadas, paleta de
 comandos (Ctrl+P), animaciones de íconos, personalización fina de toolbar.
 
-**Nunca**: reproducción de media, edición de archivos.
+**Nunca**: reproductor de audio/vídeo ni editor general de archivos. La excepción
+acotada para imágenes animadas del preview no cambia la prioridad de bajo consumo.
 
 ## Cómo trabajar conmigo (el usuario)
 
 - **Lee primero `docs/BACKLOG.md`**: ahí está todo lo pendiente acordado (mejoras
   técnicas, funcionalidades aprobadas, bugs conocidos y notas de operación).
   Actualízalo al cerrar cada ítem.
+- Después consulta `docs/ESTADO-ACTUAL.md` y `docs/README.md`: distinguen la base
+  disponible, planes pendientes y evidencia histórica. El plan vigente de rutas/preview
+  es `docs/plans/2026-09-09-rutas-preview-y-configuracion.md`; no aplicar fuentes
+  experimentales ni ejecutar antiguos planes sin contrastarlos con el estado local.
+- Documentar cada cambio de producto en su guía, backlog y CHANGELOG, con comentarios
+  de responsabilidad, límites, cancelación y compatibilidad junto al código afectado.
+  No anunciar funciones futuras como disponibles ni pruebas no ejecutadas como aprobadas.
 - Soy Nicolás. Hablo español chileno, tuteo. Inglés técnico OK.
 - Ingeniero, base técnica fuerte. No me expliques lo obvio, pero si algo es
   ambiguo, pregúntame antes de avanzar con supuestos.
@@ -121,11 +137,14 @@ comandos (Ctrl+P), animaciones de íconos, personalización fina de toolbar.
 - Al terminar cada feature, sugiere el siguiente paso y espera mi visto bueno.
 - Tras cada fix que afecte la app, deja SIEMPRE actualizado el build de
   distribución: corre `scripts/build-release.ps1` (genera
-  `dist/Naygo-<ver>-portable.zip` y `dist/Naygo-<ver>-setup.exe`, ambos con
-  `naygo.pdb` para backtraces simbolizados). El usuario prueba instalando desde
+  `dist/Naygo-<ver>-portable.zip` y `dist/Naygo-<ver>-setup.exe`; el PDB se genera
+  para diagnóstico, es opcional en el instalador y no va en el ZIP, según T-3).
+  Una consolidación sólo documental no cambia el producto ni exige regenerar el EXE.
+  El usuario prueba instalando desde
   `dist/`, también en máquinas externas. Corre el build SOLO (sin otras tareas
-  pesadas en paralelo): el LTO con codegen-units=1 es el pico de memoria más
-  grande del proyecto.
+  pesadas en paralelo). Desde el ajuste del 14 de septiembre se usa ThinLTO,
+  16 unidades y un solo trabajo Cargo; mantener el supervisor de memoria. El perfil
+  anterior (fat LTO/una unidad) excedió 16 GiB al compilar RP-4B2.
 
 ## graphify
 

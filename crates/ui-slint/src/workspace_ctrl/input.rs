@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 use super::*;
+use naygo_core::CancellationToken;
 use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
@@ -22,6 +23,11 @@ pub struct AutocompleteState {
     requested: Option<(String, Instant)>,
     /// Buffer para el que YA se lanzó worker (no relanzar por la misma petición).
     launched: Option<String>,
+    revision: u64,
+    launched_revision: u64,
+    source: Option<String>,
+    began: Option<Instant>,
+    cancel: Option<CancellationToken>,
     /// Worker en vuelo (envía una vez y termina): (buffer, sugerencias).
     rx: Option<Receiver<(String, Vec<String>)>>,
 }
@@ -34,6 +40,11 @@ impl AutocompleteState {
     /// Registra el buffer tecleado y reinicia el debounce. NO lanza nada (eso es
     /// trabajo de `drive`, llamado por el tick de la UI).
     pub fn request(&mut self, buffer: String, now: Instant) {
+        if let Some(cancel) = &self.cancel {
+            cancel.cancel();
+        }
+        self.revision = self.revision.wrapping_add(1);
+        self.source = Some(buffer.clone());
         self.requested = Some((buffer, now));
     }
 
@@ -42,9 +53,21 @@ impl AutocompleteState {
     /// sin vencer o worker en vuelo) para que el timer de la UI siga vivo.
     pub fn drive(&mut self, now: Instant) -> bool {
         let Some((buffer, since)) = &self.requested else {
-            return self.rx.is_some();
+            return false;
         };
-        if self.launched.as_deref() == Some(buffer.as_str()) {
+        if self.rx.is_some()
+            && self
+                .began
+                .is_some_and(|t| now.duration_since(t) >= Duration::from_secs(5))
+        {
+            if let Some(cancel) = &self.cancel {
+                cancel.cancel();
+            }
+            return false; // Timeout lógico; conservar receptor impide abandonar/crear hilos ilimitados.
+        }
+        if self.launched.as_deref() == Some(buffer.as_str())
+            && self.launched_revision == self.revision
+        {
             // Ya se lanzó para este buffer: solo resta esperar/drenar el resultado.
             return self.rx.is_some();
         }
@@ -59,13 +82,22 @@ impl AutocompleteState {
         let buffer = buffer.clone();
         let (tx, rx) = std::sync::mpsc::channel();
         let worker_buffer = buffer.clone();
-        std::thread::spawn(move || {
-            let sugg = complete_path(&worker_buffer);
-            let _ = tx.send((worker_buffer, sugg));
-        });
+        let source = self.source.clone().unwrap_or_else(|| buffer.clone());
+        let cancel = CancellationToken::new();
+        let worker_cancel = cancel.clone();
+        let spawned = std::thread::Builder::new()
+            .name("path-autocomplete".into())
+            .spawn(move || {
+                let sugg = complete_path_with_cancel(&source, &worker_cancel);
+                let _ = tx.send((worker_buffer, sugg));
+            })
+            .is_ok();
         self.launched = Some(buffer);
-        self.rx = Some(rx);
-        true
+        self.launched_revision = self.revision;
+        self.began = Some(now);
+        self.rx = spawned.then_some(rx);
+        self.cancel = spawned.then_some(cancel);
+        spawned
     }
 
     /// Drena el worker (sin bloquear). Si el resultado corresponde al ÚLTIMO buffer
@@ -76,7 +108,12 @@ impl AutocompleteState {
         match rx.try_recv() {
             Ok((buffer, sugg)) => {
                 self.rx = None;
-                if self.requested.as_ref().map(|(b, _)| b) == Some(&buffer) {
+                if self.launched_revision == self.revision
+                    && self
+                        .began
+                        .is_some_and(|t| t.elapsed() < Duration::from_secs(5))
+                    && self.requested.as_ref().map(|(b, _)| b) == Some(&buffer)
+                {
                     Some((buffer, sugg))
                 } else {
                     None
@@ -91,19 +128,37 @@ impl AutocompleteState {
     }
 
     /// Cancela todo: al cerrar el editor (Enter/Esc) nada de lo pendiente aplica.
-    /// El worker en vuelo (si lo hay) termina solo; su envío cae en canal cerrado.
+    /// El receptor sigue retenido hasta drenar: cancelar y reabrir no crea workers ilimitados.
     pub fn cancel(&mut self) {
+        if let Some(cancel) = &self.cancel {
+            cancel.cancel();
+        }
         self.requested = None;
         self.launched = None;
-        self.rx = None;
+        self.source = None;
+        self.revision = self.revision.wrapping_add(1);
     }
 }
 
-/// Lógica PURA de completado, compartida por el path síncrono (`path_autocomplete`)
+impl Drop for AutocompleteState {
+    fn drop(&mut self) {
+        self.cancel();
+    }
+}
+
+/// Lectura de completado (I/O), compartida por el helper de tests (`path_autocomplete`)
 /// y el worker async (`AutocompleteState::drive`): dado el `buffer` tecleado, lista
 /// las subcarpetas de la carpeta padre que matchean el último segmento
 /// (case-insensitive). Lista superficial, acotada a 50.
+#[cfg(test)]
 fn complete_path(buffer: &str) -> Vec<String> {
+    complete_path_with_cancel(buffer, &CancellationToken::new())
+}
+
+fn complete_path_with_cancel(buffer: &str, cancel: &CancellationToken) -> Vec<String> {
+    if cancel.is_cancelled() {
+        return Vec::new();
+    }
     let (parent, prefix) = naygo_core::path_segments::split_edit_buffer(buffer);
     if parent.is_empty() {
         return Vec::new();
@@ -111,6 +166,9 @@ fn complete_path(buffer: &str) -> Vec<String> {
     let mut names: Vec<String> = Vec::new();
     if let Ok(rd) = std::fs::read_dir(&parent) {
         for entry in rd.flatten() {
+            if cancel.is_cancelled() {
+                return Vec::new();
+            }
             if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
                 names.push(entry.file_name().to_string_lossy().into_owned());
                 if names.len() >= 200 {
@@ -149,13 +207,8 @@ impl WorkspaceCtrl {
             .collect()
     }
 
-    /// Autocompletado del editor de ruta: dado el `buffer` tecleado, lista las subcarpetas de la
-    /// carpeta padre que matchean el último segmento (case-insensitive). Lista superficial,
-    /// acotada a 50, en el hilo de UI (un read_dir somero es barato).
-    ///
-    /// Versión SÍNCRONA, solo para llamados puntuales (abrir el editor, clic en sugerencia):
-    /// la vía por-tecla es ASYNC (`request_path_autocomplete` + tick), para no bloquear la UI
-    /// contra un share de red caído. Ambas comparten `complete_path`.
+    /// Helper síncrono sólo para pruebas. La UI debe solicitar un worker en todas las vías.
+    #[cfg(test)]
     pub fn path_autocomplete(&self, buffer: &str) -> Vec<String> {
         complete_path(buffer)
     }
@@ -165,6 +218,12 @@ impl WorkspaceCtrl {
     /// resultado con `poll_autocomplete`.
     pub fn request_path_autocomplete(&mut self, buffer: String, now: Instant) {
         self.autocomplete.request(buffer, now);
+    }
+
+    /// Ruta física separada del borrador para completar rutas relativas al panel.
+    pub fn request_path_autocomplete_at(&mut self, buffer: String, source: String, now: Instant) {
+        self.autocomplete.request(buffer, now);
+        self.autocomplete.source = Some(source);
     }
 
     /// Vencido el debounce, lanza el worker de autocompletado para el último buffer pedido.
@@ -257,6 +316,7 @@ impl WorkspaceCtrl {
             || self.column_menu.is_some() // menú/editor de columna (clic derecho en header)
             || self.sync_assistant.is_some() // asistente de sincronización
             || self.text_transform.is_some() // transformación de texto
+            || self.listing_export.is_some() // exportación profunda cancelable
             || self.delivery.open
             || self.task_spaces.open
             || self.retry.open
@@ -267,6 +327,9 @@ impl WorkspaceCtrl {
 
     /// Tecla sobre el panel activo (reusa el keymap). Devuelve true si navegó.
     pub fn on_key(&mut self, text: &str, ctrl: bool, shift: bool, alt: bool) -> bool {
+        // El aviso pertenece solo a esta tecla; nunca reaparecerá por una acción anterior.
+        self.creation_wait_notice = false;
+        self.deep_selection_notice = false;
         self.ctrl_down = ctrl;
         self.shift_down = shift;
         // Un menú contextual es una capa transitoria: Esc debe cerrarlo antes de que la misma
@@ -293,14 +356,20 @@ impl WorkspaceCtrl {
         {
             return false;
         }
-        // Con el editor de rename inline abierto, las teclas son del editor (Enter/Esc/flechas
+        // Con el editor de rename inline en el panel activo, las teclas son del editor (Enter/Esc/flechas
         // las maneja el .slint; el resto es tipeo). El FilePanel ya NO reenvía teclas durante
         // el rename (file-panel.slint, handler `key-pressed`); esta guarda es la red de
         // seguridad en Rust por si aparece otro camino de entrada: sin ella, una tecla filtrada
         // gatillaría typeahead/atajos con el editor abierto (ese fue el bug del "_" que
         // reseteaba el texto: la tecla filtrada movía la selección y el sync re-montaba el
         // editor con el nombre original).
-        if self.rename_active.is_some() {
+        // Si otro panel pasa a ser activo durante un overlay, su teclado no debe quedar
+        // bloqueado por la sesión suspendida. F2 vuelve a esa sesión sin reemplazarla.
+        if self
+            .rename_active
+            .as_ref()
+            .is_some_and(|rename| self.ws.active_id() == Some(rename.pane))
+        {
             return false;
         }
         // Si el selector de panel está activo, el teclado lo controla: 1..9 elige, Esc
@@ -316,15 +385,36 @@ impl WorkspaceCtrl {
             }
             return false;
         }
+        let tree_active = self
+            .ws
+            .active_id()
+            .and_then(|id| self.ws.pane(id))
+            .is_some_and(|pane| pane.purpose == PanePurpose::Tree);
+        let deep_active = self
+            .ws
+            .active_id()
+            .is_some_and(|id| self.is_deep_active(id));
         let Some(chord) = crate::keys::chord_from(text, ctrl, shift, alt) else {
             // Typeahead/filtro visual: SÍ hubo cambios (buffer, salto de foco, tinte) → true,
             // para que el callback despierte el timer y el sync empuje la selección y el
             // auto-scroll (`focused-row`) a la primera coincidencia.
-            return self.typeahead(text);
+            return if tree_active || deep_active {
+                false
+            } else {
+                self.typeahead(text)
+            };
         };
         let Some(action) = self.config.keymap.action_for(&chord) else {
-            return self.typeahead(text);
+            return if tree_active || deep_active {
+                false
+            } else {
+                self.typeahead(text)
+            };
         };
+        // El árbol solo reenvía atajos globales o creación; nunca opera sobre un Files anterior.
+        if tree_active && !matches!(action, Action::NewDir | Action::SwitchPane) {
+            return false;
+        }
         // OJO: aquí YA NO se limpia el typeahead. El filtro visual persiste hasta Esc o
         // navegar (decisión de diseño); las acciones por atajo (flechas, copiar, etc.)
         // conviven con el marcado activo. La limpieza ocurre en `clear_filter` (Esc) y en
@@ -377,6 +467,132 @@ impl WorkspaceCtrl {
     /// acción que el teclado sin duplicar el ruteo (ver `execute_palette_command`). Devuelve
     /// `true` si algo cambió y la UI debe refrescar (igual semántica que `on_key`).
     pub fn run_action(&mut self, action: Action) -> bool {
+        if let Some(id) = self.ws.active_id().filter(|id| self.is_deep_active(*id)) {
+            match action {
+                Action::MoveUp => return self.deep_select_move(id, -1, false, false),
+                Action::MoveDown => return self.deep_select_move(id, 1, false, false),
+                Action::FocusPageUp => {
+                    return self.deep_select_move(id, -(PAGE_ROWS as isize), false, false)
+                }
+                Action::FocusPageDown => {
+                    return self.deep_select_move(id, PAGE_ROWS as isize, false, false)
+                }
+                Action::FocusHome => return self.deep_select_move(id, -isize::MAX, false, false),
+                Action::FocusEnd => return self.deep_select_move(id, isize::MAX, false, false),
+                Action::ExtendUp => return self.deep_select_move(id, -1, true, false),
+                Action::ExtendDown => return self.deep_select_move(id, 1, true, false),
+                Action::ExtendPageUp => {
+                    return self.deep_select_move(id, -(PAGE_ROWS as isize), true, false)
+                }
+                Action::ExtendPageDown => {
+                    return self.deep_select_move(id, PAGE_ROWS as isize, true, false)
+                }
+                Action::ExtendHome => return self.deep_select_move(id, -isize::MAX, true, false),
+                Action::ExtendEnd => return self.deep_select_move(id, isize::MAX, true, false),
+                Action::FocusUpKeep => return self.deep_select_move(id, -1, false, true),
+                Action::FocusDownKeep => return self.deep_select_move(id, 1, false, true),
+                Action::SelectAll => return self.deep_select_all(id),
+                Action::ToggleSelect | Action::ToggleFocused => {
+                    return self
+                        .deep_focused_position(id)
+                        .is_some_and(|pos| self.deep_select_at(id, pos, true, false))
+                }
+                Action::OpenFocusedOtherPane => {
+                    if self.block_pending_created_activation(id) {
+                        self.creation_wait_notice = true;
+                        return false;
+                    }
+                    let Some(target) = self
+                        .deep_focused_position(id)
+                        .and_then(|pos| self.deep_visible_entry(id, pos))
+                        .cloned()
+                    else {
+                        return false;
+                    };
+                    if target.kind == EntryKind::Directory {
+                        return self.request_action(
+                            PaneAction::OpenDir(target.path),
+                            id,
+                            self.last_area,
+                        );
+                    }
+                    if naygo_platform::open::can_run_as_administrator(&target.path) {
+                        self.submit_shell(naygo_platform::open::ShellJob::RunAsAdministrator(
+                            target.path.clone(),
+                        ));
+                    }
+                    return false;
+                }
+                Action::RunAsAdministrator => {
+                    let Some(target) = self
+                        .deep_focused_position(id)
+                        .and_then(|pos| self.deep_visible_entry(id, pos))
+                        .cloned()
+                    else {
+                        return false;
+                    };
+                    if naygo_platform::open::can_run_as_administrator(&target.path) {
+                        self.submit_shell(naygo_platform::open::ShellJob::RunAsAdministrator(
+                            target.path.clone(),
+                        ));
+                    }
+                    return false;
+                }
+                Action::Activate => {
+                    if self.block_pending_created_activation(id) {
+                        self.creation_wait_notice = true;
+                        return false;
+                    }
+                    let Some(pos) = self.deep_focused_position(id) else {
+                        return false;
+                    };
+                    self.ctrl_down = false;
+                    return self.on_row_double_clicked(id, pos);
+                }
+                _ => {}
+            }
+        }
+        // Sin selección propia de vista profunda, jamás interpretar el foco de la lista
+        // normal como si identificara una fila profunda. El doble clic sí usa índice visible.
+        if self
+            .ws
+            .active_id()
+            .is_some_and(|id| self.is_deep_active(id))
+            && matches!(action, Action::Open | Action::OpenWith)
+        {
+            self.deep_selection_notice = true;
+            return false;
+        }
+        // Solo una selección explícita cancela la protección; los refrescos no expresan intención.
+        if matches!(
+            action,
+            Action::MoveUp
+                | Action::MoveDown
+                | Action::FocusPageDown
+                | Action::FocusPageUp
+                | Action::FocusHome
+                | Action::FocusEnd
+                | Action::ExtendUp
+                | Action::ExtendDown
+                | Action::ExtendPageDown
+                | Action::ExtendPageUp
+                | Action::ExtendHome
+                | Action::ExtendEnd
+                | Action::FocusUpKeep
+                | Action::FocusDownKeep
+                | Action::ToggleSelect
+                | Action::ToggleFocused
+                | Action::SelectAll
+        ) {
+            if let Some(id) = self.ws.active_id().filter(|id| {
+                self.ws
+                    .pane(*id)
+                    .and_then(|pane| pane.files.as_ref())
+                    .is_some_and(|files| files.view_len() > 0)
+            }) {
+                self.mark_explicit_creation_selection(id);
+            }
+        }
         if self
             .ws
             .active_id()
@@ -442,12 +658,18 @@ impl WorkspaceCtrl {
                     return true;
                 }
                 Action::Paste => {
-                    if let naygo_core::clipboard::ClipboardContent::Files { paths, .. } =
-                        naygo_platform::clipboard::read()
-                    {
-                        return self.basket.add(paths) > 0;
+                    if self.basket_clipboard_rx.is_some() {
+                        return true;
                     }
-                    return false;
+                    let result = self
+                        .ops
+                        .clipboard_io_handle()
+                        .and_then(|clipboard| clipboard.read_async());
+                    match result {
+                        Ok(rx) => self.basket_clipboard_rx = Some(rx),
+                        Err(error) => self.ops.report_clipboard_error(error),
+                    }
+                    return true;
                 }
                 Action::FocusHome => return self.basket_select(0),
                 Action::FocusEnd => return self.basket_select(self.basket.len().saturating_sub(1)),
@@ -457,8 +679,7 @@ impl WorkspaceCtrl {
                 Action::MoveToOther => return self.basket_request_transfer(true),
                 Action::Activate => {
                     if let Some(path) = self.basket_selected_path() {
-                        let result = naygo_platform::open::open_default(&path);
-                        self.report_shell_result(result);
+                        self.submit_shell(naygo_platform::open::ShellJob::Open(path));
                     }
                     return true;
                 }
@@ -597,6 +818,10 @@ impl WorkspaceCtrl {
             Action::CopyToOther => return self.op_to_other(false),
             Action::MoveToOther => return self.op_to_other(true),
             Action::Activate => {
+                if active.is_some_and(|id| self.block_pending_created_activation(id)) {
+                    self.creation_wait_notice = true;
+                    return false;
+                }
                 if let (Some(id), Some(pos)) =
                     (active, self.ws.active_files().and_then(|f| f.focused))
                 {
@@ -607,6 +832,10 @@ impl WorkspaceCtrl {
             // lanza elevado. Así conservamos el atajo Commander existente sin sumar otro chord.
             // (`request_action`): 1 otro panel → directo; 2+ → selector; 0 → divide y usa el nuevo.
             Action::OpenFocusedOtherPane => {
+                if active.is_some_and(|id| self.block_pending_created_activation(id)) {
+                    self.creation_wait_notice = true;
+                    return false;
+                }
                 let Some(origin) = active else {
                     return false;
                 };
@@ -626,8 +855,9 @@ impl WorkspaceCtrl {
                     );
                 }
                 if naygo_platform::open::can_run_as_administrator(&target.path) {
-                    let result = naygo_platform::open::run_as_administrator(&target.path);
-                    self.report_shell_result(result);
+                    self.submit_shell(naygo_platform::open::ShellJob::RunAsAdministrator(
+                        target.path.clone(),
+                    ));
                 }
                 return false;
             }
@@ -639,8 +869,9 @@ impl WorkspaceCtrl {
                     .map(|e| e.path.clone());
                 if let Some(path) = target {
                     if naygo_platform::open::can_run_as_administrator(&path) {
-                        let result = naygo_platform::open::run_as_administrator(&path);
-                        self.report_shell_result(result);
+                        self.submit_shell(naygo_platform::open::ShellJob::RunAsAdministrator(
+                            path.clone(),
+                        ));
                     }
                 }
                 return false;
@@ -721,6 +952,32 @@ impl WorkspaceCtrl {
             _ => {}
         }
         false
+    }
+
+    /// Completa el pegado asíncrono a Cesta sin hacer una lectura del sistema en el callback.
+    /// Devuelve `false` mientras la solicitud siga pendiente para mantener activo el tick.
+    pub fn pump_basket_clipboard(&mut self) -> bool {
+        let Some(rx) = self.basket_clipboard_rx.as_ref() else {
+            return true;
+        };
+        match rx.try_recv() {
+            Ok(naygo_core::clipboard::ClipboardContent::Files { paths, .. }) => {
+                self.basket_clipboard_rx = None;
+                self.basket.add(paths);
+                true
+            }
+            Ok(_) => {
+                self.basket_clipboard_rx = None;
+                true
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => false,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.basket_clipboard_rx = None;
+                self.ops
+                    .report_clipboard_error("worker del portapapeles desconectado".to_string());
+                true
+            }
+        }
     }
 
     /// Avanza por TODOS los paneles del layout, no solo por los de archivos. Se usa con
@@ -1130,6 +1387,10 @@ impl WorkspaceCtrl {
             CommandPayload::FocusEntry(view_idx) => {
                 if let Some(f) = self.ws.active_files_mut() {
                     f.select_single(view_idx);
+                    if let Some(id) = self.ws.active_id() {
+                        self.mark_explicit_creation_selection(id);
+                        self.sync_explicit_creation_selection(id);
+                    }
                     true
                 } else {
                     false
@@ -1245,6 +1506,9 @@ impl WorkspaceCtrl {
             };
             if naygo_core::text_match::contains_folded(&e.name, &needle) {
                 f.select_single(pos as usize);
+                if let Some(id) = self.ws.active_id() {
+                    self.sync_explicit_creation_selection(id);
+                }
                 return true;
             }
         }
@@ -1283,6 +1547,7 @@ impl WorkspaceCtrl {
         // (prefijo incluido: es un "contiene" al inicio). Pedido del usuario: si los matches
         // están más abajo, el foco va a la primera aparición. Las coincidencias siguientes
         // se recorren con ↓/↑ (ver `jump_filter_match`). Case/acento-insensible.
+        let mut selected_by_typing = false;
         if let Some(f) = self.ws.active_files_mut() {
             let needle = naygo_core::text_match::fold_for_match(&self.typeahead);
             let view = f.view_indices();
@@ -1294,6 +1559,13 @@ impl WorkspaceCtrl {
             });
             if let Some(pos) = target {
                 f.select_single(pos);
+                selected_by_typing = true;
+            }
+        }
+        if selected_by_typing {
+            if let Some(id) = self.ws.active_id() {
+                self.mark_explicit_creation_selection(id);
+                self.sync_explicit_creation_selection(id);
             }
         }
         true
@@ -1303,6 +1575,53 @@ impl WorkspaceCtrl {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cancelled_completion_does_not_enumerate_candidates() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(temp.path().join("Alpha")).unwrap();
+        let buffer = format!("{}\\a", temp.path().display());
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        assert!(complete_path_with_cancel(&buffer, &cancel).is_empty());
+    }
+
+    #[test]
+    fn same_buffer_after_another_request_does_not_accept_old_generation() {
+        let mut state = AutocompleteState::new();
+        let now = Instant::now();
+        state.request("A".into(), now);
+        state.launched_revision = state.revision;
+        state.began = Some(now);
+        let (tx, rx) = std::sync::mpsc::channel();
+        state.rx = Some(rx);
+        state.request("B".into(), now);
+        state.request("A".into(), now);
+        tx.send(("A".into(), vec!["stale".into()])).unwrap();
+        assert!(state.poll().is_none());
+    }
+
+    #[test]
+    fn cancel_and_timeout_keep_worker_slot_without_spinning_the_timer() {
+        let mut state = AutocompleteState::new();
+        let now = Instant::now();
+        state.request("A".into(), now);
+        state.began = Some(now);
+        let (tx, rx) = std::sync::mpsc::channel();
+        state.rx = Some(rx);
+        state.cancel();
+        assert!(!state.drive(now));
+        assert!(state.rx.is_some());
+        state.request("B".into(), now);
+        assert!(!state.drive(now + Duration::from_secs(6)));
+        assert!(
+            state.rx.is_some(),
+            "timeout never releases a live worker slot"
+        );
+        drop(tx);
+        assert!(state.poll().is_none());
+        assert!(state.rx.is_none());
+    }
 
     /// Espera (acotada) a que el worker en vuelo drene, llamando `poll` hasta que el
     /// canal quede consumido. Devuelve el resultado entregado, si hubo uno válido.

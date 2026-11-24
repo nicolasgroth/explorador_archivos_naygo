@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: MIT
 
 //! Lista los sets de íconos disponibles: los sets de fábrica más los packs sueltos descubiertos
-//! en `<config_dir>/icons/<nombre>/`.
+//! en `<data_dir>/icons/<nombre>/`. También lee `<legacy_config_dir>/icons` para conservar
+//! instalaciones anteriores sin mover archivos durante el arranque.
 //! Patrón análogo a `theme::ThemeCatalog`. Puro salvo el `read_dir` de descubrimiento.
 
 use std::path::Path;
@@ -30,7 +31,59 @@ impl IconSetCatalog {
     /// Construye el catálogo: sets de fábrica + sueltos de `<dir>/icons/<nombre>/`.
     /// Tolerante: si `read_dir` falla, solo los de fábrica.
     pub fn load(dir: &Path) -> IconSetCatalog {
-        let mut sets = vec![
+        Self::load_with_legacy(dir, None)
+    }
+
+    /// Carga primero los packs de datos y añade los de la ubicación antigua. En caso de id
+    /// duplicado prevalece el pack bajo `data_dir`. No migra ni modifica archivos.
+    pub fn load_with_legacy(data_dir: &Path, legacy_config_dir: Option<&Path>) -> IconSetCatalog {
+        let mut catalog = Self::embedded();
+        let sets = &mut catalog.sets;
+        // Mantener en sync con los IDs de fábrica de `embedded`: si agregas un set nuevo allá,
+        // agrégalo aquí o su carpeta se detectaría como pack suelto duplicado.
+        let factory_ids = [
+            "lucide",
+            "fluent",
+            "tabler",
+            "material",
+            "flat-color",
+            "mono",
+            "kenney-game",
+            "kenney-board",
+            "vivid",
+            "pastel",
+        ];
+        let mut seen = std::collections::HashSet::new();
+        for root in std::iter::once(data_dir).chain(legacy_config_dir) {
+            let icons_dir = root.join("icons");
+            let Ok(entries) = std::fs::read_dir(&icons_dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if !path.is_dir() {
+                    continue;
+                }
+                let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                    continue;
+                };
+                if factory_ids.contains(&name) || !seen.insert(name.to_string()) {
+                    continue;
+                }
+                sets.push(IconSetInfo {
+                    id: name.to_string(),
+                    label: name.to_string(),
+                    builtin: false,
+                    tintable: false,
+                });
+            }
+        }
+        catalog
+    }
+
+    /// Construye solo los sets embebidos; no consulta el filesystem.
+    pub fn embedded() -> IconSetCatalog {
+        let sets = vec![
             IconSetInfo {
                 id: "lucide".into(),
                 label: "Lucide".into(),
@@ -94,38 +147,6 @@ impl IconSetCatalog {
                 tintable: false,
             },
         ];
-        // Mantener en sync con el vec! de sets de fábrica de arriba: si agregas un set
-        // nuevo allá, agrégalo aquí o su carpeta se detectaría como pack suelto duplicado.
-        let factory_ids = [
-            "lucide",
-            "fluent",
-            "tabler",
-            "material",
-            "flat-color",
-            "mono",
-            "kenney-game",
-            "kenney-board",
-            "vivid",
-            "pastel",
-        ];
-        let icons_dir = dir.join("icons");
-        if let Ok(entries) = std::fs::read_dir(&icons_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                        if !factory_ids.contains(&name) {
-                            sets.push(IconSetInfo {
-                                id: name.to_string(),
-                                label: name.to_string(),
-                                builtin: false,
-                                tintable: false,
-                            });
-                        }
-                    }
-                }
-            }
-        }
         IconSetCatalog { sets }
     }
 
@@ -231,6 +252,28 @@ mod tests {
         let info = cat.available().iter().find(|s| s.id == "mi-pack").unwrap();
         assert!(!info.builtin);
         assert!(!info.tintable);
+    }
+
+    #[test]
+    fn catalogo_combina_data_con_config_legacy_sin_duplicar_ids() {
+        let data = tempfile::tempdir().unwrap();
+        let legacy = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(data.path().join("icons").join("compartido")).unwrap();
+        std::fs::create_dir_all(data.path().join("icons").join("solo-data")).unwrap();
+        std::fs::create_dir_all(legacy.path().join("icons").join("compartido")).unwrap();
+        std::fs::create_dir_all(legacy.path().join("icons").join("solo-legacy")).unwrap();
+
+        let catalog = IconSetCatalog::load_with_legacy(data.path(), Some(legacy.path()));
+        let user_ids = catalog
+            .available()
+            .iter()
+            .filter(|set| !set.builtin)
+            .map(|set| set.id.as_str())
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(user_ids.len(), 3);
+        assert!(user_ids.contains("compartido"));
+        assert!(user_ids.contains("solo-data"));
+        assert!(user_ids.contains("solo-legacy"));
     }
 
     #[test]

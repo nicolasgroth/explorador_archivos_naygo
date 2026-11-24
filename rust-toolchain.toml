@@ -1,5 +1,5 @@
-# Naygo — toolchain fijado para todo el equipo/CI: stable + rustfmt + clippy.
+# Naygo — toolchain validado para el equipo/CI: Rust 1.96.0 + rustfmt + clippy.
 # Copyright (c) 2026 Nicolás Groth / ISGroth. MIT License.
 [toolchain]
-channel = "stable"
+channel = "1.96.0"
 components = ["rustfmt", "clippy"]

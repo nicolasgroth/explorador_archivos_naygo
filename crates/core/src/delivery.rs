@@ -8,7 +8,7 @@
 use crate::ops::{ConflictPolicy, OpKind, OpMsg, OpPlan, OpStep};
 use crate::CancellationToken;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{self, Metadata};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{
@@ -24,7 +24,7 @@ static STAGE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Structure {
-    /// Archivos al mismo nivel; rechaza homónimos, incluso si difieren solo en mayúsculas.
+    /// Archivos al mismo nivel; usa las reglas de identidad de nombres de la plataforma.
     Flat,
     /// Conserva el árbol desde una raíz elegida expresamente.
     Relative(PathBuf),
@@ -61,7 +61,7 @@ pub fn suggested_group_names(sources: &[PathBuf]) -> Vec<String> {
             format!(
                 "{:02}-{}",
                 i + 1,
-                p.file_name().unwrap_or_default().to_string_lossy()
+                crate::path_display::display_os_str(p.file_name().unwrap_or_default())
             )
         })
         .collect()
@@ -181,13 +181,7 @@ pub fn checkpoint(token: &CancellationToken) -> Result<(), DeliveryError> {
 }
 
 fn linked(metadata: &Metadata) -> bool {
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-        if metadata.file_attributes() & 0x400 != 0 {
-            return true;
-        }
-    }
+    // `is_symlink()` cubre symlinks y junctions; los placeholders de nube no son enlaces.
     metadata.file_type().is_symlink()
 }
 
@@ -201,8 +195,8 @@ fn checked_metadata(path: &Path) -> Result<Metadata, DeliveryError> {
     Ok(metadata)
 }
 
-fn key(path: &Path) -> String {
-    path.to_string_lossy().replace('/', "\\").to_lowercase()
+fn key(path: &Path) -> crate::path_identity::PathIdentityKey {
+    crate::path_identity::key(path)
 }
 
 fn safe_relative(path: &Path) -> bool {
@@ -276,7 +270,7 @@ pub fn prepare_review(
     let destination = parent.join(name);
     ensure_absent(&destination)?;
     let mut roots = Vec::new();
-    let mut root_keys = BTreeSet::new();
+    let mut root_keys = HashSet::new();
     for source in sources {
         checkpoint(token)?;
         checked_metadata(source)?;
@@ -285,22 +279,19 @@ pub fn prepare_review(
             return Err(DeliveryError::Invalid("overlapping sources"));
         }
         if key(&destination) == key(&source)
-            || key(&destination).starts_with(&(key(&source) + "\\"))
+            || crate::path_identity::is_under(&destination, &source)
         {
             return Err(DeliveryError::Invalid("destination inside source"));
         }
         roots.push(source);
     }
-    // No comparar cada pareja: miles de referencias deben planificarse en O(n log n).
-    for source in &root_keys {
+    // Comprobar ancestros por componentes conserva bytes POSIX y cuesta O(n * profundidad).
+    for source in &roots {
         checkpoint(token)?;
-        let prefix = source.clone() + "\\";
-        if root_keys
-            .range(prefix.clone()..)
-            .next()
-            .is_some_and(|next| next.starts_with(&prefix))
-        {
-            return Err(DeliveryError::Invalid("overlapping sources"));
+        for parent in source.ancestors().skip(1) {
+            if root_keys.contains(&key(parent)) {
+                return Err(DeliveryError::Invalid("overlapping sources"));
+            }
         }
     }
     let relative_root = if let Structure::Relative(root) = structure {
@@ -326,7 +317,7 @@ pub fn prepare_review(
     let mut entries = Vec::new();
     let mut names = HashSet::from([key(Path::new(MANIFEST)), key(Path::new(LIST))]);
     let mut counters = HashMap::new();
-    let mut owners: BTreeMap<String, NameConflict> = BTreeMap::new();
+    let mut owners: BTreeMap<crate::path_identity::PathIdentityKey, NameConflict> = BTreeMap::new();
     for reserved in [MANIFEST, LIST] {
         owners.insert(
             key(Path::new(reserved)),
@@ -420,8 +411,8 @@ pub fn prepare_review(
 
 fn unique_flat_name(
     candidate: &Path,
-    used: &HashSet<String>,
-    counters: &mut HashMap<String, u32>,
+    used: &HashSet<crate::path_identity::PathIdentityKey>,
+    counters: &mut HashMap<crate::path_identity::PathIdentityKey, u32>,
     token: &CancellationToken,
 ) -> Result<PathBuf, DeliveryError> {
     if !used.contains(&key(candidate)) {
@@ -521,10 +512,15 @@ struct ManifestEntry<'a> {
 
 /// Publica solo si TODOS los pasos terminan bien. Una copia cancelada/fallida no produce
 /// una entrega parcial. El manifiesto no incluye rutas absolutas de los originales.
+///
+/// `copier` hace la copia de cada archivo: en producción es el de plataforma (el mismo que usan
+/// las demás operaciones; en Windows `CopyFile2` con ADS y offload SMB). core no conoce Windows,
+/// por eso se inyecta; `NativeNoReplaceRename` es la copia por buffers de core.
 pub fn execute(
     plan: &DeliveryPlan,
     token: &CancellationToken,
     tx: &Sender<OpMsg>,
+    copier: &dyn crate::ops::NoReplaceRename,
 ) -> Result<PathBuf, DeliveryError> {
     checkpoint(token)?;
     ensure_absent(&plan.destination)?;
@@ -545,14 +541,16 @@ pub fn execute(
                 to: content.join(&entry.relative),
                 bytes: entry.size(),
                 is_dir: entry.is_dir(),
+                planned_failure: None,
             })
             .collect(),
         total_bytes: plan.total_bytes,
         total_files: plan.entries.iter().filter(|e| !e.is_dir()).count(),
+        allow_directory_rename: false,
         pre_delete: Vec::new(),
     };
     let (_conflict_tx, conflict_rx) = channel();
-    let summary = crate::ops::engine::run_plan(
+    let summary = crate::ops::engine::run_plan_with_no_replace_rename(
         &copy_plan,
         &OpKind::Copy,
         ConflictPolicy::Skip,
@@ -560,21 +558,15 @@ pub fn execute(
         tx,
         &conflict_rx,
         None,
+        copier,
     );
     checkpoint(token)?;
     if summary.count_failed() != 0
         || summary.count_skipped() != 0
         || summary.count_done() != plan.entries.len()
     {
-        let detail = summary.items.iter().find_map(|i| {
-            if let crate::ops::OpOutcome::Failed(e) = &i.outcome {
-                Some(e.clone())
-            } else {
-                None
-            }
-        });
         return Err(DeliveryError::Copy(
-            detail.unwrap_or_else(|| "incomplete delivery copy".into()),
+            first_failure_detail(&summary).unwrap_or_else(|| "incomplete delivery copy".into()),
         ));
     }
     revalidate(plan, token, false)?;
@@ -673,9 +665,95 @@ pub fn execute(
     Ok(plan.destination.clone())
 }
 
+/// Primer motivo de fallo del resumen del motor, sin códigos estructurados internos: este texto
+/// termina en `DeliveryError::Copy` y por tanto delante del usuario.
+fn first_failure_detail(summary: &crate::ops::OpSummary) -> Option<String> {
+    summary.items.iter().find_map(|item| match &item.outcome {
+        crate::ops::OpOutcome::Failed(error) => {
+            Some(crate::ops::plain_failure_text(error).into_owned())
+        }
+        _ => None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn el_detalle_de_fallo_de_entrega_no_expone_codigos_internos() {
+        let summary = crate::ops::OpSummary {
+            items: vec![crate::ops::OpItem {
+                dest: PathBuf::from("destino"),
+                src: None,
+                outcome: crate::ops::OpOutcome::Failed(crate::ops::unreadable_folder_failure(
+                    "acceso denegado",
+                )),
+            }],
+            ..Default::default()
+        };
+        let detail = first_failure_detail(&summary).unwrap();
+        assert_eq!(detail, "acceso denegado");
+        assert!(!detail.contains("naygo:") && !detail.contains('\u{1f}'));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn suggested_group_names_escape_non_utf8_without_colliding_with_literal_escape() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let invalid = PathBuf::from(OsStr::from_bytes(b"model-\xff.stl"));
+        let literal = PathBuf::from(OsStr::from_bytes(b"model-\\xFF.stl"));
+        assert_eq!(
+            suggested_group_names(&[invalid, literal]),
+            vec![r"01-model-\xFF.stl", r"02-model-\\xFF.stl"]
+        );
+    }
+
+    /// La copia de una entrega pasa por el copiador inyectado (en producción, el de plataforma:
+    /// CopyFile2 con ADS y offload SMB), no por la copia por buffers de core.
+    #[test]
+    fn entrega_copia_con_el_copiador_inyectado() {
+        struct Recording(std::sync::Mutex<Vec<PathBuf>>);
+        impl crate::ops::NoReplaceRename for Recording {
+            fn rename_noreplace(&self, from: &Path, to: &Path) -> std::io::Result<()> {
+                crate::ops::NativeNoReplaceRename.rename_noreplace(from, to)
+            }
+            fn copy_and_publish(
+                &self,
+                from: &Path,
+                to: &Path,
+                overwrite: bool,
+                durable: bool,
+                token: &CancellationToken,
+                on_bytes: &mut dyn FnMut(u64),
+            ) -> std::io::Result<bool> {
+                self.0.lock().unwrap().push(from.to_path_buf());
+                crate::ops::NativeNoReplaceRename
+                    .copy_and_publish(from, to, overwrite, durable, token, on_bytes)
+            }
+        }
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("a.txt");
+        fs::write(&source, b"abc").unwrap();
+        let token = CancellationToken::new();
+        let plan = prepare(
+            std::slice::from_ref(&source),
+            &temp.path().join("delivery"),
+            &Structure::Flat,
+            Output::Folder,
+            &token,
+        )
+        .unwrap();
+        let copier = Recording(std::sync::Mutex::new(Vec::new()));
+        let (tx, _) = channel();
+        execute(&plan, &token, &tx, &copier).unwrap();
+        let copied = copier.0.lock().unwrap().clone();
+        assert_eq!(copied.len(), 1, "{copied:?}");
+        assert_eq!(copied[0].file_name(), source.file_name());
+        assert_eq!(fs::read(plan.destination.join("a.txt")).unwrap(), b"abc");
+    }
 
     #[test]
     fn sha256_verifica_contenido_y_detecta_cambio_con_metadata_identica() {
@@ -695,7 +773,7 @@ mod tests {
         let hash = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
         assert_eq!(plan.entries[0].sha256.as_deref(), Some(hash));
         let (tx, _) = channel();
-        execute(&plan, &token, &tx).unwrap();
+        execute(&plan, &token, &tx, &crate::ops::NativeNoReplaceRename).unwrap();
         let manifest: serde_json::Value =
             serde_json::from_slice(&fs::read(plan.destination.join(MANIFEST)).unwrap()).unwrap();
         assert_eq!(manifest["verification"], "SHA-256");
@@ -710,7 +788,7 @@ mod tests {
             .unwrap();
         plan.destination = temp.path().join("another-delivery");
         assert!(matches!(
-            execute(&plan, &token, &tx),
+            execute(&plan, &token, &tx, &crate::ops::NativeNoReplaceRename),
             Err(DeliveryError::Changed(_))
         ));
         assert!(!plan.destination.exists());
@@ -734,7 +812,7 @@ mod tests {
         .unwrap();
         assert!(!destination.exists());
         let (tx, _) = channel();
-        execute(&plan, &token, &tx).unwrap();
+        execute(&plan, &token, &tx, &crate::ops::NativeNoReplaceRename).unwrap();
         assert_eq!(
             fs::read(destination.join("sub/a.txt")).unwrap(),
             b"original"
@@ -765,7 +843,7 @@ mod tests {
         assert!(prepare(&sources, &dest, &Structure::Flat, Output::Zip, &token).is_err());
         let plan = prepare(&sources, &dest, &Structure::Grouped, Output::Zip, &token).unwrap();
         let (tx, _) = channel();
-        execute(&plan, &token, &tx).unwrap();
+        execute(&plan, &token, &tx, &crate::ops::NativeNoReplaceRename).unwrap();
         let mut zip = zip::ZipArchive::new(fs::File::open(&dest).unwrap()).unwrap();
         assert!(zip.by_name("01-info.txt").is_ok());
         assert!(zip.by_name("02-INFO.txt").is_ok());
@@ -792,7 +870,7 @@ mod tests {
         fs::write(&source, b"longer replacement").unwrap();
         let (tx, _) = channel();
         assert!(matches!(
-            execute(&plan, &token, &tx),
+            execute(&plan, &token, &tx, &crate::ops::NativeNoReplaceRename),
             Err(DeliveryError::Changed(_))
         ));
         assert!(!dest.exists());
@@ -809,7 +887,7 @@ mod tests {
         let plan = prepare(&[source], &dest, &Structure::Flat, Output::Zip, &token).unwrap();
         fs::write(&dest, b"another application created this").unwrap();
         let (tx, _) = channel();
-        assert!(execute(&plan, &token, &tx).is_err());
+        assert!(execute(&plan, &token, &tx, &crate::ops::NativeNoReplaceRename).is_err());
         assert_eq!(fs::read(dest).unwrap(), b"another application created this");
     }
 
@@ -847,7 +925,7 @@ mod tests {
         token.cancel();
         let (tx, _) = channel();
         assert!(matches!(
-            execute(&plan, &token, &tx),
+            execute(&plan, &token, &tx, &crate::ops::NativeNoReplaceRename),
             Err(DeliveryError::Cancelled)
         ));
         assert!(!plan.destination.exists());
@@ -925,9 +1003,33 @@ mod tests {
             fs::canonicalize(&sources[4]).unwrap()
         );
         let (tx, _) = channel();
-        execute(&plan, &token, &tx).unwrap();
+        execute(&plan, &token, &tx, &crate::ops::NativeNoReplaceRename).unwrap();
         assert_eq!(fs::read_to_string(dest.join("info (3).txt")).unwrap(), "c");
         assert!(sources.iter().all(|p| p.exists()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn plan_plano_posix_conserva_nombres_con_case_distinto() {
+        let temp = tempfile::tempdir().unwrap();
+        let lower = temp.path().join("a");
+        let upper = temp.path().join("A");
+        fs::create_dir(&lower).unwrap();
+        fs::create_dir(&upper).unwrap();
+        let lower_file = lower.join("info.txt");
+        let upper_file = upper.join("INFO.txt");
+        fs::write(&lower_file, b"lower").unwrap();
+        fs::write(&upper_file, b"upper").unwrap();
+
+        let plan = prepare(
+            &[lower_file, upper_file],
+            &temp.path().join("out"),
+            &Structure::Flat,
+            Output::Folder,
+            &CancellationToken::new(),
+        )
+        .unwrap();
+        assert_eq!(plan.entries.len(), 2);
     }
 
     #[test]
@@ -960,6 +1062,7 @@ mod tests {
             .iter()
             .any(|e| e.relative == Path::new("Cliente A/info.txt")));
         options.group_names[1] = "cliente a".into();
+        #[cfg(windows)]
         assert!(matches!(
             prepare_review(
                 &sources,
@@ -971,6 +1074,16 @@ mod tests {
             ),
             Err(DeliveryError::Conflicts(_))
         ));
+        #[cfg(unix)]
+        assert!(prepare_review(
+            &sources,
+            &destination,
+            &Structure::Grouped,
+            Output::Zip,
+            &options,
+            &token
+        )
+        .is_ok());
         for invalid in ["../outside", "x/y", "foo/", "foo\\", "", "bad.", "bad "] {
             options.group_names[0] = invalid.into();
             assert!(prepare_review(
@@ -996,6 +1109,7 @@ mod tests {
         assert!(!destination.exists());
     }
 
+    #[cfg(windows)]
     #[test]
     fn renombrado_plano_respeta_reservados_sufijos_y_cancelacion() {
         let used: HashSet<_> = ["info.txt", "info (2).txt", MANIFEST]
@@ -1017,5 +1131,17 @@ mod tests {
             unique_flat_name(Path::new("info.txt"), &used, &mut counters, &token),
             Err(DeliveryError::Cancelled)
         ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn renombrado_plano_posix_no_confunde_case_distinto() {
+        let used = HashSet::from([key(Path::new("info.txt"))]);
+        let mut counters = HashMap::new();
+        let token = CancellationToken::new();
+        assert_eq!(
+            unique_flat_name(Path::new("INFO.txt"), &used, &mut counters, &token).unwrap(),
+            Path::new("INFO.txt")
+        );
     }
 }

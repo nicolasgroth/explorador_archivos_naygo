@@ -46,6 +46,7 @@ impl RelativeDate {
 pub struct SavedSearch {
     pub version: u32,
     pub name: String,
+    #[serde(with = "crate::path_wire::vec")]
     pub roots: Vec<PathBuf>,
     pub options: SearchOptions,
     pub min_bytes: Option<u64>,
@@ -67,7 +68,7 @@ impl SavedSearch {
             || self.roots.iter().any(|r| {
                 !r.is_absolute()
                     || r.components().any(|c| matches!(c, Component::ParentDir))
-                    || r.to_string_lossy().contains('\0')
+                    || r.as_os_str().as_encoded_bytes().contains(&0)
             })
         {
             return Err(SpaceError::Invalid);
@@ -101,8 +102,8 @@ impl SavedSearch {
         let mut out: Vec<PathBuf> = Vec::new();
         for root in roots {
             if !out.iter().any(|parent| {
-                path_key(parent) == path_key(&root)
-                    || (self.options.recursive && is_under(&root, parent))
+                crate::path_identity::key(parent) == crate::path_identity::key(&root)
+                    || (self.options.recursive && crate::path_identity::is_under(&root, parent))
             }) {
                 out.push(root);
             }
@@ -111,23 +112,8 @@ impl SavedSearch {
     }
 }
 
-pub(crate) fn path_key(path: &Path) -> String {
-    let key = path
-        .components()
-        .map(|c| c.as_os_str().to_string_lossy())
-        .collect::<Vec<_>>()
-        .join("/");
-    if cfg!(windows) {
-        key.to_lowercase()
-    } else {
-        key
-    }
-}
-fn is_under(path: &Path, parent: &Path) -> bool {
-    let parent = path_key(parent);
-    path_key(path)
-        .strip_prefix(&parent)
-        .is_some_and(|tail| tail.starts_with('/'))
+pub(crate) fn path_key(path: &Path) -> crate::path_identity::PathIdentityKey {
+    crate::path_identity::key(path)
 }
 
 pub fn read(path: &Path, token: &CancellationToken) -> Result<(SavedSearch, String), SpaceError> {
@@ -142,4 +128,34 @@ pub fn read(path: &Path, token: &CancellationToken) -> Result<(SavedSearch, Stri
     let query: SavedSearch = serde_json::from_slice(&bytes).map_err(|_| SpaceError::Invalid)?;
     query.validate()?;
     Ok((query, revision(&bytes)))
+}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(unix)]
+    use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn non_utf8_roots_round_trip_without_changing_utf8_wire_shape() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let root = PathBuf::from(std::ffi::OsString::from_vec(b"/tmp/search-\xff".to_vec()));
+        let query = SavedSearch {
+            version: VERSION,
+            name: "búsqueda".into(),
+            roots: vec![root.clone()],
+            options: SearchOptions::default(),
+            min_bytes: None,
+            max_bytes: None,
+            modified: RelativeDate::Any,
+        };
+        let bytes = query.to_bytes().unwrap();
+        assert!(std::str::from_utf8(&bytes)
+            .unwrap()
+            .contains(r#""encoding":"unix-bytes-v1""#));
+        let restored: SavedSearch = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(restored.roots, vec![root]);
+        restored.validate().unwrap();
+    }
 }

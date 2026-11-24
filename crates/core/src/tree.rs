@@ -56,8 +56,8 @@ impl TreeNode {
     pub fn folder(path: PathBuf) -> Self {
         let name = path
             .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| path.display().to_string());
+            .map(crate::path_display::display_os_str)
+            .unwrap_or_else(|| crate::path_display::display_os_str(path.as_os_str()));
         TreeNode {
             path,
             name,
@@ -136,6 +136,30 @@ impl DirTree {
             roots,
             active_path: None,
             reveal_to: None,
+        }
+    }
+
+    /// Reemplaza las raíces de unidades cuando la plataforma detecta cambios de dispositivos.
+    /// Conserva la expansión y los hijos cargados de las unidades que siguen conectadas; las
+    /// carpetas raíz conocidas y el estado de selección/reveal permanecen intactos.
+    pub fn replace_drives(&mut self, drives: &[(PathBuf, String, DriveKind)]) {
+        let old_roots = std::mem::take(&mut self.roots);
+        let mut existing: std::collections::HashMap<PathBuf, TreeNode> = old_roots
+            .iter()
+            .filter(|root| root.drive_kind.is_some())
+            .map(|root| (root.path.clone(), root.clone()))
+            .collect();
+        self.roots = old_roots
+            .into_iter()
+            .filter(|root| root.drive_kind.is_none())
+            .collect();
+        for (path, label, kind) in drives {
+            let mut root = existing
+                .remove(path)
+                .unwrap_or_else(|| TreeNode::drive(path.clone(), label.clone(), *kind));
+            root.name.clone_from(label);
+            root.drive_kind = Some(*kind);
+            self.roots.push(root);
         }
     }
 
@@ -347,10 +371,53 @@ mod tests {
     }
 
     #[test]
+    fn replace_drives_preserva_raices_fisicas_y_estado_de_unidades_conservadas() {
+        let folders = vec![(
+            PathBuf::from("C:\\Users\\ngroth\\Documents"),
+            "Documentos".to_string(),
+            "documents".to_string(),
+        )];
+        let mut t = DirTree::from_folders_and_drives(&folders, &drive_list());
+        t.begin_loading(Path::new("C:\\"));
+        t.push_child(Path::new("C:\\"), PathBuf::from("C:\\Users"));
+        t.finish_loading(Path::new("C:\\"), NodeOutcome::Done);
+        t.set_active(PathBuf::from("C:\\Users"));
+
+        t.replace_drives(&[
+            (PathBuf::from("C:\\"), "Windows".into(), DriveKind::Fixed),
+            (PathBuf::from("E:\\"), "E:\\".into(), DriveKind::Removable),
+        ]);
+
+        assert_eq!(t.roots.len(), 3);
+        assert_eq!(t.roots[0].name, "Documentos");
+        let c = t.node_at(Path::new("C:\\")).unwrap();
+        assert_eq!(c.name, "Windows");
+        assert!(c.expanded);
+        assert_eq!(c.state, NodeState::Loaded);
+        assert_eq!(c.children.as_ref().map(Vec::len), Some(1));
+        assert!(t.node_at(Path::new("D:\\")).is_none());
+        assert!(t.node_at(Path::new("E:\\")).is_some());
+        assert_eq!(t.active_path, Some(PathBuf::from("C:\\Users")));
+    }
+
+    #[test]
     fn folder_toma_el_ultimo_componente_como_nombre() {
         let n = TreeNode::folder(PathBuf::from("C:\\Users\\ngroth"));
         assert_eq!(n.name, "ngroth");
         assert_eq!(n.drive_kind, None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn folder_muestra_bytes_no_utf8_escapados_y_conserva_la_ruta_original() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        let path = PathBuf::from(OsString::from_vec(b"/tmp/carpeta-\xff".to_vec()));
+        let node = TreeNode::folder(path.clone());
+
+        assert_eq!(node.name, r"carpeta-\xFF");
+        assert_eq!(node.path, path);
     }
 
     #[test]

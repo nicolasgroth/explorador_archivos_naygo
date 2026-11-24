@@ -16,14 +16,17 @@ use naygo_core::ops::{
     ConflictPrompt, FolderConflict, FolderDecision, OpItem, OpKind, OpMsg, OpOutcome, OpPlan,
     OpProgress, OpRequest, OpSummary, PlanError, PlanMsg,
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender};
 
 mod archive;
 mod batch_delete;
+mod clipboard_io;
 mod delivery;
 mod resume;
+
+use clipboard_io::{ClipboardIo, ClipboardIoHandle, ClipboardWriteKind, PendingClipboardWrite};
 
 /// Para qué se pide un nombre en el modal `NameInput`. (El rename pasó a ser inline en 6D;
 /// el modal queda para crear archivo/carpeta, confirmar el nombre al pegar y renombrar un
@@ -192,18 +195,33 @@ pub struct ActiveOp {
     /// `fs::metadata` por ítem en el hilo de UI (potencialmente miles al abrir el detalle).
     /// Vacío en ops sin plan (zip, planning sin promover aún).
     pub size_map: HashMap<PathBuf, u64>,
+    /// Orígenes de carpetas identificados durante la planificación, sin I/O de UI.
+    pub directory_sources: std::collections::HashSet<PathBuf>,
+    /// Contadores preparados en fragmentos acotados por tick para no bloquear la UI.
+    pub type_count_cursor: usize,
+    pub type_counts: (i32, i32, i32),
     /// Stagings de fuentes OLE virtuales usados por esta operación. Se vacían al terminal para
     /// que su guard RAII limpie los temporales en un worker; durante planificación/cola/conflicto
     /// mantienen los orígenes disponibles.
     pub staging_guards: Vec<naygo_platform::drop_target::StagedDrop>,
 }
 
-/// Mapa origen → bytes de un plan (solo archivos; las carpetas no muestran tamaño).
+/// Mapa origen → bytes de un plan (solo archivos; las carpetas no muestran tamaño). Excluye los
+/// pasos que la planificación ya dio por fallidos: no se sabe si son archivos, y ofrecerlos en
+/// "Reintentar" haría que `retry::review` rechazara el lote entero si resultan ser carpetas.
 fn size_map_of(plan: &OpPlan) -> HashMap<PathBuf, u64> {
     plan.steps
         .iter()
-        .filter(|s| !s.is_dir)
+        .filter(|s| !s.is_dir && s.planned_failure.is_none())
         .filter_map(|s| s.from.clone().map(|from| (from, s.bytes)))
+        .collect()
+}
+
+fn directory_sources_of(plan: &OpPlan) -> std::collections::HashSet<PathBuf> {
+    plan.steps
+        .iter()
+        .filter(|s| s.is_dir)
+        .filter_map(|s| s.from.clone())
         .collect()
 }
 
@@ -227,6 +245,8 @@ pub enum OpsMode {
 /// Estado completo de operaciones de archivo.
 pub struct OpsCtrl {
     pub active_ops: Vec<ActiveOp>,
+    /// Preparaciones OLE transitorias: se eliminan al terminar, sin crear historial falso.
+    drop_preparations: HashSet<u64>,
     pub pending_dialog: Option<OpDialog>,
     pub undo_history: Vec<UndoEntry>,
     pub next_undo_id: u64,
@@ -251,8 +271,44 @@ pub struct OpsCtrl {
     /// resultado llega por aquí: `Ok(path)` si escribió, `Err((path, error))` si falló — antes
     /// el fallo se tragaba en silencio y el usuario creía haber pegado. `pump_ops` lo drena.
     paste_write_rx: Option<Receiver<Result<PathBuf, (PathBuf, String)>>>,
+    paste_write_pending: Vec<Receiver<Result<PathBuf, (PathBuf, String)>>>,
     /// Error de la escritura de un pegado, pendiente de ser anunciado por la UI (toast).
     pending_paste_error: Option<(PathBuf, String)>,
+    /// Worker único y serial para todos los accesos al portapapeles del sistema.
+    clipboard_io: Option<ClipboardIo>,
+    pending_clipboard_writes: VecDeque<PendingClipboardWrite>,
+    pending_clipboard_errors: VecDeque<String>,
+    /// Notificaciones terminales, no snapshots del historial: se consumen una sola vez.
+    completed_changes: Vec<(OpRequest, bool, Option<PathBuf>)>,
+    /// `false` en modo multi-instancia de depuración: los journals del directorio de
+    /// configuración pueden ser de OTRA instancia viva, así que no se ofrecen ni se reanudan.
+    journal_resume_enabled: bool,
+}
+
+/// Escritura exclusivamente en worker. `create_new` arbitra colisiones concurrentes;
+/// sólo se elimina un parcial reservado por esta llamada si su escritura falla.
+fn write_unique_paste(preferred: &std::path::Path, bytes: &[u8]) -> std::io::Result<PathBuf> {
+    use std::io::Write;
+    loop {
+        let path = naygo_core::ops::names::dedup_name(preferred, &|p| p.exists());
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(mut file) => {
+                let result = file.write_all(bytes);
+                drop(file);
+                if let Err(error) = result {
+                    let _ = std::fs::remove_file(&path);
+                    return Err(error);
+                }
+                return Ok(path);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -261,10 +317,25 @@ pub struct ClipboardHistoryEntry {
     pub cut: bool,
 }
 
+/// Candidato inicial para el modal de renombrado de conflictos. La UI no comprueba el disco:
+/// el motor vuelve a validar y deduplicar el nombre en su worker al ejecutar la decisión.
+fn conflict_rename_suggestion(existing: &Path) -> PathBuf {
+    let dir = existing.parent().unwrap_or_else(|| Path::new(""));
+    let stem = existing
+        .file_stem()
+        .map(|value| value.to_string_lossy())
+        .unwrap_or_default();
+    match existing.extension() {
+        Some(extension) => dir.join(format!("{} (2).{}", stem, extension.to_string_lossy())),
+        None => dir.join(format!("{stem} (2)")),
+    }
+}
+
 impl OpsCtrl {
     pub fn new(config_dir: PathBuf) -> OpsCtrl {
         OpsCtrl {
             active_ops: Vec::new(),
+            drop_preparations: HashSet::new(),
             pending_dialog: None,
             undo_history: Vec::new(),
             next_undo_id: 1,
@@ -276,8 +347,19 @@ impl OpsCtrl {
             next_op_id: 1,
             pending_plan_error: None,
             paste_write_rx: None,
+            paste_write_pending: Vec::new(),
             pending_paste_error: None,
+            clipboard_io: None,
+            pending_clipboard_writes: VecDeque::new(),
+            pending_clipboard_errors: VecDeque::new(),
+            completed_changes: Vec::new(),
+            journal_resume_enabled: true,
         }
+    }
+
+    /// Modo multi-instancia (`NAYGO_DEBUG_MULTI_INSTANCE=1`): no ofrecer ni reanudar journals.
+    pub fn disable_journal_resume(&mut self) {
+        self.journal_resume_enabled = false;
     }
 
     pub fn last_transfer_destinations(&self, limit: usize) -> Vec<PathBuf> {
@@ -302,12 +384,14 @@ impl OpsCtrl {
     pub fn spawn_paste_write(&mut self, path: PathBuf, bytes: Vec<u8>) {
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let result = std::fs::write(&path, &bytes)
-                .map(|()| path.clone())
-                .map_err(|e| (path, e.to_string()));
+            // Reservar el nombre atómicamente: dos pegados en el mismo segundo nunca pisan
+            // contenido, ni siquiera si ambos fueron planificados antes de escribir.
+            let result = write_unique_paste(&path, &bytes).map_err(|e| (path, e.to_string()));
             let _ = tx.send(result);
         });
-        self.paste_write_rx = Some(rx);
+        if let Some(previous) = self.paste_write_rx.replace(rx) {
+            self.paste_write_pending.push(previous);
+        }
     }
 
     /// Drena la escritura async del pegado (sin bloquear). Un fallo queda en
@@ -317,7 +401,18 @@ impl OpsCtrl {
             return;
         };
         match rx.try_recv() {
-            Ok(Ok(_path)) => {
+            Ok(Ok(path)) => {
+                if let (Some(dir), Some(name)) = (path.parent(), path.file_name()) {
+                    self.completed_changes.push((
+                        naygo_core::ops::create(
+                            dir.to_path_buf(),
+                            name.to_string_lossy().into(),
+                            false,
+                        ),
+                        true,
+                        None,
+                    ));
+                }
                 self.paste_write_rx = None;
             }
             Ok(Err((path, err))) => {
@@ -333,11 +428,43 @@ impl OpsCtrl {
                 self.paste_write_rx = None;
             }
         }
+        if self.paste_write_rx.is_none() {
+            self.paste_write_rx = self.paste_write_pending.pop();
+        }
     }
 
     /// Consume el error de escritura de un pegado, si lo hay, para que la UI lo anuncie.
     pub fn take_paste_error(&mut self) -> Option<(PathBuf, String)> {
         self.pending_paste_error.take()
+    }
+
+    pub fn take_completed_changes(&mut self) -> Vec<(OpRequest, bool, Option<PathBuf>)> {
+        std::mem::take(&mut self.completed_changes)
+    }
+
+    /// Mientras el motor puede cambiar nombres, el resultado será la fuente de identidad.
+    pub(crate) fn rename_running_in(&self, dir: &std::path::Path) -> bool {
+        self.active_ops.iter().any(|op| {
+            op.rx.is_some()
+                && op.request.as_ref().is_some_and(|req| {
+                    matches!(req.kind, OpKind::Rename { .. } | OpKind::BatchRename { .. })
+                        && req.sources.iter().any(|path| path.parent() == Some(dir))
+                })
+        })
+    }
+
+    /// Incluye solicitudes en cola y terminales aún no reconciliados, sin esperar a workers.
+    pub(crate) fn has_unreconciled_folder_creation(&self, dir: &std::path::Path) -> bool {
+        let matches = |req: &OpRequest| {
+            matches!(req.kind, OpKind::CreateDir { .. }) && req.dest_dir.as_deref() == Some(dir)
+        };
+        self.active_ops
+            .iter()
+            .any(|op| op.summary.is_none() && op.request.as_ref().is_some_and(matches))
+            || self
+                .completed_changes
+                .iter()
+                .any(|(req, _, _)| matches(req))
     }
 
     /// Reserva el próximo id estable de operación (monótono, único en la sesión).
@@ -349,20 +476,103 @@ impl OpsCtrl {
 
     // --- Clipboard interno (corte visual) ---
 
-    /// Copia `paths` al portapapeles del SO; limpia la marca de corte.
+    /// Encola `paths` al portapapeles del SO fuera de UI; el corte visual se aplica al confirmar.
     pub fn set_copy(&mut self, paths: &[PathBuf]) {
-        if naygo_platform::clipboard::write_files(paths, false).is_ok() {
-            self.remember_clipboard(paths, false);
+        if paths.is_empty() {
+            return;
         }
-        self.cut_set.clear();
+        match self
+            .clipboard_io_handle()
+            .and_then(|io| io.write_files(paths.to_vec(), false))
+        {
+            Ok(pending) => self.pending_clipboard_writes.push_back(pending),
+            Err(error) => self.pending_clipboard_errors.push_back(error),
+        }
     }
 
-    /// Corta `paths`: escribe al portapapeles con efecto MOVE y los marca como cortados.
+    /// Encola un corte; la marca visual e historial sólo cambian si el SO acepta la escritura.
     pub fn set_cut(&mut self, paths: &[PathBuf]) {
-        if naygo_platform::clipboard::write_files(paths, true).is_ok() {
-            self.remember_clipboard(paths, true);
-            self.cut_set = paths.iter().cloned().collect();
+        if paths.is_empty() {
+            return;
         }
+        match self
+            .clipboard_io_handle()
+            .and_then(|io| io.write_files(paths.to_vec(), true))
+        {
+            Ok(pending) => self.pending_clipboard_writes.push_back(pending),
+            Err(error) => self.pending_clipboard_errors.push_back(error),
+        }
+    }
+
+    /// Encola una escritura de texto del clipboard desde el hilo de UI.
+    pub fn write_clipboard_text(&mut self, text: &str) -> bool {
+        self.write_clipboard_owned(text.to_string())
+    }
+
+    /// Recibe el resultado de un worker sin duplicar un CSV grande en el hilo de UI.
+    pub(crate) fn write_clipboard_owned(&mut self, text: String) -> bool {
+        match self
+            .clipboard_io_handle()
+            .and_then(|io| io.write_text(text))
+        {
+            Ok(pending) => {
+                self.pending_clipboard_writes.push_back(pending);
+                true
+            }
+            Err(error) => {
+                self.pending_clipboard_errors.push_back(error);
+                false
+            }
+        }
+    }
+
+    pub(crate) fn clipboard_io_handle(&mut self) -> Result<ClipboardIoHandle, String> {
+        if self.clipboard_io.is_none() {
+            self.clipboard_io = Some(ClipboardIo::new().map_err(|error| error.to_string())?);
+        }
+        Ok(self
+            .clipboard_io
+            .as_ref()
+            .expect("worker inicializado")
+            .handle())
+    }
+
+    /// Aplica resultados en orden. El worker serializa lecturas y escrituras del SO; el modelo
+    /// local sólo cambia después de que la operación correspondiente terminó correctamente.
+    fn pump_clipboard_writes(&mut self) {
+        while let Some(front) = self.pending_clipboard_writes.front() {
+            match front.receiver.try_recv() {
+                Ok(Ok(())) => {
+                    let completed = self.pending_clipboard_writes.pop_front().unwrap();
+                    if let ClipboardWriteKind::Files { paths, cut } = completed.kind {
+                        self.remember_clipboard(&paths, cut);
+                        if cut {
+                            self.cut_set = paths.iter().cloned().collect();
+                        } else {
+                            self.cut_set.clear();
+                        }
+                    }
+                }
+                Ok(Err(error)) => {
+                    self.pending_clipboard_writes.pop_front();
+                    self.pending_clipboard_errors.push_back(error);
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.pending_clipboard_writes.pop_front();
+                    self.pending_clipboard_errors
+                        .push_back("worker del portapapeles desconectado".to_string());
+                }
+            }
+        }
+    }
+
+    pub fn take_clipboard_error(&mut self) -> Option<String> {
+        self.pending_clipboard_errors.pop_front()
+    }
+
+    pub(crate) fn report_clipboard_error(&mut self, error: String) {
+        self.pending_clipboard_errors.push_back(error);
     }
 
     fn remember_clipboard(&mut self, paths: &[PathBuf], cut: bool) {
@@ -410,23 +620,6 @@ impl OpsCtrl {
     }
 
     // --- Lanzar y drenar operaciones ---
-
-    /// ¿Algún source de `req` chocaría con un archivo ya existente en el destino? Pre-check
-    /// para decidir si el motor debe preguntar (Ask) o no (Overwrite directo). Solo aplica a
-    /// Copy/Move (los Create/Rename los maneja su propia ruta).
-    pub fn first_collision(&self, req: &OpRequest) -> bool {
-        let Some(dest) = req.dest_dir.as_ref() else {
-            return false;
-        };
-        if !matches!(req.kind, OpKind::Copy | OpKind::Move) {
-            return false;
-        }
-        req.sources.iter().any(|s| {
-            s.file_name()
-                .map(|n| dest.join(n).exists())
-                .unwrap_or(false)
-        })
-    }
 
     /// Lanza una operación. `record_undo` indica si registrar el deshacer al terminar.
     /// Copy/Move/Delete NO planifican en línea: recorrer un árbol grande con `read_dir`/`metadata`
@@ -492,11 +685,9 @@ impl OpsCtrl {
                 return;
             }
         };
-        let conflict = if self.first_collision(&req) {
-            ConflictPolicy::Ask
-        } else {
-            ConflictPolicy::Overwrite
-        };
+        // Esta rama sólo incluye Rename/Create/BatchRename; conserva la política previa, ya que
+        // La preconsulta sólo aplicaba a Copy/Move (que toman el camino de planificación worker).
+        let conflict = ConflictPolicy::Overwrite;
         if self.ops_mode == OpsMode::Queue && self.any_running() {
             self.push_queued(
                 plan,
@@ -582,6 +773,9 @@ impl OpsCtrl {
             trash_receipts_rx: None,
             finished_epoch_secs: None,
             size_map: HashMap::new(),
+            directory_sources: Default::default(),
+            type_count_cursor: 0,
+            type_counts: (0, 0, 0),
             staging_guards,
         });
     }
@@ -626,6 +820,9 @@ impl OpsCtrl {
             trash_receipts_rx: None,
             finished_epoch_secs: None,
             size_map: HashMap::new(),
+            directory_sources: Default::default(),
+            type_count_cursor: 0,
+            type_counts: (0, 0, 0),
             staging_guards,
         });
     }
@@ -669,6 +866,9 @@ impl OpsCtrl {
             trash_receipts_rx: None,
             finished_epoch_secs: None,
             size_map: HashMap::new(),
+            directory_sources: Default::default(),
+            type_count_cursor: 0,
+            type_counts: (0, 0, 0),
             staging_guards,
         });
     }
@@ -697,6 +897,7 @@ impl OpsCtrl {
         // Tamaños por origen para el popup "archivos de la operación" (se calcula ANTES de
         // mover el plan al motor).
         let size_map = size_map_of(&plan);
+        let directory_sources = directory_sources_of(&plan);
         // Journal solo para operaciones largas y deshacibles-por-retomar.
         let (journal, journal_id) = if Self::journalable(&kind) {
             let id = format!("op-{}", self.next_journal_seq);
@@ -706,7 +907,15 @@ impl OpsCtrl {
         } else {
             (None, None)
         };
-        let (rx, _h) = engine::spawn(plan, kind, conflict, token.clone(), conflict_rx, journal);
+        let (rx, _h) = engine::spawn_with_no_replace_rename(
+            plan,
+            kind,
+            conflict,
+            token.clone(),
+            conflict_rx,
+            journal,
+            std::sync::Arc::new(naygo_platform::move_rename::PlatformNoReplaceRename),
+        );
         self.active_ops.push(ActiveOp {
             id,
             rx: Some(rx),
@@ -735,6 +944,9 @@ impl OpsCtrl {
             trash_receipts_rx: None,
             finished_epoch_secs: None,
             size_map,
+            directory_sources,
+            type_count_cursor: 0,
+            type_counts: (0, 0, 0),
             staging_guards,
         });
     }
@@ -766,13 +978,23 @@ impl OpsCtrl {
             (None, None)
         };
         let size_map = size_map_of(&plan);
-        let (rx, _h) = engine::spawn(plan, kind, conflict, token, conflict_rx, journal);
+        let directory_sources = directory_sources_of(&plan);
+        let (rx, _h) = engine::spawn_with_no_replace_rename(
+            plan,
+            kind,
+            conflict,
+            token,
+            conflict_rx,
+            journal,
+            std::sync::Arc::new(naygo_platform::move_rename::PlatformNoReplaceRename),
+        );
         let op = &mut self.active_ops[idx];
         op.rx = Some(rx);
         op.conflict_tx = conflict_tx;
         op.journal_id = journal_id;
         op.request = request;
         op.size_map = size_map;
+        op.directory_sources = directory_sources;
         // Salir de la fase Planning: limpiar el canal de plan y los contadores de escaneo.
         op.plan_rx = None;
         op.scan_files = 0;
@@ -857,10 +1079,8 @@ impl OpsCtrl {
                 let req = self.active_ops[i].request.clone();
                 let kind = self.active_ops[i].plan_kind.clone();
                 let record_undo = self.active_ops[i].plan_record_undo;
-                let conflict = match &req {
-                    Some(r) if self.first_collision(r) => ConflictPolicy::Ask,
-                    _ => ConflictPolicy::Overwrite,
-                };
+                // La política se resuelve dentro del motor en worker; no hacer `exists()` aquí.
+                let conflict = ConflictPolicy::Ask;
                 let undo_req = if record_undo { req.clone() } else { None };
                 // La papelera necesita SIEMPRE las rutas originales para pasárselas a
                 // IFileOperation, aunque esta operación no registre Undo. Antes se reutilizaba
@@ -920,6 +1140,7 @@ impl OpsCtrl {
     /// op lo pide. Registra el undo de las que terminan. Lanza la siguiente de la cola si
     /// nada corre. Devuelve true si TODO está en reposo (para apagar el timer).
     pub fn pump_ops(&mut self) -> bool {
+        self.pump_clipboard_writes();
         // Primero, la fase "Calculando…": recoger planes terminados y arrancar/encolar.
         self.pump_planning();
         // La escritura async del pegado de texto/imagen (canal de una muestra).
@@ -942,8 +1163,22 @@ impl OpsCtrl {
                             finished = Some(s);
                             break;
                         }
-                        OpMsg::Failed(_) => {
-                            finished = Some(OpSummary::default());
+                        OpMsg::Failed(error) => {
+                            // Un fallo fatal debe conservar su detalle en el historial. No se
+                            // registra origen para reintento: el estado parcial puede ser incierto.
+                            let dest = self.active_ops[i]
+                                .request
+                                .as_ref()
+                                .and_then(|req| req.dest_dir.clone())
+                                .unwrap_or_default();
+                            finished = Some(OpSummary {
+                                items: vec![OpItem {
+                                    dest,
+                                    src: None,
+                                    outcome: OpOutcome::Failed(error),
+                                }],
+                                ..Default::default()
+                            });
                             break;
                         }
                     }
@@ -972,6 +1207,45 @@ impl OpsCtrl {
                 self.active_ops[i].awaiting_conflict = Some(prompt);
             }
             if let Some(summary) = finished {
+                if let Some(req) = self.active_ops[i].request.clone() {
+                    if matches!(req.kind, OpKind::BatchRename { .. }) {
+                        // Reconciliar cada resultado real en orden de ejecución: una operación
+                        // cancelada o fallida puede haber renombrado solo parte del lote.
+                        for item in &summary.items {
+                            if let (Some(source), naygo_core::ops::OpOutcome::Done) =
+                                (&item.src, &item.outcome)
+                            {
+                                let Some(name) =
+                                    item.dest.file_name().and_then(|name| name.to_str())
+                                else {
+                                    continue;
+                                };
+                                self.completed_changes.push((
+                                    naygo_core::ops::rename(source.clone(), name.to_owned()),
+                                    true,
+                                    Some(item.dest.clone()),
+                                ));
+                            }
+                        }
+                    }
+                    // En Rename el destino resuelto puede cambiar por conflicto. No inferirlo
+                    // desde el nombre solicitado: el motor informa el destino realmente usado.
+                    let actual = if matches!(req.kind, OpKind::Rename { .. }) {
+                        req.sources
+                            .first()
+                            .and_then(|source| {
+                                summary.items.iter().find(|item| {
+                                    item.src.as_ref() == Some(source)
+                                        && matches!(item.outcome, naygo_core::ops::OpOutcome::Done)
+                                })
+                            })
+                            .map(|item| item.dest.clone())
+                    } else {
+                        None
+                    };
+                    self.completed_changes
+                        .push((req, summary.count_done() > 0, actual));
+                }
                 // Registrar el deshacer si corresponde. NO se hace `.take()` del request: se CONSERVA
                 // en la op terminada para que el popup "Archivos de la operación" pueda mostrar el
                 // contexto (tipo, origen, destino) y calcular las rutas relativas al destino (PUNTO
@@ -994,6 +1268,7 @@ impl OpsCtrl {
                             .into_iter()
                             .map(|receipt| UndoAction::RestoreTrash {
                                 original: receipt.original,
+                                trashed_path: receipt.trashed_path,
                             })
                             .collect()
                     } else if matches!(req.kind, OpKind::Compress { .. } | OpKind::Extract) {
@@ -1037,6 +1312,13 @@ impl OpsCtrl {
                 self.active_ops[i].staging_guards.clear();
             }
         }
+
+        self.active_ops.retain(|op| {
+            if op.summary.is_some() && self.drop_preparations.remove(&op.id) {
+                return false;
+            }
+            true
+        });
 
         // Abrir el modal de conflicto de CARPETA (P3) si alguna op está parada esperando esa
         // decisión y no hay otro modal abierto. Se prioriza sobre el conflicto por archivo porque
@@ -1133,17 +1415,49 @@ impl OpsCtrl {
         // `pump_planning` siga drenando; una op parada en el conflicto de carpeta lo mantiene para
         // que el modal siga vivo y la decisión se procese al volver. La escritura async de un
         // pegado (`paste_write_rx`) también mantiene el timer hasta entregar su resultado.
-        self.paste_write_rx.is_none()
+        let counts_pending = self.pump_type_counts();
+        !counts_pending
+            && self.paste_write_rx.is_none()
+            && self.pending_clipboard_writes.is_empty()
             && self
                 .active_ops
                 .iter()
                 .all(|o| o.rx.is_none() && o.plan_rx.is_none() && o.awaiting_folders.is_none())
     }
 
+    /// Procesa a lo sumo 512 entradas por tick. Mientras termina, la presentación usa un total
+    /// genérico; el tipo y el tamaño provienen del plan, sin acceso a disco ni copias del resumen.
+    fn pump_type_counts(&mut self) -> bool {
+        let mut budget = 512usize;
+        let mut pending = false;
+        for op in &mut self.active_ops {
+            let Some(summary) = &op.summary else { continue };
+            let start = op.type_count_cursor.min(summary.items.len());
+            let end = start.saturating_add(budget).min(summary.items.len());
+            let counts = done_type_counts(
+                &summary.items[start..end],
+                &op.size_map,
+                &op.directory_sources,
+            );
+            op.type_counts.0 += counts.0;
+            op.type_counts.1 += counts.1;
+            op.type_counts.2 += counts.2;
+            op.type_count_cursor = end;
+            budget -= end - start;
+            pending |= end < summary.items.len();
+        }
+        pending
+    }
+
     /// Consume el error de planificación pendiente para mostrar un aviso localizado. Se conserva
     /// tipado hasta aquí para el log y las pruebas; la UI decide el texto visible.
     pub fn take_plan_error(&mut self) -> Option<PlanError> {
         self.pending_plan_error.take()
+    }
+
+    /// No ocultar automáticamente el progreso antes de anunciar un error pendiente.
+    pub(crate) fn has_pending_operation_error(&self) -> bool {
+        self.pending_plan_error.is_some() || self.pending_paste_error.is_some()
     }
 
     /// Resuelve el conflicto pendiente de la op identificada por `op_id` (id ESTABLE, no
@@ -1170,8 +1484,9 @@ impl OpsCtrl {
             }
             _ => return,
         };
-        // Sugerencia precargada: el primer nombre libre "(N)" para ese destino (p. ej. "a (2).txt").
-        let suggestion = naygo_core::ops::dedup_name(&existing, &|p: &Path| p.exists());
+        // Candidato sintáctico (2), sin tocar el filesystem desde el callback. El motor vuelve
+        // a deduplicar en su worker si ese nombre también se ocupó mientras el modal estaba abierto.
+        let suggestion = conflict_rename_suggestion(&existing);
         let suggested_name = suggestion
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
@@ -1589,11 +1904,18 @@ impl OpsCtrl {
                     0
                 };
 
-                // Detalle de archivos (solo historial): nombres inline si son 1-2, o "Ver archivos"
-                // si son más. Se calcula de los ítems Done del summary.
+                // Detalle de elementos (solo historial): nombres inline si son 1-2, o un enlace
+                // con tipos conocidos del plan si son más. No se accede al filesystem aquí.
                 let (files_summary, has_file_list, files_done_count) = match &o.summary {
                     Some(s) => file_summary_of(s),
                     None => (String::new(), false, 0),
+                };
+                let (known_files, known_directories, unknown_entries) = match &o.summary {
+                    Some(summary) if o.type_count_cursor < summary.items.len() => {
+                        (0, 0, files_done_count)
+                    }
+                    Some(_) => o.type_counts,
+                    None => (0, 0, 0),
                 };
 
                 let status = if planning {
@@ -1674,6 +1996,9 @@ impl OpsCtrl {
                         || o.summary.as_ref().is_some_and(|s| s.count_failed() > 0),
                     has_errors: o.summary.as_ref().is_some_and(|s| s.count_failed() > 0),
                     files_done_count,
+                    known_files,
+                    known_directories,
+                    unknown_entries,
                 }
             })
             .collect();
@@ -1744,7 +2069,12 @@ impl OpsCtrl {
         let mut seen = std::collections::HashSet::new();
         let mut files = Vec::new();
         for item in &summary.items {
-            if !matches!(item.outcome, OpOutcome::Failed(_)) {
+            let OpOutcome::Failed(detail) = &item.outcome else {
+                continue;
+            };
+            // Un enlace no copiado/movido es el resultado previsto (no se recorren ni se
+            // recrean): reintentarlo daría lo mismo y `retry::review` rechazaría el lote entero.
+            if naygo_core::ops::is_link_failure(detail) {
                 continue;
             }
             let Some(source) = &item.src else {
@@ -1921,12 +2251,11 @@ impl OpsCtrl {
                 // Comprimir la selección en `dir/<buf>.zip`. La extensión `.zip` se asegura aquí
                 // (el usuario puede haberla borrado del campo).
                 //
-                // PÉRDIDA DE DATOS: `compress_zip` crea el `.zip` con `File::create`, que TRUNCA un
-                // archivo del mismo nombre sin avisar ni mandarlo a la papelera. Por eso el nombre se
-                // DESAMBIGUA aquí ANTES de armar la op: si `dir/<nombre>.zip` ya existe (p. ej. una
+                // El nombre se desambigua ANTES de armar la op: si `dir/<nombre>.zip` ya existe (p. ej. una
                 // compresión anterior de la misma carpeta), se usa el primer "(N)" libre ("proyecto
                 // (2).zip") y el `.zip` original del usuario queda INTACTO. Sin modal extra, mismo
-                // criterio que KeepBoth al extraer. El `dest_name` ya único fluye al worker y al undo
+                // criterio que KeepBoth al extraer. El worker usa creación exclusiva para rechazar
+                // una carrera con otro proceso. El `dest_name` fluye al worker y al undo
                 // (su `TrashCreated` apunta al `.zip` realmente creado, no al nombre pedido).
                 let dest_name =
                     naygo_core::archive_ops::unique_zip_name(&dir, &ensure_zip_ext(&buf));
@@ -2029,23 +2358,54 @@ pub struct OpFileContext {
 ///   - `has_list`: `true` con 3+ Done → la UI muestra el enlace "Ver archivos" que abre el popup.
 ///   - `done_count`: cuántos archivos Done (para el texto "Ver N archivos").
 fn file_summary_of(summary: &OpSummary) -> (String, bool, i32) {
-    let done: Vec<String> = summary
+    let mut done = summary
         .items
         .iter()
-        .filter(|i| matches!(i.outcome, naygo_core::ops::OpOutcome::Done))
-        .map(|i| {
-            i.dest
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_else(|| i.dest.display().to_string())
-        })
-        .collect();
-    let count = done.len() as i32;
-    match done.len() {
-        0 => (String::new(), false, 0),
-        1..=2 => (done.join(", "), false, count),
-        _ => (String::new(), true, count),
+        .filter(|i| matches!(i.outcome, naygo_core::ops::OpOutcome::Done));
+    let Some(first) = done.next() else {
+        return (String::new(), false, 0);
+    };
+    let second = done.next();
+    if done.next().is_some() {
+        // El enlace no muestra nombres: contarlos sin convertir ni reservar cada ruta.
+        let count = 3usize.saturating_add(done.count());
+        return (
+            String::new(),
+            true,
+            i32::try_from(count).unwrap_or(i32::MAX),
+        );
     }
+    let name = |item: &OpItem| {
+        item.dest
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| item.dest.display().to_string())
+    };
+    match second {
+        Some(item) => (format!("{}, {}", name(first), name(item)), false, 2),
+        None => (name(first), false, 1),
+    }
+}
+
+/// Clasifica solo entradas conocidas por el plan, sin consultar archivos que pudieron cambiar.
+/// Los productores sin plan conservan un recuento genérico en lugar de adivinar su tipo.
+fn done_type_counts(
+    items: &[OpItem],
+    files: &HashMap<PathBuf, u64>,
+    directories: &std::collections::HashSet<PathBuf>,
+) -> (i32, i32, i32) {
+    let mut counts = (0, 0, 0);
+    for item in items
+        .iter()
+        .filter(|i| matches!(i.outcome, OpOutcome::Done))
+    {
+        match item.src.as_ref() {
+            Some(src) if directories.contains(src) => counts.1 += 1,
+            Some(src) if files.contains_key(src) => counts.0 += 1,
+            _ => counts.2 += 1,
+        }
+    }
+    counts
 }
 
 /// Ruta de `p` RELATIVA a `root` (PUNTO 3), con separadores `/` para la UI. Si `root` es `None` o
@@ -2252,8 +2612,11 @@ pub struct OpRowData {
     /// `true` si hay que ofrecer el enlace "Ver archivos" (op terminada con 3+ archivos Done).
     /// Cuando es `true`, la lista completa se pide con `op_file_list(index)`.
     pub has_file_list: bool,
-    /// Cuántos archivos se concretaron (Done). Lo usa la UI para el texto "Ver N archivos".
+    /// Total de entradas concretadas (Done), incluidas carpetas y tipos desconocidos.
     pub files_done_count: i32,
+    pub known_files: i32,
+    pub known_directories: i32,
+    pub unknown_entries: i32,
 }
 
 /// Convierte el resultado del worker de zip (`ArchiveOpItem` por entrada) en un `OpSummary` para
@@ -2378,7 +2741,18 @@ mod tests {
             false,
         );
         drain(&mut c);
-        assert!(!file.exists(), "IFileOperation recibió la ruta original");
+        let was_recycled = !file.exists();
+        if was_recycled {
+            // La prueba usa la Papelera real. Restaurar sólo su fixture al directorio temporal
+            // único permite que TempDir la limpie y evita acumular entradas con cada ejecución.
+            naygo_platform::trash::restore_from_trash(&[naygo_platform::trash::TrashReceipt {
+                original: file.clone(),
+                trashed_path: None,
+            }])
+            .unwrap();
+        }
+        assert!(was_recycled, "IFileOperation recibió la ruta original");
+        assert_eq!(std::fs::read(&file).unwrap(), b"descartar");
         let summary = c
             .active_ops
             .last()
@@ -2438,19 +2812,6 @@ mod tests {
         assert_eq!(super::ensure_zip_ext("foo"), "foo.zip");
         assert_eq!(super::ensure_zip_ext("foo.zip"), "foo.zip");
         assert_eq!(super::ensure_zip_ext("FOO.ZIP"), "FOO.ZIP");
-    }
-
-    #[test]
-    fn first_collision_detecta_choque() {
-        let tmp = tempfile::tempdir().unwrap();
-        let dst = tmp.path().join("dst");
-        std::fs::create_dir(&dst).unwrap();
-        std::fs::write(dst.join("a.txt"), b"x").unwrap();
-        let c = OpsCtrl::new(tmp.path().to_path_buf());
-        let req = naygo_core::ops::transfer(false, vec![tmp.path().join("a.txt")], dst.clone());
-        assert!(c.first_collision(&req), "a.txt ya existe en dst");
-        let req2 = naygo_core::ops::transfer(false, vec![tmp.path().join("z.txt")], dst);
-        assert!(!c.first_collision(&req2));
     }
 
     #[test]
@@ -2637,6 +2998,37 @@ mod tests {
         );
         assert_eq!(std::fs::read(&dest).unwrap(), b"hola pegado");
         assert!(c.pending_dialog.is_none(), "el modal se cerró");
+    }
+
+    #[test]
+    fn nav052_simultaneous_pastes_keep_both_contents_and_completion_events() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("paste 2026-09-10 12.34.56.txt");
+        let mut c = OpsCtrl::new(tmp.path().to_path_buf());
+        c.spawn_paste_write(path.clone(), b"one".to_vec());
+        c.spawn_paste_write(path, b"two".to_vec());
+        for _ in 0..2000 {
+            if c.pump_ops() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(c.take_paste_error().is_none());
+        let changes = c.take_completed_changes();
+        assert_eq!(changes.len(), 2);
+        let mut contents: Vec<_> = changes
+            .into_iter()
+            .map(|(req, ok, _)| {
+                assert!(ok);
+                let OpKind::CreateFile { name } = req.kind else {
+                    panic!("expected file")
+                };
+                std::fs::read(req.dest_dir.unwrap().join(name)).unwrap()
+            })
+            .collect();
+        contents.sort();
+        assert_eq!(contents, vec![b"one".to_vec(), b"two".to_vec()]);
+        assert!(c.take_completed_changes().is_empty());
     }
 
     #[test]
@@ -3140,6 +3532,35 @@ mod tests {
     }
 
     #[test]
+    fn scan_resume_desactivado_no_ofrece_ni_reanuda_journals() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = tmp.path().join("cfg");
+        std::fs::create_dir(&cfg).unwrap();
+        let src = tmp.path().join("a.txt");
+        std::fs::write(&src, b"x").unwrap();
+        let dst = tmp.path().join("dst");
+        std::fs::create_dir(&dst).unwrap();
+        let req = naygo_core::ops::transfer(false, vec![src], dst.clone());
+        let plan = naygo_core::ops::plan(&req).unwrap();
+        let j = OpJournal::new("op-ajena".into(), req.kind.clone(), req.conflict, plan);
+        let _w = JournalWriter::new(&cfg, j);
+        let mut c = OpsCtrl::new(cfg.clone());
+        c.disable_journal_resume();
+        c.scan_resume();
+        assert!(c.pending_dialog.is_none(), "no se ofrece retomar");
+        assert!(
+            !c.resume("op-ajena"),
+            "no se reanuda el journal de otra instancia"
+        );
+        assert!(!dst.join("a.txt").exists());
+        assert_eq!(
+            naygo_core::ops::scan(&cfg).len(),
+            1,
+            "el journal ajeno se conserva"
+        );
+    }
+
+    #[test]
     fn scan_resume_detecta_journal_pendiente() {
         let tmp = tempfile::tempdir().unwrap();
         let cfg = tmp.path().join("cfg");
@@ -3195,8 +3616,128 @@ mod tests {
             trash_receipts_rx: None,
             finished_epoch_secs: None,
             size_map: HashMap::new(),
+            directory_sources: Default::default(),
+            type_count_cursor: 0,
+            type_counts: (0, 0, 0),
             staging_guards: Vec::new(),
         }
+    }
+
+    #[test]
+    fn history_counts_files_folders_and_unknown_without_disk_access() {
+        let file = PathBuf::from("source/file.txt");
+        let folder = PathBuf::from("source/folder");
+        let summary = OpSummary {
+            items: vec![
+                OpItem {
+                    dest: PathBuf::from("dest/file.txt"),
+                    src: Some(file.clone()),
+                    outcome: OpOutcome::Done,
+                },
+                OpItem {
+                    dest: PathBuf::from("dest/folder"),
+                    src: Some(folder.clone()),
+                    outcome: OpOutcome::Done,
+                },
+                OpItem {
+                    dest: PathBuf::from("dest/unknown"),
+                    src: None,
+                    outcome: OpOutcome::Done,
+                },
+                OpItem {
+                    dest: PathBuf::from("dest/skipped"),
+                    src: Some(file.clone()),
+                    outcome: OpOutcome::Skipped,
+                },
+            ],
+            ..Default::default()
+        };
+        assert_eq!(
+            done_type_counts(
+                &summary.items,
+                &HashMap::from([(file, 42)]),
+                &std::collections::HashSet::from([folder])
+            ),
+            (1, 1, 1)
+        );
+    }
+
+    #[test]
+    fn history_counts_the_7zip_fixture_as_files_and_folders() {
+        let mut summary = OpSummary::default();
+        let mut files = HashMap::new();
+        let mut directories = HashSet::new();
+        for i in 0..259 {
+            let path = PathBuf::from(format!("source/file-{i}"));
+            files.insert(path.clone(), 0);
+            summary.items.push(OpItem {
+                dest: PathBuf::from(format!("destination/file-{i}")),
+                src: Some(path),
+                outcome: OpOutcome::Done,
+            });
+        }
+        for i in 0..5 {
+            let path = PathBuf::from(format!("source/folder-{i}"));
+            directories.insert(path.clone());
+            summary.items.push(OpItem {
+                dest: PathBuf::from(format!("destination/folder-{i}")),
+                src: Some(path),
+                outcome: OpOutcome::Done,
+            });
+        }
+        assert_eq!(
+            done_type_counts(&summary.items, &files, &directories),
+            (259, 5, 0)
+        );
+    }
+
+    #[test]
+    fn history_type_count_is_bounded_per_tick_and_not_partially_reported() {
+        let mut controller = OpsCtrl::new(std::env::temp_dir());
+        let mut op = fake_active_op(73);
+        let mut summary = OpSummary::default();
+        for i in 0..1025 {
+            let source = PathBuf::from(format!("source/{i}"));
+            op.size_map.insert(source.clone(), 0);
+            summary.items.push(OpItem {
+                dest: PathBuf::from(format!("destination/{i}")),
+                src: Some(source),
+                outcome: OpOutcome::Done,
+            });
+        }
+        op.summary = Some(summary);
+        controller.active_ops.push(op);
+        assert!(controller.pump_type_counts());
+        assert_eq!(controller.active_ops[0].type_count_cursor, 512);
+        let row = &controller.op_rows(naygo_core::format::DateFormat::default())[0];
+        assert_eq!((row.known_files, row.unknown_entries), (0, 1025));
+        assert!(controller.pump_type_counts());
+        assert!(!controller.pump_type_counts());
+        let row = &controller.op_rows(naygo_core::format::DateFormat::default())[0];
+        assert_eq!((row.known_files, row.unknown_entries), (1025, 0));
+    }
+
+    #[test]
+    fn fatal_worker_error_is_visible_and_not_automatically_retried() {
+        let mut controller = OpsCtrl::new(std::env::temp_dir());
+        let mut op = fake_active_op(41);
+        let (tx, rx) = std::sync::mpsc::channel();
+        op.rx = Some(rx);
+        op.request = Some(naygo_core::ops::transfer(
+            false,
+            vec![],
+            PathBuf::from("D:/dst"),
+        ));
+        controller.active_ops.push(op);
+        tx.send(OpMsg::Failed("lectura rechazada".into())).unwrap();
+        controller.pump_ops();
+        let rows = controller.op_rows(naygo_core::format::DateFormat::default());
+        assert!(rows[0].has_errors && rows[0].has_file_list);
+        let files = controller.op_file_list(41);
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].detail, "lectura rechazada");
+        assert_eq!(files[0].status, 2);
+        assert!(controller.retry_files(41).is_none());
     }
 
     #[test]
@@ -3244,6 +3785,85 @@ mod tests {
         assert!(c.retry_files(99).is_none());
         c.active_ops[0].request.as_mut().unwrap().kind = OpKind::Delete { to_trash: true };
         assert!(c.retry_files(42).is_none());
+    }
+
+    /// Copia real de una carpeta con un junction: devuelve el controlador con la op terminada
+    /// (id 77), la carpeta de origen y el resumen del motor. `None` si no se pudo crear el enlace.
+    fn copy_with_junction(tmp: &Path) -> Option<(OpsCtrl, PathBuf)> {
+        let src = tmp.join("proyecto");
+        std::fs::create_dir(&src).unwrap();
+        std::fs::write(src.join("a.txt"), b"a").unwrap();
+        std::fs::write(src.join("b.txt"), b"b").unwrap();
+        let target = tmp.join("destino-del-enlace");
+        std::fs::create_dir(&target).unwrap();
+        let made = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(src.join("enlace"))
+            .arg(&target)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if !made {
+            return None;
+        }
+        let dst = tmp.join("dst");
+        std::fs::create_dir(&dst).unwrap();
+        let req = naygo_core::ops::transfer(false, vec![src.clone()], dst);
+        let plan = naygo_core::ops::plan(&req).unwrap();
+        let token = CancellationToken::new();
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let (_ctx, crx) = std::sync::mpsc::channel();
+        let summary =
+            naygo_core::ops::run_plan(&plan, &req.kind, req.conflict, &token, &tx, &crx, None);
+        assert_eq!(summary.count_failed(), 1, "{summary:?}");
+        let mut op = fake_active_op(77);
+        op.rx = None;
+        op.size_map = size_map_of(&plan);
+        op.request = Some(req);
+        op.summary = Some(summary);
+        let mut c = OpsCtrl::new(tmp.join("cfg"));
+        c.active_ops.push(op);
+        Some((c, src))
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn retry_files_excluye_pasos_de_enlace_fallidos() {
+        let tmp = tempfile::tempdir().unwrap();
+        let Some((c, _src)) = copy_with_junction(tmp.path()) else {
+            return;
+        };
+        assert!(
+            c.retry_files(77).is_none(),
+            "un enlace no copiado no es reintentable"
+        );
+    }
+
+    /// Un fallo de enlace no envenena "Reintentar": el fallo reintentable de la misma op (aquí,
+    /// un archivo bloqueado simulado) se sigue ofreciendo y la revisión lo acepta.
+    #[cfg(windows)]
+    #[test]
+    fn retry_con_fallo_de_enlace_y_fallo_reintentable_ofrece_el_segundo() {
+        let tmp = tempfile::tempdir().unwrap();
+        let Some((mut c, src)) = copy_with_junction(tmp.path()) else {
+            return;
+        };
+        let locked = src.join("b.txt");
+        let summary = c.active_ops[0].summary.as_mut().unwrap();
+        let item = summary
+            .items
+            .iter_mut()
+            .find(|i| i.src.as_deref() == Some(locked.as_path()))
+            .unwrap();
+        std::fs::remove_file(&item.dest).unwrap();
+        item.outcome = OpOutcome::Failed("El proceso no tiene acceso al archivo.".into());
+
+        let (_, files, failed) = c.retry_files(77).expect("queda un fallo reintentable");
+        assert_eq!(failed, 2);
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].source, locked);
+        let review = naygo_core::ops::retry::review(files, &CancellationToken::new());
+        assert!(review.is_ok(), "{review:?}");
     }
 
     #[test]
@@ -3426,8 +4046,8 @@ mod tests {
 
     #[test]
     fn begin_conflict_rename_abre_modal_de_nombre_con_sugerencia() {
-        // BUG 1: "Renombrar" en el conflicto abre el modal de NOMBRE (kind 3) precargado con la
-        // sugerencia "(2)" (el primer nombre libre), en modo ConflictRename ligado a la op.
+        // "Renombrar" abre el modal de NOMBRE (kind 3) con un candidato "(2)", en modo
+        // ConflictRename ligado a la op. El candidato no consulta disco; el motor lo revalida.
         let (mut c, _rx, _tmp) = ctrl_en_conflicto_de_archivo();
         c.begin_conflict_rename(42);
         match &c.pending_dialog {
@@ -3439,13 +4059,25 @@ mod tests {
                         display: "a.txt".to_string()
                     }
                 );
-                assert_eq!(buf, "a (2).txt", "sugiere el primer nombre libre");
+                assert_eq!(buf, "a (2).txt", "sugiere un nombre inicial editable");
             }
             other => panic!("esperaba el modal de nombre, hay {other:?}"),
         }
         // El VM expone el nombre original para el título traducido.
         assert_eq!(c.dialog_vm().name_conflict_for, "a.txt");
         assert_eq!(c.dialog_vm().kind, 3);
+    }
+
+    #[test]
+    fn sugerencia_rename_es_sintactica_y_preserva_extension() {
+        assert_eq!(
+            conflict_rename_suggestion(Path::new("C:/dest/a.tar.gz")),
+            PathBuf::from("C:/dest/a.tar (2).gz")
+        );
+        assert_eq!(
+            conflict_rename_suggestion(Path::new("C:/dest/README")),
+            PathBuf::from("C:/dest/README (2)")
+        );
     }
 
     #[test]
@@ -3884,21 +4516,62 @@ mod tests {
                     to: PathBuf::from("D:/dst/a.txt"),
                     bytes: 10,
                     is_dir: false,
+                    planned_failure: None,
                 },
                 naygo_core::ops::OpStep {
-                    from: None,
+                    from: Some(PathBuf::from("D:/src/sub")),
                     to: PathBuf::from("D:/dst/sub"),
                     bytes: 0,
                     is_dir: true,
+                    planned_failure: None,
+                },
+                naygo_core::ops::OpStep {
+                    from: None,
+                    to: PathBuf::from("D:/dst/unknown"),
+                    bytes: 0,
+                    is_dir: true,
+                    planned_failure: None,
                 },
             ],
             total_bytes: 10,
             total_files: 1,
+            allow_directory_rename: false,
             pre_delete: Vec::new(),
         };
         let map = size_map_of(&plan);
         assert_eq!(map.get(Path::new("D:/src/a.txt")), Some(&10));
         assert_eq!(map.len(), 1, "las carpetas no entran al mapa");
+        assert_eq!(
+            directory_sources_of(&plan),
+            HashSet::from([PathBuf::from("D:/src/sub")])
+        );
+    }
+
+    /// Un paso que la planificación ya dio por fallido (stat de un hijo que no se pudo leer)
+    /// no entra al mapa: así nunca se ofrece en "Reintentar", que solo acepta archivos.
+    #[test]
+    fn size_map_of_excluye_los_pasos_fallidos_planificados() {
+        let step = |name: &str, planned_failure: Option<&str>| naygo_core::ops::OpStep {
+            from: Some(PathBuf::from(format!("D:/src/{name}"))),
+            to: PathBuf::from(format!("D:/dst/{name}")),
+            bytes: 0,
+            is_dir: false,
+            planned_failure: planned_failure.map(str::to_owned),
+        };
+        let plan = OpPlan {
+            steps: vec![
+                step("ok.txt", None),
+                step("ilegible", Some("acceso denegado")),
+            ],
+            total_bytes: 0,
+            total_files: 2,
+            allow_directory_rename: false,
+            pre_delete: Vec::new(),
+        };
+        let map = size_map_of(&plan);
+        assert!(map.contains_key(Path::new("D:/src/ok.txt")));
+        assert!(!map.contains_key(Path::new("D:/src/ilegible")));
+        assert_eq!(map.len(), 1);
     }
 
     #[test]

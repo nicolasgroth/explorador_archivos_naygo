@@ -61,6 +61,9 @@ Guardar `.naygolist` conserva toda la bandeja como una lista estática, no como 
 - Deshacer retira únicamente la carpeta o ZIP creado. No es un respaldo de los originales.
 - Los homónimos se revisan conjuntamente (hasta 500 filas visibles, con indicación si hay más).
   Los nombres de grupo se corrigen manualmente; en plano existe propuesta numerada explícita.
+  En POSIX, los bytes no UTF-8 de un nombre de origen se muestran escapados como `\xNN` al
+  proponer el nombre del grupo; la ruta operativa conserva sus bytes originales. La etiqueta es
+  una representación visible y no se convierte de vuelta en una ruta.
   Otros errores de lectura/ruta se informan al encontrarlos y no permiten publicar. No hay
   sobreescritura, mezcla automática de carpetas ni omisión de archivos como resolución de conflictos.
 - La tarjeta corresponde al último resultado y se puede cerrar. El historial de operaciones

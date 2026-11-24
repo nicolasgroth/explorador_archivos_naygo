@@ -3,6 +3,34 @@
 // SPDX-License-Identifier: MIT
 
 use super::*;
+use std::time::Instant;
+
+#[cfg(target_os = "linux")]
+const MAX_LINUX_FOOTER_DISK_CACHE_ENTRIES: usize = 128;
+#[cfg(target_os = "linux")]
+const MAX_LINUX_FOOTER_DISK_QUERIES_IN_FLIGHT: usize = 8;
+
+fn insert_bounded_disk_usage(
+    cache: &mut std::collections::HashMap<PathBuf, naygo_core::disk::DiskUsage>,
+    root: PathBuf,
+    usage: naygo_core::disk::DiskUsage,
+    max_entries: usize,
+) {
+    if !cache.contains_key(&root) && cache.len() >= max_entries {
+        if let Some(evicted) = cache.keys().next().cloned() {
+            cache.remove(&evicted);
+        }
+    }
+    cache.insert(root, usage);
+}
+
+fn footer_disk_query_has_slot(
+    pending: &std::collections::HashSet<PathBuf>,
+    root: &Path,
+    max_pending: usize,
+) -> bool {
+    pending.contains(root) || pending.len() < max_pending
+}
 
 /// Resultado del probe async de "carpeta no encontrada" para UN panel. Lo calcula un hilo
 /// worker (el `read_dir` puede colgar SEGUNDOS sobre un share de red caído: jamás en la UI).
@@ -11,16 +39,35 @@ use super::*;
 pub(super) struct MissingProbeHit {
     pane: u64,
     dir: PathBuf,
-    missing: bool,
-    has_ancestor: bool,
+    revision: u64,
+    missing: Option<bool>,
+    ancestor: Option<PathBuf>,
 }
 
 impl WorkspaceCtrl {
+    pub fn has_file_listing_work(&self) -> bool {
+        !self.listings.is_empty() || !self.pending_file_listings.is_empty()
+    }
+
+    fn missing_from_probe_error(error: &std::io::Error) -> Option<bool> {
+        matches!(
+            error.kind(),
+            std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+        )
+        .then_some(true)
+    }
+
     /// El ancestro existente más cercano de `path` (sube hasta encontrar uno que exista; si
     /// ninguno —p. ej. la unidad entera se fue—, devuelve None).
-    fn nearest_existing_ancestor(path: &std::path::Path) -> Option<PathBuf> {
+    fn nearest_existing_ancestor(
+        path: &std::path::Path,
+        token: &naygo_core::cancel::CancellationToken,
+    ) -> Option<PathBuf> {
         let mut cur = path.parent();
         while let Some(p) = cur {
+            if token.is_cancelled() {
+                return None;
+            }
             if p.exists() {
                 return Some(p.to_path_buf());
             }
@@ -42,6 +89,12 @@ impl WorkspaceCtrl {
     /// el scroll del listado siga a la fila enfocada al navegar por teclado (la ListView ya no es
     /// interactiva y no auto-scrollea sola, ver C1).
     pub fn focused_view_of(&self, id: PaneId) -> i32 {
+        if self.is_deep_active(id) {
+            return self
+                .deep_focused_position(id)
+                .map(|pos| pos as i32)
+                .unwrap_or(-1);
+        }
         self.ws
             .pane(id)
             .and_then(|p| p.files.as_ref())
@@ -88,55 +141,117 @@ impl WorkspaceCtrl {
     /// invalidación por carpeta obsoleta que `pane_dir_missing`.
     pub fn pane_has_existing_ancestor(&self, id: PaneId) -> bool {
         match self.missing_cache.get(&id.0) {
-            Some((dir, _, has_anc)) => {
-                *has_anc && self.pane_current_dir(id).as_deref() == Some(dir.as_path())
+            Some((dir, _, ancestor)) => {
+                ancestor.is_some() && self.pane_current_dir(id).as_deref() == Some(dir.as_path())
             }
             None => false,
         }
     }
 
-    /// Recalcula el caché del estado "carpeta no encontrada" de TODOS los paneles Files. Se
-    /// llama ante eventos que pueden cambiarlo (navegar, reintentar, expulsar, conectar/
-    /// desconectar disco), NUNCA en el tick de render. NO hace I/O en el hilo de UI: solo
-    /// fotografía las carpetas actuales y lanza UN worker que hace el `read_dir` + búsqueda de
-    /// ancestro por panel; el tick aplica los resultados con `pump_missing_probe`. Un share de
-    /// red caído puede colgar el worker segundos sin congelar la app. Un refresh nuevo
-    /// reemplaza al anterior (sus resultados se descartan por carpeta obsoleta si llegan).
+    /// Recalcula el caché tras cambios globales (por ejemplo, conexión/expulsión de disco).
+    /// Navegar usa `refresh_missing_cache_for` para tocar sólo el destino recién pedido.
+    /// El probe adquiere una plaza compartida con Files/árbol antes de crear el hilo; una revisión
+    /// y un token cancelable descartan resultados obsoletos. Una syscall de red ya bloqueada no
+    /// puede interrumpirse; su permiso queda ocupado hasta que el hilo realmente salga.
     pub fn refresh_missing_cache(&mut self) {
-        // Solo paneles de archivos (los demás no tienen "carpeta no encontrada").
+        self.refresh_missing_cache_scope(None);
+    }
+
+    /// Revisa únicamente el panel que acaba de navegar; evita volver a tocar shares de los demás.
+    pub fn refresh_missing_cache_for(&mut self, id: PaneId) {
+        self.refresh_missing_cache_scope(Some(id));
+    }
+
+    fn refresh_missing_cache_scope(&mut self, pane: Option<PaneId>) {
+        self.missing_probe_revision = self.missing_probe_revision.wrapping_add(1);
+        let revision = self.missing_probe_revision;
+        self.missing_probe_pending_pane = Some(pane);
+        if let Some(cancel) = &self.missing_probe_cancel {
+            cancel.cancel();
+        }
+        if self.missing_probe.is_some() {
+            self.missing_probe_refresh_pending = true;
+            return;
+        }
+
+        // Solo paneles Files; una navegación toma una fotografía de un panel, mientras que
+        // conexión/expulsión de dispositivos solicita el conjunto completo.
         let ids: Vec<PaneId> = self
             .ws
             .panes()
             .iter()
             .filter(|p| p.files.is_some())
+            .filter(|p| pane.is_none_or(|target| target == p.id))
             .map(|p| p.id)
             .collect();
-        self.missing_cache
-            .retain(|k, _| ids.iter().any(|id| id.0 == *k));
+        if pane.is_none() {
+            self.missing_cache.retain(|k, _| {
+                self.ws
+                    .panes()
+                    .iter()
+                    .any(|p| p.files.is_some() && p.id.0 == *k)
+            });
+        }
         let targets: Vec<(u64, PathBuf)> = ids
             .iter()
             .filter_map(|id| self.pane_current_dir(*id).map(|dir| (id.0, dir)))
             .collect();
+        // El sondeo recorre las carpetas en serie: si alguna es remota puede colgarse, así que
+        // toma una plaza del cupo remoto y nunca retiene una local.
+        let admission = self.listing_admissions.for_paths(
+            targets.iter().map(|(_, dir)| dir.as_path()),
+            &naygo_platform::drives::DriveTableLocality(&self.drive_snapshot),
+        );
+        let Some(permit) = admission.try_acquire() else {
+            self.missing_probe_refresh_pending = true;
+            return;
+        };
         let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let hits: Vec<MissingProbeHit> = targets
-                .into_iter()
-                .map(|(pane, dir)| {
-                    let missing = std::fs::read_dir(&dir).is_err();
-                    let has_ancestor =
-                        missing && WorkspaceCtrl::nearest_existing_ancestor(&dir).is_some();
-                    MissingProbeHit {
+        let token = naygo_core::cancel::CancellationToken::new();
+        let worker_token = token.clone();
+        let spawn = std::thread::Builder::new()
+            .name("naygo-missing-probe".into())
+            .spawn(move || {
+                let _permit = permit;
+                let mut hits = Vec::with_capacity(targets.len());
+                for (pane, dir) in targets {
+                    if worker_token.is_cancelled() {
+                        break;
+                    }
+                    let missing = match std::fs::read_dir(&dir) {
+                        Ok(_) => Some(false),
+                        Err(error) if WorkspaceCtrl::missing_from_probe_error(&error).is_some() => {
+                            Some(true)
+                        }
+                        // PermissionDenied, network errors, and other transient failures do not
+                        // prove that the folder is absent; retain the prior cached diagnosis.
+                        Err(_) => None,
+                    };
+                    let ancestor = (missing == Some(true))
+                        .then(|| WorkspaceCtrl::nearest_existing_ancestor(&dir, &worker_token))
+                        .flatten();
+                    if worker_token.is_cancelled() {
+                        break;
+                    }
+                    hits.push(MissingProbeHit {
                         pane,
                         dir,
+                        revision,
                         missing,
-                        has_ancestor,
-                    }
-                })
-                .collect();
-            // Si el receptor se reemplazó (refresh más nuevo) o se cayó, descartar en silencio.
-            let _ = tx.send(hits);
-        });
+                        ancestor,
+                    });
+                }
+                let _ = tx.send(hits);
+            });
+        if let Err(error) = spawn {
+            crate::logging::log_line(&format!("no se pudo iniciar probe de carpetas: {error}"));
+            self.missing_probe_refresh_pending = false;
+            self.missing_probe_pending_pane = None;
+            return;
+        }
         self.missing_probe = Some(rx);
+        self.missing_probe_cancel = Some(token);
+        self.missing_probe_refresh_pending = false;
     }
 
     /// Drena el probe async de "carpeta no encontrada" (sin bloquear) y aplica los resultados
@@ -146,6 +261,12 @@ impl WorkspaceCtrl {
     /// (para que el timer pueda dormir).
     pub fn pump_missing_probe(&mut self) -> bool {
         let Some(rx) = self.missing_probe.as_ref() else {
+            if self.missing_probe_refresh_pending {
+                self.missing_probe_refresh_pending = false;
+                let pane = self.missing_probe_pending_pane.take().flatten();
+                self.refresh_missing_cache_scope(pane);
+                return false;
+            }
             return true;
         };
         match rx.try_recv() {
@@ -153,32 +274,43 @@ impl WorkspaceCtrl {
                 for hit in hits {
                     let still_there = self.pane_current_dir(PaneId(hit.pane)).as_deref()
                         == Some(hit.dir.as_path());
-                    if still_there {
-                        self.missing_cache
-                            .insert(hit.pane, (hit.dir, hit.missing, hit.has_ancestor));
+                    if still_there && hit.revision == self.missing_probe_revision {
+                        if let Some(missing) = hit.missing {
+                            self.missing_cache
+                                .insert(hit.pane, (hit.dir, missing, hit.ancestor));
+                        }
                     }
                 }
                 self.missing_probe = None;
+                self.missing_probe_cancel = None;
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {}
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                 self.missing_probe = None;
+                self.missing_probe_cancel = None;
             }
+        }
+        if self.missing_probe.is_none() && self.missing_probe_refresh_pending {
+            self.missing_probe_refresh_pending = false;
+            let pane = self.missing_probe_pending_pane.take().flatten();
+            self.refresh_missing_cache_scope(pane);
+            return false;
+        }
+        if self.missing_probe.is_none() {
+            self.missing_probe_pending_pane = None;
         }
         self.missing_probe.is_none()
     }
 
     /// Reintentar en el panel `id`: si su carpeta volvió a existir (USB reconectado), re-listar; si
-    /// sigue sin existir, no hace nada (el aviso permanece). El aviso desaparece solo cuando el
-    /// re-listado puebla la carpeta (la detección es por `current_dir.exists()`).
+    /// sigue sin existir, el listado del worker conserva el aviso. El chequeo de disco nunca se
+    /// hace en este callback.
     pub fn missing_folder_retry(&mut self, id: PaneId) {
         crate::logging::log_line(&format!("carpeta no encontrada: reintentar panel {}", id.0));
         if let Some(dir) = self.pane_current_dir(id) {
-            if std::fs::read_dir(&dir).is_ok() {
-                self.cancel_deep_if_navigating(id);
-                self.start_listing(id, dir.clone());
-                self.sync_trees_for_files(id, dir);
-            }
+            self.cancel_deep_if_navigating(id);
+            self.start_listing(id, dir.clone());
+            self.retry_trees_for_files(id, dir);
         }
     }
 
@@ -198,11 +330,12 @@ impl WorkspaceCtrl {
         let Some(lost) = self.pane_current_dir(id) else {
             return;
         };
-        let dest = Self::nearest_existing_ancestor(&lost).unwrap_or_else(|| {
-            std::env::var_os("USERPROFILE")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from("C:/"))
-        });
+        let cached_ancestor = self
+            .missing_cache
+            .get(&id.0)
+            .filter(|(probed, _, _)| probed == &lost)
+            .and_then(|(_, _, ancestor)| ancestor.clone());
+        let dest = cached_ancestor.unwrap_or_else(|| self.configured_home_dir());
         self.cancel_deep_if_navigating(id);
         if let Some(f) = self.ws.pane_mut(id).and_then(|p| p.files.as_mut()) {
             f.navigate_to(dest.clone());
@@ -227,9 +360,7 @@ impl WorkspaceCtrl {
             self.close_pane(id);
         } else {
             // Es el último panel: no se puede cerrar; lo mandamos al HOME para que sea usable.
-            let home = std::env::var_os("USERPROFILE")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from("C:/"));
+            let home = self.configured_home_dir();
             self.cancel_deep_if_navigating(id);
             if let Some(f) = self.ws.pane_mut(id).and_then(|p| p.files.as_mut()) {
                 f.navigate_to(home.clone());
@@ -240,14 +371,33 @@ impl WorkspaceCtrl {
 
     /// Arranca el listado del panel `id` en `dir` (cancela el suyo anterior).
     pub fn start_listing(&mut self, id: PaneId, dir: std::path::PathBuf) {
-        if let Some(l) = self.listings.get(&id) {
+        let cambia_carpeta = self.last_listing_dirs.get(&id) != Some(&dir);
+        // Un editor anclado a otra carpeta no puede seguir sobre la vista nueva. Cancelar
+        // antes de publicar filas invalida callbacks tardíos; refrescar la misma carpeta
+        // conserva la sesión. No hace I/O ni confirma el borrador.
+        if cambia_carpeta
+            && self
+                .rename_active
+                .as_ref()
+                .is_some_and(|rename| rename.pane == id)
+        {
+            self.rename_cancel();
+        }
+        if let Some(l) = self.listings.remove(&id) {
             l.cancel();
         }
+        self.pending_file_listings.remove(&id);
+        self.automatic_listings.remove(&id);
         // Una comparación describe exactamente los snapshots cargados; navegar o refrescar uno
         // de sus lados la invalida para no dejar marcas obsoletas sobre nombres nuevos.
         if self.comparison.remove(&id).is_some() {
             self.comparison.clear();
             self.comparison_revision = self.comparison_revision.wrapping_add(1);
+        }
+        let changes_removed = self.visit_changes.remove(&id).is_some();
+        let highlights_removed = self.visit_highlights.remove(&id).is_some();
+        if changes_removed || highlights_removed {
+            self.visit_changes_revision = self.visit_changes_revision.wrapping_add(1);
         }
         // "Ocultar iguales" pertenece al mismo snapshot: una navegación o refresh no puede
         // seguir escondiendo rutas basadas en una comparación ya invalidada.
@@ -258,9 +408,21 @@ impl WorkspaceCtrl {
         // persiste hasta Esc o navegar). Un refresh de la MISMA carpeta (F5) lo conserva.
         // La referencia es `last_listing_dirs` (lo último PEDIDO para el panel), NO
         // `f.current_dir`: hay caminos que la mutan antes de llamar aquí (navigate_pane_to).
-        let cambia_carpeta = self.last_listing_dirs.get(&id) != Some(&dir);
+        if cambia_carpeta {
+            self.pending_created_activation.remove(&id);
+            self.creation_selection.remove(&id);
+        }
+        self.dirty_listings.remove(&id);
+        if !cambia_carpeta {
+            if let Some(f) = self.ws.pane_mut(id).and_then(|p| p.files.as_mut()) {
+                f.preserve_context_for_listing();
+            }
+        }
         if cambia_carpeta {
             self.clear_filter();
+            if let Some(f) = self.ws.pane_mut(id).and_then(|p| p.files.as_mut()) {
+                f.reset_display_order();
+            }
             // El caché de índices de matching (text_match) guarda nombres de ESTA carpeta;
             // navegar lo invalida para no arrastrar nombres viejos ni crecer sin límite.
             naygo_core::text_match::clear_index_cache();
@@ -269,15 +431,43 @@ impl WorkspaceCtrl {
         // Un listado nuevo reemplaza al anterior: su reciente diferido (si lo había) ya no
         // aplica — el camino que navega decide si registra uno para el listado NUEVO.
         self.pending_recents.remove(&id);
-        // Navegar (o refrescar) puede cambiar de unidad. La caché está indexada por raíz, así que
-        // no necesitamos borrar datos útiles de los demás paneles; los dispositivos sí la
-        // invalidan explícitamente en `invalidate_footer_disk_cache`.
+        // Navegar puede cambiar de unidad. Windows cachea por raíz; Linux consulta la carpeta
+        // actual para que statvfs identifique su montaje. Los dispositivos invalidan la caché
+        // explícitamente en `invalidate_footer_disk_cache`.
         // Si el panel estaba marcado como "expulsado" y ahora navega a una carpeta válida,
         // limpiar el flag para que el aviso vuelva a ser el genérico si vuelve a desconectarse.
         self.ejected_panes.remove(&id.0);
-        self.listings.insert(id, Listing::start(dir));
+        match Listing::try_start(
+            dir.clone(),
+            self.listing_admission_for(&dir),
+            naygo_core::listing::ListingFilter::All,
+        ) {
+            Ok(listing) => {
+                self.listings.insert(id, listing);
+            }
+            Err(naygo_core::listing::ListingStartError::Capacity) => {
+                self.pending_file_listings.insert(id, dir);
+            }
+            Err(naygo_core::listing::ListingStartError::Spawn(error)) => {
+                crate::logging::log_line(&format!("no se pudo iniciar listado: {error}"));
+            }
+        }
         // Recalcular el estado "carpeta no encontrada" tras navegar (sale del tick de render).
-        self.refresh_missing_cache();
+        self.refresh_missing_cache_for(id);
+    }
+
+    pub(super) fn reconcile_listing(&mut self, id: PaneId, dir: PathBuf) {
+        if self.ops.rename_running_in(&dir) {
+            return;
+        }
+        if self.listings.contains_key(&id) || self.pending_file_listings.contains_key(&id) {
+            self.dirty_listings.insert(id);
+            return;
+        }
+        self.start_listing(id, dir);
+        if self.listings.contains_key(&id) || self.pending_file_listings.contains_key(&id) {
+            self.automatic_listings.insert(id, Vec::new());
+        }
     }
 
     /// Marca el panel `id` como "soltado por expulsión" (cambia el texto del aviso).
@@ -297,13 +487,24 @@ impl WorkspaceCtrl {
         self.footer_disk_cache.clear();
     }
 
+    /// ¿Hay una lectura de espacio de disco del footer todavía sin publicar? Solo para tests que
+    /// deben esperar a que ese trabajo asíncrono se asiente antes de medir (ver `sync.rs`).
+    #[cfg(test)]
+    pub(crate) fn footer_disk_in_flight(&self) -> bool {
+        !self.footer_disk_pending.is_empty()
+    }
+
     /// Drena las lecturas de espacio terminadas. Corre en el tick de UI pero solo hace `try_recv`:
     /// la llamada WinAPI real vive exclusivamente en el worker lanzado más abajo.
     fn pump_footer_disk_results(&mut self) {
         while let Ok((root, usage)) = self.footer_disk_results.try_recv() {
             self.footer_disk_pending.remove(&root);
             if let Some(usage) = usage {
-                self.footer_disk_cache.insert(root, usage);
+                #[cfg(target_os = "linux")]
+                let max_entries = MAX_LINUX_FOOTER_DISK_CACHE_ENTRIES;
+                #[cfg(not(target_os = "linux"))]
+                let max_entries = usize::MAX;
+                insert_bounded_disk_usage(&mut self.footer_disk_cache, root, usage, max_entries);
             }
         }
     }
@@ -314,6 +515,13 @@ impl WorkspaceCtrl {
         self.pump_footer_disk_results();
         if let Some(usage) = self.footer_disk_cache.get(root) {
             return Some(*usage);
+        }
+        #[cfg(target_os = "linux")]
+        let max_pending = MAX_LINUX_FOOTER_DISK_QUERIES_IN_FLIGHT;
+        #[cfg(not(target_os = "linux"))]
+        let max_pending = usize::MAX;
+        if !footer_disk_query_has_slot(&self.footer_disk_pending, root, max_pending) {
+            return None;
         }
         let root = root.to_path_buf();
         if self.footer_disk_pending.insert(root.clone()) {
@@ -350,16 +558,58 @@ impl WorkspaceCtrl {
             return String::new();
         }
         // Paso 1: extraer datos crudos del panel (borrow inmutable acotado a este bloque).
-        let Some((data_no_disk, root)) = self
-            .ws
-            .pane(id)
-            .and_then(|p| p.files.as_ref())
-            .map(footer_inputs_of)
+        let deep = self.is_deep_active(id);
+        let Some((mut data_no_disk, root)) =
+            self.ws
+                .pane(id)
+                .and_then(|p| p.files.as_ref())
+                .map(|files| {
+                    if deep {
+                        (
+                            naygo_core::footer::FooterData::default(),
+                            footer_disk_root_of(files),
+                        )
+                    } else {
+                        footer_inputs_of(files)
+                    }
+                })
         else {
             return String::new();
         };
-        // Paso 2 (ya sin borrow de `self.ws`): uso de disco cacheado por raíz de unidad. Si falta,
-        // se solicita a un worker y este tick conserva una respuesta inmediata.
+        let deep_view = self.deep_view_indices(id);
+        if let (Some(view), Some(job)) = (deep_view, self.deep_job.as_mut()) {
+            if let Some(cache) = job.footer_cache.as_ref().filter(|cache| {
+                std::sync::Arc::ptr_eq(&cache.view, &view)
+                    && cache.selection_revision == job.selection_revision
+            }) {
+                data_no_disk = cache.data.clone();
+            } else {
+                data_no_disk.sel_count = 0;
+                data_no_disk.marked_bytes = 0;
+                data_no_disk.total_count = 0;
+                data_no_disk.dir_count = 0;
+                for &index in view.iter() {
+                    let (entry, _) = &job.items[index];
+                    data_no_disk.total_count += 1;
+                    data_no_disk.dir_count += usize::from(entry.is_dir());
+                    if job.selected_paths.contains(&entry.path) {
+                        data_no_disk.sel_count += 1;
+                        data_no_disk.marked_bytes = data_no_disk
+                            .marked_bytes
+                            .saturating_add(entry.size.unwrap_or(0));
+                    }
+                }
+                data_no_disk.file_count = data_no_disk.total_count - data_no_disk.dir_count;
+                data_no_disk.item_count = data_no_disk.total_count;
+                job.footer_cache = Some(DeepFooterCache {
+                    view,
+                    selection_revision: job.selection_revision,
+                    data: data_no_disk.clone(),
+                });
+            }
+        }
+        // Paso 2 (ya sin borrow de `self.ws`): uso de disco cacheado por clave de volumen/ruta. Si
+        // falta, se solicita a un worker y este tick conserva una respuesta inmediata.
         let disk = match root {
             Some(root) => self.cached_disk_usage(&root),
             None => None,
@@ -447,7 +697,19 @@ impl WorkspaceCtrl {
 
     /// Drena los lotes de TODOS los listados activos. Devuelve true si TODOS terminaron
     /// (para apagar el timer). Quita del mapa los que terminan.
+    #[cfg(test)]
     pub fn pump_listings(&mut self) -> bool {
+        let mut budget = PollBudget::new();
+        let mut allowance = 1_024;
+        self.pump_listings_with_budget(&mut budget, &mut allowance)
+    }
+
+    pub(crate) fn pump_listings_with_budget(
+        &mut self,
+        budget: &mut PollBudget,
+        allowance: &mut usize,
+    ) -> bool {
+        self.start_pending_file_listings();
         // Flags de visibilidad globales: se empujan al panel al sembrar sus entries, así un
         // panel recién listado (arranque, navegación, refresh) ya nace con la vista filtrada
         // correcta sin depender de que el usuario abra el menú "ojo".
@@ -455,48 +717,96 @@ impl WorkspaceCtrl {
         // Espejo del setting "archivos nuevos al final": se empuja en el mismo punto, así un panel
         // recién listado refleja la opción aunque el watcher aún no haya disparado.
         let group_new_at_end = self.config.settings.new_items_at_end;
-        let ids: Vec<PaneId> = self.listings.keys().copied().collect();
+        let mut ids: Vec<PaneId> = self.listings.keys().copied().collect();
+        if !ids.is_empty() {
+            let start = self.file_listing_cursor % ids.len();
+            ids.rotate_left(start);
+            self.file_listing_cursor = (start + 1) % ids.len();
+        }
         for id in ids {
+            if *allowance == 0 || budget.remaining_entries == 0 || Instant::now() >= budget.deadline
+            {
+                break;
+            }
             // El flag `fresh` se reclama solo cuando este poll trae avance real: o llegaron
             // entries, o el listado TERMINÓ (carpeta vacía → done sin lotes). Un tick que poll-ea
             // vacío y sin terminar NO lo consume, así el reemplazo de filas se aplica recién con
             // el primer avance real. `take_fresh()` solo devuelve `true` una vez por listado.
-            let (batch, done, fresh, succeeded) = match self.listings.get_mut(&id) {
+            let (batch, terminal, fresh) = match self.listings.get_mut(&id) {
                 Some(l) => {
-                    let (b, d, ok) = l.poll();
-                    let fresh = if b.is_empty() && !d {
+                    let (b, terminal) = l.poll_with_shared_budget(budget, allowance);
+                    let fresh = if b.is_empty() && terminal.is_none() {
                         false
                     } else {
                         l.take_fresh()
                     };
-                    (b, d, fresh, ok)
+                    (b, terminal, fresh)
                 }
                 None => continue,
             };
+            let done = terminal.is_some();
+            let succeeded = matches!(
+                terminal,
+                Some(naygo_core::listing::ListingOutcome::Complete)
+            );
+            let failed = matches!(
+                terminal,
+                Some(
+                    naygo_core::listing::ListingOutcome::Failed(_)
+                        | naygo_core::listing::ListingOutcome::Partial { .. }
+                )
+            );
             let batch_was_empty = batch.is_empty();
-            if let Some(f) = self.ws.pane_mut(id).and_then(|p| p.files.as_mut()) {
+            if let Some(snapshot) = self.automatic_listings.get_mut(&id) {
+                snapshot.extend(batch);
+                if done {
+                    let snapshot = self.automatic_listings.remove(&id).unwrap_or_default();
+                    if let Some(f) = self.ws.pane_mut(id).and_then(|p| p.files.as_mut()) {
+                        if succeeded
+                            && !self.dirty_listings.contains(&id)
+                            && !self.ops.rename_running_in(&f.current_dir)
+                        {
+                            f.preserve_context_for_listing();
+                            f.group_new_at_end = group_new_at_end;
+                            f.reconcile_entries(snapshot);
+                            f.apply_pending_nav_context();
+                        } else if !self.dirty_listings.contains(&id) {
+                            f.apply_pending_nav_context();
+                        }
+                    }
+                }
+            } else if let Some(f) = self.ws.pane_mut(id).and_then(|p| p.files.as_mut()) {
                 f.set_visibility(vis);
                 f.group_new_at_end = group_new_at_end;
                 if !batch_was_empty {
                     // Primer lote de un listado nuevo: REEMPLAZAR (no acumular) las entries que
                     // el panel tuviera de antes. Esto evita que F5 duplique las filas al
                     // re-listar el mismo directorio sobre un panel ya poblado.
-                    if fresh {
+                    let append_start = if fresh {
                         f.entries.clear();
-                    }
+                        0
+                    } else {
+                        f.entries.len()
+                    };
                     f.entries.extend(batch);
-                    f.entries_changed();
+                    f.entries_appended(append_start);
                 }
                 if done {
                     // Carpeta que quedó VACÍA tras refrescar: el listado nuevo no emitió ningún
                     // lote, así que `fresh` nunca se reclamó y las entries viejas seguirían ahí.
                     // Al terminar, si aún estaba fresco, vaciar para reflejar la carpeta vacía.
-                    if fresh && batch_was_empty {
+                    let old_rows_belong_here = f
+                        .entries
+                        .iter()
+                        .all(|entry| entry.path.parent() == Some(f.current_dir.as_path()));
+                    if fresh && batch_was_empty && (succeeded || !old_rows_belong_here) {
                         f.entries.clear();
                         f.entries_changed();
                     }
                     let spec = f.sort;
                     naygo_core::sort::sort_entries(&mut f.entries, &spec);
+                    // El último tick pudo cachear índices del orden físico anterior.
+                    f.entries_changed();
                     let restored = f.apply_pending_nav_context();
                     if !restored && f.focused.is_none() && !f.entries.is_empty() {
                         f.focused = Some(0);
@@ -505,7 +815,33 @@ impl WorkspaceCtrl {
                 }
             }
             if done {
-                self.record_listing_changes(id);
+                if succeeded && !self.dirty_listings.contains(&id) {
+                    self.record_listing_changes(id);
+                } else if failed {
+                    if let Some(outcome) = terminal.as_ref() {
+                        let detail = match outcome {
+                            naygo_core::listing::ListingOutcome::Failed(error) => {
+                                error.message.clone()
+                            }
+                            naygo_core::listing::ListingOutcome::Partial {
+                                skipped,
+                                first_error,
+                            } => format!("{} ({} omitida(s))", first_error.message, skipped),
+                            _ => String::new(),
+                        };
+                        let dir = self.pane_current_dir(id).unwrap_or_default();
+                        crate::logging::log_line(&format!(
+                            "listado incompleto en {}: {}",
+                            dir.display(),
+                            detail
+                        ));
+                        self.pending_listing_error = Some(format!(
+                            "{}: {}",
+                            self.config.t("listing.incomplete"),
+                            detail
+                        ));
+                    }
+                }
                 self.listings.remove(&id);
                 // Reciente diferido (navegación sin chequeo síncrono de `dir_is_navigable`):
                 // se registra SOLO si el listado terminó con éxito, así una ruta muerta (red
@@ -517,9 +853,47 @@ impl WorkspaceCtrl {
                 } else {
                     self.pending_recents.remove(&id);
                 }
+                if self.dirty_listings.remove(&id) {
+                    if let Some(dir) = self.pane_current_dir(id) {
+                        self.reconcile_listing(id, dir);
+                    }
+                }
             }
         }
-        self.listings.is_empty()
+        self.listings.is_empty() && self.pending_file_listings.is_empty()
+    }
+
+    fn start_pending_file_listings(&mut self) {
+        let mut ids: Vec<_> = self.pending_file_listings.keys().copied().collect();
+        ids.sort_by_key(|id| id.0);
+        for id in ids {
+            if !self.listing_admissions.any_capacity() {
+                break;
+            }
+            let Some(dir) = self.pending_file_listings.remove(&id) else {
+                continue;
+            };
+            // Cada pendiente se reclasifica ahora: un cupo remoto lleno no detiene a los locales
+            // que vienen detrás en la cola, y la tabla de unidades pudo llegar desde el intento
+            // anterior.
+            match Listing::try_start(
+                dir.clone(),
+                self.listing_admission_for(&dir),
+                naygo_core::listing::ListingFilter::All,
+            ) {
+                Ok(listing) => {
+                    self.listings.insert(id, listing);
+                }
+                Err(naygo_core::listing::ListingStartError::Capacity) => {
+                    self.pending_file_listings.insert(id, dir);
+                }
+                Err(naygo_core::listing::ListingStartError::Spawn(error)) => {
+                    crate::logging::log_line(&format!(
+                        "no se pudo iniciar listado pendiente: {error}"
+                    ));
+                }
+            }
+        }
     }
 
     fn record_listing_changes(&mut self, id: PaneId) {
@@ -534,13 +908,16 @@ impl WorkspaceCtrl {
         let changes = self
             .listing_snapshots
             .get(&dir)
-            .map(|before| naygo_core::listing_changes::compare(before, &entries))
+            .map(|before| naygo_core::listing_changes::compare_snapshot(&before.entries, &entries))
             .unwrap_or_default();
-        self.listing_snapshots.insert(dir, entries);
+        self.listing_snapshots.insert(dir, &entries);
+        let highlights = naygo_core::listing_changes::highlight_paths(&changes);
         if changes.is_empty() {
             self.visit_changes.remove(&id);
+            self.visit_highlights.remove(&id);
         } else {
             self.visit_changes.insert(id, changes);
+            self.visit_highlights.insert(id, highlights);
         }
         self.visit_changes_revision = self.visit_changes_revision.wrapping_add(1);
     }
@@ -577,7 +954,6 @@ impl WorkspaceCtrl {
     ) -> Vec<PlainRow> {
         let date_format = self.config.settings.date_format;
         let size_format = self.config.settings.size_format;
-        let vis = self.visibility_flags();
         let tz = naygo_platform::time::local_utc_offset_secs();
         // Aguja del filtro visual por tipeo (ya plegada): SOLO para el panel activo
         // (None para los demás paneles o sin filtro → todo filter_match = false).
@@ -585,7 +961,7 @@ impl WorkspaceCtrl {
 
         // Vista profunda activa: construir filas desde deep_items con depth real.
         // Las columnas visibles (orden/formato) se leen del FilePaneState normal.
-        if self.is_deep_active(id) {
+        if let Some(view) = self.deep_view_indices(id) {
             // Extraer los datos que necesitamos antes de los préstamos disjuntos.
             let cell_kinds: Vec<naygo_core::columns::ColumnKind> = self
                 .ws
@@ -607,16 +983,10 @@ impl WorkspaceCtrl {
                 } = self;
                 let deep_items: &[(naygo_core::fs_model::Entry, u32)] =
                     deep_job.as_ref().map(|d| d.items.as_slice()).unwrap_or(&[]);
-                deep_items
-                    .iter()
-                    .filter(|(e, _)| {
-                        naygo_core::filter::is_visible(
-                            e,
-                            vis.show_hidden,
-                            vis.show_system,
-                            vis.hide_dotfiles,
-                        )
-                    })
+                let focused = deep_job.as_ref().and_then(|job| job.focused_path.as_ref());
+                let selected = deep_job.as_ref().map(|job| &job.selected_paths);
+                view.iter()
+                    .map(|&index| &deep_items[index])
                     .map(|(e, depth)| {
                         let cells = cell_kinds
                             .iter()
@@ -639,8 +1009,13 @@ impl WorkspaceCtrl {
                             name: e.name.clone(),
                             cells,
                             is_dir: e.kind == naygo_core::fs_model::EntryKind::Directory,
-                            selected: false,
-                            focused: false,
+                            drop_folder: if e.is_dir() {
+                                e.path.to_string_lossy().into_owned()
+                            } else {
+                                String::new()
+                            },
+                            selected: selected.is_some_and(|paths| paths.contains(&e.path)),
+                            focused: focused == Some(&e.path),
                             cut: ops.is_cut(&e.path),
                             highlight: false,
                             compare_state: 0,
@@ -669,11 +1044,14 @@ impl WorkspaceCtrl {
                 icons,
                 ..
             } = self;
+            // Las rutas frescas son pocas: se consultan con un probe por nombre en vez de
+            // recorrer la lista de frescas (o hashear la ruta) en cada una de las n filas.
+            let fresh = PathProbe::new(watchers.fresh_paths(id.0, highlight_secs, now));
             match ws.pane(id).and_then(|p| p.files.as_ref()) {
                 Some(f) => rows_from_view(
                     f,
                     &|p| ops.is_cut(p),
-                    &|p| watchers.is_fresh_ro(id.0, p, highlight_secs, now),
+                    &|p| fresh.contains(p),
                     &mut |e| icons.get_for_entry(e),
                     size_format,
                     date_format,
@@ -687,19 +1065,22 @@ impl WorkspaceCtrl {
             self.comparison.get(&id),
             self.ws.pane(id).and_then(|p| p.files.as_ref()),
         ) {
-            for (row, &real) in rows.iter_mut().zip(f.view_indices().iter()) {
+            let view = f.view_indices_shared();
+            for (row, &real) in rows.iter_mut().zip(view.iter()) {
                 if let Some(entry) = f.entries.get(real) {
                     row.compare_state = marks.get(&entry.path).copied().unwrap_or(0);
                 }
             }
         }
-        if let Some(changes) = self.visit_changes.get(&id) {
-            for row in &mut rows {
-                row.highlight |= changes.iter().any(|change| {
-                    change.kind != naygo_core::listing_changes::ChangeKind::Missing
-                        && change.path.file_name().and_then(|name| name.to_str())
-                            == Some(row.name.as_str())
-                });
+        if let (Some(highlights), Some(files)) = (
+            self.visit_highlights.get(&id),
+            self.ws.pane(id).and_then(|pane| pane.files.as_ref()),
+        ) {
+            let view = files.view_indices_shared();
+            for (row, &real) in rows.iter_mut().zip(view.iter()) {
+                if let Some(entry) = files.entries.get(real) {
+                    row.highlight |= highlights.contains(&entry.path);
+                }
             }
         }
         if filter_needle.is_some() {
@@ -708,21 +1089,193 @@ impl WorkspaceCtrl {
         rows
     }
 
-    /// Firma O(n) SIN allocs de TODO lo que determina las filas pintadas del panel `id` (O-1).
-    /// Si entre dos ticks esta firma no cambia, `rows_of` produciría EXACTAMENTE las mismas filas,
-    /// así que `sync_rows` puede saltarse la reconstrucción (que sí aloca decenas de miles de
-    /// `String` por tick en carpetas grandes bajo render por software).
+    /// Construye solo las posiciones indicadas de la vista normal. Devuelve `None` cuando la
+    /// presentación depende de un estado dinámico/global que requiere reconstruir todo el panel.
+    pub(crate) fn rows_at(
+        &mut self,
+        id: PaneId,
+        positions: &[usize],
+        highlight_secs: u64,
+        now: Instant,
+    ) -> Option<Vec<PlainRow>> {
+        if self.is_deep_active(id) {
+            return None;
+        }
+        let filter_needle = self.active_filter_needle(id);
+        if filter_needle.is_some() {
+            return None;
+        }
+        let size_format = self.config.settings.size_format;
+        let date_format = self.config.settings.date_format;
+        let tz = naygo_platform::time::local_utc_offset_secs();
+        let mut rows = {
+            let WorkspaceCtrl {
+                ws,
+                ops,
+                watchers,
+                icons,
+                ..
+            } = self;
+            let f = ws.pane(id)?.files.as_ref()?;
+            let fresh = PathProbe::new(watchers.fresh_paths(id.0, highlight_secs, now));
+            rows_from_view_positions(
+                f,
+                positions.iter().copied(),
+                &|path| ops.is_cut(path),
+                &|path| fresh.contains(path),
+                &mut |entry| icons.get_for_entry(entry),
+                size_format,
+                date_format,
+                tz,
+                None,
+            )
+        };
+        if let (Some(marks), Some(f)) = (
+            self.comparison.get(&id),
+            self.ws.pane(id).and_then(|pane| pane.files.as_ref()),
+        ) {
+            let view = f.view_indices_shared();
+            for (row, &position) in rows.iter_mut().zip(positions) {
+                if let Some(entry) = view.get(position).and_then(|&real| f.entries.get(real)) {
+                    row.compare_state = marks.get(&entry.path).copied().unwrap_or(0);
+                }
+            }
+        }
+        if let (Some(highlights), Some(f)) = (
+            self.visit_highlights.get(&id),
+            self.ws.pane(id).and_then(|pane| pane.files.as_ref()),
+        ) {
+            let view = f.view_indices_shared();
+            for (row, &position) in rows.iter_mut().zip(positions) {
+                if let Some(entry) = view.get(position).and_then(|&real| f.entries.get(real)) {
+                    row.highlight |= highlights.contains(&entry.path);
+                }
+            }
+        }
+        Some(rows)
+    }
+
+    /// Traduce un delta de rutas del watcher a posiciones visibles. Solo es seguro si no puede
+    /// alterar estructura, orden, filtrado o estado animado; los demás casos vuelven al listado
+    /// completo. El barrido compara rutas, sin construir ni convertir filas.
+    pub(crate) fn dirty_row_positions(
+        &self,
+        id: PaneId,
+        previous_revision: u64,
+    ) -> Option<Vec<usize>> {
+        if self.is_deep_active(id) || self.active_filter_needle(id).is_some() {
+            return None;
+        }
+        // El resaltado fresco ya no obliga a reconstruir todo: el llamador solo usa este delta si
+        // el conjunto fresco aplicado no cambió (ver `AppliedRowsSource::fresh` en `sync.rs`).
+        let files = self.ws.pane(id)?.files.as_ref()?;
+        if !files.table.filters.is_empty()
+            || !matches!(files.sort.key, SortKey::Name | SortKey::Extension)
+        {
+            return None;
+        }
+        let changed_paths = files.entries_rows_changed_since(previous_revision)?;
+        if changed_paths.is_empty() {
+            return None;
+        }
+        // Probe por nombre final: descarta cada fila comparando pocos bytes, sin hashear las n
+        // rutas (con 100k filas, el `HashSet<&Path>` costaba ~25 ms en release).
+        let wanted = PathProbe::new(changed_paths.iter().map(PathBuf::as_path));
+        let view = files.view_indices_shared();
+        let mut positions = Vec::new();
+        for (position, &real) in view.iter().enumerate() {
+            if files
+                .entries
+                .get(real)
+                .is_some_and(|entry| wanted.contains(&entry.path))
+            {
+                positions.push(position);
+            }
+        }
+        (positions.len() == changed_paths.len()).then_some(positions)
+    }
+
+    /// Cantidad actual de filas normales sin construirlas ni clonarlas.
+    pub(crate) fn row_source_count(&self, id: PaneId) -> Option<usize> {
+        if self.is_deep_active(id) {
+            return None;
+        }
+        self.ws
+            .pane(id)?
+            .files
+            .as_ref()
+            .map(|files| files.view_indices_shared().len())
+    }
+
+    /// Revisión de las entradas usada para correlacionar deltas del watcher con filas visibles.
+    pub(crate) fn entries_revision_of(&self, id: PaneId) -> Option<u64> {
+        if self.is_deep_active(id) {
+            return None;
+        }
+        self.ws
+            .pane(id)?
+            .files
+            .as_ref()
+            .map(|files| files.entries_revision())
+    }
+
+    /// Número de entradas fuente antes de visibilidad/filtros. Se guarda junto con la revisión
+    /// que ya representa la UI para distinguir un append real de un refresco que reemplazó el
+    /// contenido de la carpeta.
+    pub(crate) fn row_entry_count(&self, id: PaneId) -> Option<usize> {
+        if self.is_deep_active(id) {
+            return None;
+        }
+        self.ws
+            .pane(id)?
+            .files
+            .as_ref()
+            .map(|files| files.entries.len())
+    }
+
+    /// Índices compartidos de la última vista calculada. Clonar el Arc es O(1); la sincronización
+    /// usa el snapshot previo para demostrar que los índices antiguos siguen siendo prefijo.
+    pub(crate) fn row_view_indices_shared(&self, id: PaneId) -> Option<std::sync::Arc<[usize]>> {
+        if self.is_deep_active(id) {
+            return None;
+        }
+        self.ws
+            .pane(id)?
+            .files
+            .as_ref()
+            .map(|files| files.view_indices_shared())
+    }
+
+    /// Rango físico de los lotes append-only recibidos desde una revisión.
+    pub(crate) fn rows_appended_since(
+        &self,
+        id: PaneId,
+        revision: u64,
+        expected_start: usize,
+    ) -> Option<usize> {
+        if self.is_deep_active(id) {
+            return None;
+        }
+        self.ws
+            .pane(id)?
+            .files
+            .as_ref()?
+            .entries_appended_since(revision, expected_start)
+    }
+
+    /// Firma del estado y revisiones que determinan las filas pintadas del panel `id`.
+    /// Para la vista normal, la revisión de entries detecta cambios en O(1); no se recorren ni se
+    /// convierten filas si la firma no cambia. La vista profunda incorpora el contenido de sus
+    /// items porque su fuente no comparte las revisiones del listado normal.
     ///
     /// Devuelve `None` cuando NO se debe cachear: el panel tiene resaltado "fresco" vigente, que
     /// se desvanece por diseño cada tick (`is_fresh_ro` depende de `now`). En ese caso el llamador
     /// reconstruye siempre para que el fundido se vea. `None` también para paneles no-Files.
     ///
-    /// La firma cubre, exhaustivamente, cada cosa que afecta una `PlainRow`:
-    ///  - identidad+orden+contenido de las entries VISIBLES (vía `view_indices`): nombre, ruta,
-    ///    tamaño, modificado, creado, y si es directorio. Hashear el CONTENIDO (no solo `len`) es
-    ///    obligatorio: un `DirEvent::Modified` reemplaza un entry IN SITU sin cambiar `len`, lo que
-    ///    cambia la celda de Tamaño/Fecha. Iterar la vista es O(n) pero sin alocar Strings (mucho
-    ///    más barato que reconstruir las filas, que es O(n) CON allocs);
+    /// La firma cubre el estado global de presentación y las revisiones de entries/selección;
+    /// para cambios puntuales de metadata el sync usa un delta de rutas del watcher y construye
+    /// las posiciones visibles afectadas. Cambios estructurales o contextos no compatibles
+    /// conservan la reconciliación completa/incremental.
     ///  - selección (`selected`) y foco (`focused`);
     ///  - conjunto de columnas visibles, en su orden (qué celdas y en qué orden van);
     ///  - formato de tamaño y de fecha (cambian el texto de las celdas);
@@ -741,10 +1294,48 @@ impl WorkspaceCtrl {
         highlight_secs: u64,
         now: std::time::Instant,
     ) -> Option<u64> {
+        self.rows_signature_impl(id, highlight_secs, now, true, true, true)
+    }
+
+    /// Firma global sin la revisión de entradas. El sync la combina con deltas explícitos del
+    /// watcher para actualizar solo filas modificadas sin recorrer ni hashear el listado.
+    pub(crate) fn rows_context_signature(
+        &self,
+        id: PaneId,
+        highlight_secs: u64,
+        now: Instant,
+    ) -> Option<u64> {
+        if self.is_deep_active(id) || self.active_filter_needle(id).is_some() {
+            return None;
+        }
+        self.rows_signature_impl(id, highlight_secs, now, false, true, false)
+    }
+
+    /// Contexto de filas profundas sin foco ni selección, para aplicar solo esos cambios.
+    pub(crate) fn deep_rows_context_signature(&self, id: PaneId, now: Instant) -> Option<u64> {
+        if !self.is_deep_active(id) {
+            return None;
+        }
+        self.rows_signature_impl(id, 0, now, true, false, false)
+    }
+
+    fn rows_signature_impl(
+        &self,
+        id: PaneId,
+        highlight_secs: u64,
+        now: std::time::Instant,
+        include_entries_revision: bool,
+        include_deep_selection: bool,
+        include_fresh: bool,
+    ) -> Option<u64> {
         use std::hash::{Hash, Hasher};
         let f = self.ws.pane(id).and_then(|p| p.files.as_ref())?;
 
         let mut h = std::collections::hash_map::DefaultHasher::new();
+
+        // La ruta del panel forma parte de la identidad del contenido y evita reaplicar deltas
+        // de una carpeta después de navegar a otra.
+        f.current_dir.hash(&mut h);
 
         // --- Formato (afecta el texto de celdas) ---
         std::mem::discriminant(&self.config.settings.size_format).hash(&mut h);
@@ -786,26 +1377,25 @@ impl WorkspaceCtrl {
         // --- Vista profunda: otra fuente de filas (deep_items con depth). ---
         if self.is_deep_active(id) {
             1u8.hash(&mut h); // marca "modo profundo" (distinto de la vista normal)
-            let items = self
-                .deep_job
+            if include_deep_selection {
+                self.deep_job
+                    .as_ref()
+                    .and_then(|job| job.focused_path.as_ref())
+                    .hash(&mut h);
+                self.deep_job
+                    .as_ref()
+                    .map(|job| job.selection_revision)
+                    .hash(&mut h);
+            }
+            // La colección incrementa su revisión antes de cualquier acceso mutable y cada
+            // recorrido tiene identidad propia. La visibilidad ya forma parte de la firma.
+            self.deep_job
                 .as_ref()
-                .map(|d| d.items.as_slice())
-                .unwrap_or(&[]);
-            items.len().hash(&mut h);
-            // Contenido de cada item visible (mismo razonamiento que la vista normal). La
-            // visibilidad se aplica aquí igual que en `rows_of`.
-            let vis = self.visibility_flags();
-            for (e, depth) in items {
-                if !naygo_core::filter::is_visible(
-                    e,
-                    vis.show_hidden,
-                    vis.show_system,
-                    vis.hide_dotfiles,
-                ) {
-                    continue;
-                }
-                depth.hash(&mut h);
-                hash_entry_for_row(e, &mut h);
+                .map(|d| d.items.signature())
+                .hash(&mut h);
+            for (kind, filter) in &f.table.filters {
+                kind.hash(&mut h);
+                filter.hash(&mut h);
             }
         } else {
             0u8.hash(&mut h); // marca "vista normal"
@@ -813,66 +1403,131 @@ impl WorkspaceCtrl {
                               // (cambia la vista), reordenamiento, y mutación IN SITU (Modified).
                               // La revisión la incrementan el listado y los watchers al mutar `entries`; junto a
                               // sort/filtros evita recorrer/clonar toda la vista en cada tick.
-            f.entries_revision().hash(&mut h);
+            if include_entries_revision {
+                f.entries_revision().hash(&mut h);
+            }
             f.sort.hash(&mut h);
             for (kind, filter) in &f.table.filters {
                 kind.hash(&mut h);
                 filter.hash(&mut h);
             }
             f.group_new_at_end.hash(&mut h);
-            if f.group_new_at_end {
-                let mut highlighted_acc = 0u64;
-                for path in &f.highlighted {
-                    let mut ph = std::collections::hash_map::DefaultHasher::new();
-                    path.hash(&mut ph);
-                    highlighted_acc ^= ph.finish();
-                }
-                highlighted_acc.hash(&mut h);
-            }
         }
 
-        // --- Resaltado "fresco": si hay alguna fila vigente, NO cachear (el fundido cambia cada
-        // tick por diseño). Se evalúa AL FINAL para no pagar el costo si total ya rebota.
-        if self.fresh_active_in_pane(id, highlight_secs, now) {
-            return None;
+        // --- Resaltado "fresco": entra el CONJUNTO de rutas frescas vigentes, que solo cambia al
+        // empezar o vencer un resaltado. Antes se devolvía `None` (no cachear) mientras hubiera
+        // alguna, y cada tick de 30 ms reconstruía las n filas aunque `highlight` (un bool) no
+        // cambiara. O(k) con k = rutas frescas; no recorre la vista.
+        if include_fresh {
+            self.fresh_signature_of(id, highlight_secs, now)
+                .hash(&mut h);
         }
 
         Some(h.finish())
     }
 
-    /// ¿El panel `id` tiene alguna ruta VISIBLE todavía "fresca" (resaltada)? Si la hay, la fila
-    /// se pinta resaltada y el resaltado se desvanece con el tiempo (`is_fresh_ro` depende de
-    /// `now`), así que la firma no debe cachearse: el llamador reconstruye cada tick. Recorre solo
-    /// la vista (no todas las entries) y corta al primer acierto.
-    fn fresh_active_in_pane(
+    /// Firma del conjunto de rutas frescas vigentes del panel (0 si no hay). La vista profunda no
+    /// pinta el resaltado del watcher, así que no depende de él. Incluye rutas que quizás no estén
+    /// visibles: a lo sumo provoca una reconciliación de más, nunca una de menos.
+    pub(crate) fn fresh_signature_of(&self, id: PaneId, highlight_secs: u64, now: Instant) -> u64 {
+        if self.is_deep_active(id) {
+            return 0;
+        }
+        self.watchers.fresh_signature(id.0, highlight_secs, now)
+    }
+
+    /// Claves (identidad + contenido) de las filas de la vista normal en `positions`, o de todas
+    /// con `None`. Con ellas `sync_rows` reconcilia comparando enteros y construye solo las filas
+    /// que cambiaron. El contenido cubre lo que lee `rows_at`: entry (nombre, ruta, tipo, tamaño,
+    /// fechas, atributos), formato de celdas, columnas, set de íconos, selección, foco, cortado,
+    /// resaltado (fresco y de visita) y comparación. Devuelve `None` donde `rows_at` no aplica
+    /// (vista profunda o filtro por tipeo): ahí sigue el camino completo.
+    pub(crate) fn row_keys(
         &self,
         id: PaneId,
+        positions: Option<&[usize]>,
         highlight_secs: u64,
-        now: std::time::Instant,
-    ) -> bool {
-        if highlight_secs == 0 {
-            return false;
+        now: Instant,
+    ) -> Option<Vec<crate::rows_model::RowKey>> {
+        use crate::rows_model::{KeyHasher, RowKey};
+        use std::hash::{Hash, Hasher};
+        if self.is_deep_active(id) || self.active_filter_needle(id).is_some() {
+            return None;
         }
-        let Some(f) = self.ws.pane(id).and_then(|p| p.files.as_ref()) else {
-            return false;
+        let f = self.ws.pane(id)?.files.as_ref()?;
+        // Estado común a todas las filas: entra como semilla del contenido de cada una.
+        let global = {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            f.current_dir.hash(&mut h);
+            std::mem::discriminant(&self.config.settings.size_format).hash(&mut h);
+            std::mem::discriminant(&self.config.settings.date_format).hash(&mut h);
+            naygo_platform::time::local_utc_offset_secs().hash(&mut h);
+            for c in f.table.visible_columns() {
+                c.kind.hash(&mut h);
+            }
+            self.icons.signature().hash(&mut h);
+            h.finish()
         };
-        if self.is_deep_active(id) {
-            let items = self
-                .deep_job
-                .as_ref()
-                .map(|d| d.items.as_slice())
-                .unwrap_or(&[]);
-            return items.iter().any(|(e, _)| {
-                self.watchers
-                    .is_fresh_ro(id.0, &e.path, highlight_secs, now)
+        let view = f.view_indices_shared();
+        // Selección chica (lo común): búsqueda lineal, sin hashear cada posición.
+        let selected_set: Option<std::collections::HashSet<usize>> =
+            (f.selected.len() > 16).then(|| f.selected.iter().copied().collect());
+        let is_selected = |position: usize| match &selected_set {
+            Some(set) => set.contains(&position),
+            None => f.selected.contains(&position),
+        };
+        let fresh = PathProbe::new(self.watchers.fresh_paths(id.0, highlight_secs, now));
+        let marks = self.comparison.get(&id).filter(|marks| !marks.is_empty());
+        let visits = self
+            .visit_highlights
+            .get(&id)
+            .filter(|visits| !visits.is_empty());
+        let any_cut = !self.ops.cut_set.is_empty();
+        let key_at = |position: usize| -> Option<RowKey> {
+            let e = f.entries.get(*view.get(position)?)?;
+            let mut idh = KeyHasher::new(0);
+            idh.add_bytes(e.path.as_os_str().as_encoded_bytes());
+            let id = idh.finish();
+            let mut h = KeyHasher::new(global);
+            h.add(id);
+            h.add_bytes(e.name.as_bytes());
+            h.add(match e.kind {
+                naygo_core::fs_model::EntryKind::Directory => 1,
+                naygo_core::fs_model::EntryKind::File => 2,
+                naygo_core::fs_model::EntryKind::Other => 3,
             });
-        }
-        f.view_indices().iter().any(|&real| {
-            f.entries.get(real).is_some_and(|e| {
-                self.watchers
-                    .is_fresh_ro(id.0, &e.path, highlight_secs, now)
+            match e.size {
+                Some(size) => {
+                    h.add(1);
+                    h.add(size);
+                }
+                None => h.add(0),
+            }
+            add_time_key(&mut h, e.modified);
+            add_time_key(&mut h, e.created);
+            let highlight =
+                fresh.contains(&e.path) || visits.is_some_and(|visits| visits.contains(&e.path));
+            let flags = u64::from(e.hidden)
+                | (u64::from(e.system) << 1)
+                | (u64::from(is_selected(position)) << 2)
+                | (u64::from(f.focused == Some(position)) << 3)
+                | (u64::from(any_cut && self.ops.is_cut(&e.path)) << 4)
+                | (u64::from(highlight) << 5);
+            h.add(flags);
+            h.add(u64::from(
+                marks
+                    .and_then(|marks| marks.get(&e.path).copied())
+                    .unwrap_or(0),
+            ));
+            Some(RowKey {
+                id,
+                content: h.finish(),
             })
-        })
+        };
+        match positions {
+            Some(positions) => positions.iter().map(|&p| key_at(p)).collect(),
+            None => (0..view.len()).map(key_at).collect(),
+        }
     }
 
     /// Huso local en segundos (para formatear/parsear fechas del filtro de fecha).
@@ -883,7 +1538,19 @@ impl WorkspaceCtrl {
     /// Actualiza el objetivo del preview con el archivo enfocado del Files activo y arranca
     /// el worker si corresponde (debounce vencido). No-op si no hay panel Preview. Devuelve
     /// true si queda trabajo pendiente (para mantener el timer vivo).
-    pub fn drive_preview(&mut self, now: std::time::Instant) -> bool {
+    /// Visibilidad real: ventana no minimizada/oculta y al menos un preview presentado
+    /// (no basta que exista detrás de otra pestaña o de un panel maximizado).
+    pub fn drive_preview_visible(&mut self, now: std::time::Instant, window_visible: bool) -> bool {
+        let groups = self.tab_groups();
+        let shown = self.pane_rects(self.last_area).iter().any(|(id, _)| {
+            self.ws
+                .pane(*id)
+                .is_some_and(|p| p.purpose == PanePurpose::Preview)
+                && groups.iter().all(|(members, active)| {
+                    !members.contains(id) || members.get(*active) == Some(id)
+                })
+        });
+        self.preview.set_visible(window_visible && shown, now);
         if !self.has_purpose(PanePurpose::Preview) {
             // Si se quitó el panel Preview, soltar cualquier worker en vuelo.
             self.preview.set_wanted(None, now);
@@ -893,24 +1560,10 @@ impl WorkspaceCtrl {
         // secas): así, hacer clic en el propio panel de Vista previa (o en el Inspector) no
         // vacía la previsualización — el archivo seleccionado se conserva. Fallback al panel
         // activo si todavía no hay un Files recordado.
-        let files_pane = self
-            .last_active_files
-            .and_then(|id| self.ws.pane(id))
-            .and_then(|p| p.files.as_ref())
-            .or_else(|| self.ws.active_files());
-        let focused_file = if self.search_context {
-            self.search_selected_entry()
-                .filter(|e| e.kind != EntryKind::Directory)
-                .map(|e| e.path.clone())
-        } else {
-            self.basket_selected_path().or_else(|| {
-                files_pane
-                    .and_then(|f| f.focused_view_entry())
-                    .filter(|e| e.kind != EntryKind::Directory)
-                    .map(|e| e.path.clone())
-            })
-        };
+        let focused_file = self.metadata_target();
         self.preview.set_wanted(focused_file, now);
+        self.preview
+            .set_economical(self.config.settings.preview_economical, now);
         // El toggle global de auto-resaltado controla al worker: se sincroniza antes de lanzarlo.
         self.preview
             .set_auto_highlight(self.config.settings.auto_highlight_code);
@@ -919,6 +1572,8 @@ impl WorkspaceCtrl {
         // defaults y una extensión nueva como `.sif` nunca se previsualizaba.
         self.preview
             .set_rules(self.config.settings.preview_rules.clone());
+        self.preview
+            .set_text_max_bytes(self.config.settings.preview_text_max_bytes);
         if self.preview.should_start(now) {
             self.preview.start();
         }
@@ -949,9 +1604,9 @@ impl WorkspaceCtrl {
 
     /// Copia el contenido textual ya cargado al portapapeles de Windows. No se pre-copia al
     /// enfocar: copiar debe ser una acción explícita y no debe pisar el portapapeles del usuario.
-    pub fn copy_preview_text(&self, text: &str) {
+    pub fn copy_preview_text(&mut self, text: &str) {
         if !text.is_empty() {
-            let _ = naygo_platform::clipboard::write_text(text);
+            let _ = self.ops.write_clipboard_text(text);
         }
     }
 
@@ -962,6 +1617,267 @@ impl WorkspaceCtrl {
             return false;
         };
         self.refresh_pane(active)
+    }
+
+    /// Reconciliar operaciones terminadas incluso si el watcher no avisó (red/registro tardío).
+    /// Seleccionar creaciones sólo en paneles que aún muestran su destino; nunca navegar ni
+    /// robar foco a otro panel. Todo el I/O queda en los workers de listado.
+    pub fn reconcile_completed_operations(&mut self) {
+        use naygo_core::ops::OpKind;
+        let changes = self.ops.take_completed_changes();
+        if changes.is_empty() {
+            return;
+        }
+        let mut dirs = std::collections::HashSet::new();
+        let mut created = std::collections::HashMap::<PathBuf, Vec<PathBuf>>::new();
+        let mut renames = std::collections::HashMap::<PathBuf, Vec<(PathBuf, PathBuf)>>::new();
+        let mut deep_refresh = false;
+        let mut invalidate_deep_rename = false;
+        let mut deep_renames = Vec::<(PathBuf, PathBuf)>::new();
+        let mut deep_focus = self
+            .deep_job
+            .as_ref()
+            .and_then(|job| job.focused_path.clone());
+        for (req, success, actual_destination) in changes {
+            if let (OpKind::Rename { .. }, true, Some(source), Some(destination)) = (
+                &req.kind,
+                success,
+                req.sources.first(),
+                actual_destination.as_ref(),
+            ) {
+                if let Some(parent) = source.parent() {
+                    if destination.parent() == Some(parent) {
+                        renames
+                            .entry(parent.to_owned())
+                            .or_default()
+                            .push((source.clone(), destination.clone()));
+                    }
+                }
+            }
+            if let Some(job) = self.deep_job.as_ref() {
+                let source_under_root = req
+                    .sources
+                    .iter()
+                    .any(|source| source.starts_with(&job.root));
+                let dest_under_root = req
+                    .dest_dir
+                    .as_ref()
+                    .is_some_and(|dest| dest.starts_with(&job.root));
+                if (matches!(
+                    req.kind,
+                    OpKind::Copy
+                        | OpKind::Move
+                        | OpKind::Compress { .. }
+                        | OpKind::Extract
+                        | OpKind::CreateDir { .. }
+                        | OpKind::CreateFile { .. }
+                ) && dest_under_root)
+                    || (matches!(req.kind, OpKind::Move | OpKind::Duplicate) && source_under_root)
+                {
+                    deep_refresh = true;
+                    if success && matches!(req.kind, OpKind::Move) {
+                        if deep_focus.as_ref().is_some_and(|focus| {
+                            req.sources.iter().any(|source| focus.starts_with(source))
+                        }) {
+                            deep_focus = None;
+                        }
+                        invalidate_deep_rename |=
+                            self.rename_active.as_ref().is_some_and(|active| {
+                                active.pane == job.pane
+                                    && req
+                                        .sources
+                                        .iter()
+                                        .any(|source| active.source.starts_with(source))
+                            });
+                    }
+                }
+            }
+            if let (Some(job), OpKind::Delete { .. }) = (self.deep_job.as_ref(), &req.kind) {
+                if req
+                    .sources
+                    .iter()
+                    .any(|source| source.starts_with(&job.root))
+                {
+                    deep_refresh = true;
+                    if success {
+                        if deep_focus.as_ref().is_some_and(|focus| {
+                            req.sources.iter().any(|source| focus.starts_with(source))
+                        }) {
+                            deep_focus = None;
+                        }
+                        invalidate_deep_rename |=
+                            self.rename_active.as_ref().is_some_and(|active| {
+                                active.pane == job.pane
+                                    && req
+                                        .sources
+                                        .iter()
+                                        .any(|source| active.source.starts_with(source))
+                            });
+                    }
+                }
+            }
+            if let (Some(job), OpKind::Rename { .. }, Some(source)) =
+                (self.deep_job.as_ref(), &req.kind, req.sources.first())
+            {
+                if source.starts_with(&job.root) {
+                    deep_refresh = true;
+                    if success {
+                        if let Some(destination) = actual_destination.as_ref() {
+                            deep_renames.push((source.clone(), destination.clone()));
+                        }
+                        invalidate_deep_rename |=
+                            self.rename_active.as_ref().is_some_and(|active| {
+                                active.pane == job.pane && active.source.starts_with(source)
+                            });
+                        if let Some(focus) = deep_focus.as_ref() {
+                            if let Ok(suffix) = focus.strip_prefix(source) {
+                                deep_focus = actual_destination.as_ref().map(|dest| {
+                                    if suffix.as_os_str().is_empty() {
+                                        dest.clone()
+                                    } else {
+                                        dest.join(suffix)
+                                    }
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+            for source in &req.sources {
+                if let Some(parent) = source.parent() {
+                    dirs.insert(parent.to_path_buf());
+                }
+            }
+            if let Some(dir) = req.dest_dir {
+                if success {
+                    if let OpKind::CreateDir { name } = req.kind {
+                        // En creación anidada se revela el primer nivel visible en este panel.
+                        if let Some(first) = std::path::Path::new(&name).components().next() {
+                            created
+                                .entry(dir.clone())
+                                .or_default()
+                                .push(dir.join(first));
+                        }
+                    }
+                }
+                dirs.insert(dir);
+            }
+        }
+        if deep_refresh {
+            if let Some(job) = self.deep_job.as_mut() {
+                // Los cambios vienen en orden real de ejecución; también trasladar marcas
+                // descendientes de una carpeta renombrada sin inventar éxitos parciales.
+                for (source, destination) in &deep_renames {
+                    // Una carpeta puede trasladar descendientes ya visibles. Mantener la posición
+                    // también mientras el nuevo recorrido resuelve metadata y entradas faltantes.
+                    job.items.retain(|(entry, _)| {
+                        !entry.path.starts_with(destination) || entry.path.starts_with(source)
+                    });
+                    for (entry, _) in job.items.iter_mut() {
+                        if let Ok(suffix) = entry.path.strip_prefix(source) {
+                            if suffix.as_os_str().is_empty() {
+                                entry.path = destination.clone();
+                                entry.name = destination
+                                    .file_name()
+                                    .map(|name| name.to_string_lossy().into_owned())
+                                    .unwrap_or_default();
+                            } else {
+                                entry.path = destination.join(suffix);
+                            }
+                        }
+                    }
+                    job.selected_paths = job
+                        .selected_paths
+                        .drain()
+                        .map(|path| {
+                            path.strip_prefix(source)
+                                .map_or_else(|_| path.clone(), |suffix| destination.join(suffix))
+                        })
+                        .collect();
+                    if let Some(anchor) = job.selection_anchor.as_ref() {
+                        if let Ok(suffix) = anchor.strip_prefix(source) {
+                            job.selection_anchor = Some(destination.join(suffix));
+                        }
+                    }
+                }
+                if !deep_renames.is_empty() {
+                    job.selection_revision = job.selection_revision.wrapping_add(1);
+                }
+            }
+            if let Some(job) = self.deep_job.as_mut() {
+                if let Some(state) = self.creation_selection.get(&job.pane).filter(|state| {
+                    !state.overridden
+                        && self.pending_created_activation.get(&job.pane) == Some(&state.dir)
+                        && state.dir == job.root
+                }) {
+                    if let Some(paths) = created.get(&state.dir) {
+                        for path in paths.iter().filter(|path| state.protects(path)) {
+                            job.selected_paths.insert(path.clone());
+                            if deep_focus.is_none() {
+                                deep_focus = Some(path.clone());
+                                job.selection_anchor = Some(path.clone());
+                            }
+                        }
+                        job.selection_revision = job.selection_revision.wrapping_add(1);
+                    }
+                }
+            }
+            if invalidate_deep_rename {
+                // Una ruta editada bajo la carpeta movida dejó de identificar su entrada original.
+                self.rename_cancel();
+            }
+            // La vista recursiva es una instantánea: los watchers del directorio raíz no
+            // garantizan eventos de subcarpetas. Relistar en worker tras el resultado real.
+            self.restart_deep_listing(deep_focus);
+        }
+        let panes: Vec<_> = self
+            .ws
+            .panes()
+            .iter()
+            .filter_map(|p| {
+                p.files
+                    .as_ref()
+                    .filter(|f| dirs.contains(&f.current_dir))
+                    .map(|f| (p.id, f.current_dir.clone()))
+            })
+            .collect();
+        for (id, dir) in panes {
+            if let Some(moves) = renames.get(&dir) {
+                // Un lote encadenado puede reutilizar un origen. Desechar los avisos de la
+                // generación anterior evita que vuelvan a aplicar el cambio al archivo nuevo.
+                // El registro siguiente solicita su propio snapshot y cubre el intervalo.
+                self.watchers.unwatch(id.0);
+                if let Some(f) = self.ws.pane_mut(id).and_then(|p| p.files.as_mut()) {
+                    f.preserve_context_for_listing();
+                    for (source, destination) in moves {
+                        f.rename_entry(source, destination);
+                    }
+                    f.entries_changed();
+                    f.apply_pending_nav_context();
+                }
+            }
+            if let Some(paths) = created.get(&dir) {
+                let intended: Vec<_> = paths
+                    .iter()
+                    .filter(|path| {
+                        !self.creation_selection.get(&id).is_some_and(|state| {
+                            state.overridden && state.dir == dir && state.protects(path)
+                        })
+                    })
+                    .cloned()
+                    .collect();
+                if !intended.is_empty() {
+                    if let Some(f) = self.ws.pane_mut(id).and_then(|p| p.files.as_mut()) {
+                        f.reveal_after_listing(intended);
+                    }
+                }
+            }
+            self.reconcile_listing(id, dir.clone());
+            self.sync_trees_for_files(id, dir);
+        }
+        for dir in dirs {
+            self.refresh_tree_directory(&dir);
+        }
     }
 
     /// Refrescar sin cambiar foco ni historial; rearmar también un watcher fallido.
@@ -977,6 +1893,11 @@ impl WorkspaceCtrl {
         // F5 re-lista en el mismo sitio: cancela el deep para no mezclar filas.
         self.cancel_deep_if_navigating(active);
         self.watchers.unwatch(active.0);
+        if let Some(f) = self.ws.pane_mut(active).and_then(|p| p.files.as_mut()) {
+            f.preserve_context_for_listing();
+            f.reset_display_order();
+            f.apply_pending_nav_context();
+        }
         self.start_listing(active, dir);
         true
     }
@@ -1000,9 +1921,190 @@ impl WorkspaceCtrl {
     /// Cancela el listado en curso del panel activo (Esc). Lo deja con lo que alcanzó a listar.
     pub fn cancel_active_listing(&mut self) {
         if let Some(active) = self.active_files_id() {
+            self.dirty_listings.remove(&active);
             if let Some(l) = self.listings.get(&active) {
                 l.cancel();
             }
         }
+    }
+}
+
+/// Agrega una fecha opcional a la clave de una fila (sin perder las anteriores a 1970).
+fn add_time_key(h: &mut crate::rows_model::KeyHasher, time: Option<std::time::SystemTime>) {
+    match time.map(|t| t.duration_since(std::time::UNIX_EPOCH)) {
+        None => h.add(0),
+        Some(Ok(d)) => {
+            h.add(1);
+            h.add(d.as_secs());
+            h.add(u64::from(d.subsec_nanos()));
+        }
+        Some(Err(e)) => {
+            h.add(2);
+            h.add(e.duration().as_secs());
+            h.add(u64::from(e.duration().subsec_nanos()));
+        }
+    }
+}
+
+/// Conjunto de pocas rutas para consultarlo una vez por fila de un listado grande. Hashear cada
+/// ruta del listado (`HashSet<&Path>`) o compararla por componentes (`Path == Path` en Windows)
+/// costaba decenas de ms con 100k filas; acá cada fila se descarta comparando los bytes de su
+/// nombre final (`file_name`, que ya ignora un separador o un `.` al final) y solo los candidatos
+/// se comparan como `Path`, con la misma semántica que `Path ==`.
+pub(crate) struct PathProbe<'a> {
+    /// Pocas rutas: (bytes del nombre final, ruta completa).
+    few: Vec<(&'a [u8], &'a Path)>,
+    /// Muchas rutas (p. ej. una sincronización masiva): índice por nombre final.
+    many: Option<HashMap<&'a [u8], Vec<&'a Path>>>,
+}
+
+impl<'a> PathProbe<'a> {
+    const FEW: usize = 16;
+
+    pub(crate) fn new(paths: impl IntoIterator<Item = &'a Path>) -> PathProbe<'a> {
+        let tail =
+            |p: &'a Path| -> &'a [u8] { p.file_name().unwrap_or(p.as_os_str()).as_encoded_bytes() };
+        let mut few: Vec<(&'a [u8], &'a Path)> = paths.into_iter().map(|p| (tail(p), p)).collect();
+        few.sort_unstable();
+        few.dedup();
+        if few.len() <= Self::FEW {
+            return PathProbe { few, many: None };
+        }
+        let mut many: HashMap<&'a [u8], Vec<&'a Path>> = HashMap::new();
+        for (name, path) in few {
+            many.entry(name).or_default().push(path);
+        }
+        PathProbe {
+            few: Vec::new(),
+            many: Some(many),
+        }
+    }
+
+    pub(crate) fn contains(&self, path: &Path) -> bool {
+        if let Some(many) = &self.many {
+            let name = path
+                .file_name()
+                .unwrap_or(path.as_os_str())
+                .as_encoded_bytes();
+            return many.get(name).is_some_and(|paths| paths.contains(&path));
+        }
+        if self.few.is_empty() {
+            return false;
+        }
+        let name = path
+            .file_name()
+            .unwrap_or(path.as_os_str())
+            .as_encoded_bytes();
+        self.few
+            .iter()
+            .any(|(wanted, full)| *wanted == name && *full == path)
+    }
+}
+
+#[cfg(test)]
+mod path_probe_tests {
+    use super::PathProbe;
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn encuentra_solo_rutas_exactas_con_pocas_y_muchas() {
+        let dir = Path::new(r"C:\datos");
+        for count in [1usize, 3, 40] {
+            let wanted: Vec<PathBuf> = (0..count).map(|i| dir.join(format!("f{i}.txt"))).collect();
+            let probe = PathProbe::new(wanted.iter().map(PathBuf::as_path));
+            for path in &wanted {
+                assert!(probe.contains(path), "{count}: {path:?}");
+            }
+            // Mismo nombre final en otra carpeta, y nombre que es sufijo de otro.
+            assert!(!probe.contains(&Path::new(r"C:\otra").join("f0.txt")));
+            assert!(!probe.contains(&dir.join("xf0.txt")));
+            assert!(!probe.contains(&dir.join("nada.txt")));
+        }
+        assert!(!PathProbe::new(std::iter::empty()).contains(Path::new("C:/a")));
+    }
+
+    /// Misma semántica que `Path ==`: un separador o un `.` al final no cambian la ruta.
+    #[test]
+    fn separador_o_punto_final_equivalen_como_en_path_eq() {
+        for count in [1usize, 40] {
+            let wanted: Vec<PathBuf> = (0..count)
+                .map(|i| PathBuf::from(format!(r"C:\d\f{i}.txt")))
+                .collect();
+            let probe = PathProbe::new(wanted.iter().map(PathBuf::as_path));
+            for spelled in [r"C:\d\f0.txt\", r"C:\d\f0.txt\.", r"C:/d/f0.txt"] {
+                let candidate = Path::new(spelled);
+                assert_eq!(candidate, wanted[0].as_path(), "premisa: {spelled}");
+                assert!(probe.contains(candidate), "{count}: {spelled}");
+            }
+            // Y al revés: la ruta buscada con separador final encuentra la del listado.
+            let trailing = PathBuf::from(r"C:\d\g.txt\");
+            let probe = PathProbe::new([trailing.as_path()]);
+            assert!(probe.contains(Path::new(r"C:\d\g.txt")));
+        }
+    }
+}
+
+#[cfg(test)]
+mod listing_probe_tests {
+    use super::{footer_disk_query_has_slot, insert_bounded_disk_usage, WorkspaceCtrl};
+    use std::{
+        collections::{HashMap, HashSet},
+        path::PathBuf,
+    };
+
+    #[test]
+    fn cache_de_espacio_no_supera_el_limite_y_acepta_la_ruta_actualizada() {
+        let mut cache = HashMap::new();
+        let usage = naygo_core::disk::DiskUsage {
+            total: 100,
+            free: 50,
+        };
+        insert_bounded_disk_usage(&mut cache, PathBuf::from("/a"), usage, 2);
+        insert_bounded_disk_usage(&mut cache, PathBuf::from("/b"), usage, 2);
+        insert_bounded_disk_usage(&mut cache, PathBuf::from("/c"), usage, 2);
+        assert_eq!(cache.len(), 2);
+        insert_bounded_disk_usage(
+            &mut cache,
+            PathBuf::from("/c"),
+            naygo_core::disk::DiskUsage {
+                total: 200,
+                free: 75,
+            },
+            2,
+        );
+        assert_eq!(cache.len(), 2);
+        assert_eq!(cache.get(&PathBuf::from("/c")).unwrap().free, 75);
+    }
+
+    #[test]
+    fn consultas_de_espacio_respetan_tope_sin_bloquear_ruta_ya_pendiente() {
+        let pending = HashSet::from([PathBuf::from("/a"), PathBuf::from("/b")]);
+        assert!(!footer_disk_query_has_slot(
+            &pending,
+            std::path::Path::new("/c"),
+            2
+        ));
+        assert!(footer_disk_query_has_slot(
+            &pending,
+            std::path::Path::new("/a"),
+            2
+        ));
+        assert!(footer_disk_query_has_slot(
+            &pending,
+            std::path::Path::new("/c"),
+            3
+        ));
+    }
+
+    #[test]
+    fn permiso_denegado_no_se_diagnostica_como_carpeta_ausente() {
+        let error = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        assert_eq!(WorkspaceCtrl::missing_from_probe_error(&error), None);
+    }
+
+    #[test]
+    fn ruta_inexistente_se_diagnostica_como_carpeta_ausente() {
+        let error = std::io::Error::from(std::io::ErrorKind::NotFound);
+        assert_eq!(WorkspaceCtrl::missing_from_probe_error(&error), Some(true));
     }
 }

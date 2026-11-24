@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 use super::*;
+use std::time::Instant;
 
 impl WorkspaceCtrl {
     /// Filas del árbol del panel `id` (aplanadas con sangría). Vacío si el panel no tiene
@@ -53,10 +54,14 @@ impl WorkspaceCtrl {
     /// Navega desde un árbol. Los árboles dedicados operan exclusivamente sobre su Files;
     /// los comunes conservan el comportamiento clásico sobre el último Files activo.
     pub fn navigate_tree_to(&mut self, tree: PaneId, dir: PathBuf) -> bool {
-        let Some(files) = self.ws.linked_files(tree).or(self.last_active_files) else {
+        let Some(files) = self.files_for_tree(tree) else {
             return false;
         };
         self.navigate_files_to(files, dir)
+    }
+
+    fn files_for_tree(&self, tree: PaneId) -> Option<PaneId> {
+        self.ws.linked_files(tree).or(self.last_active_files)
     }
 
     fn navigate_files_to(&mut self, active_files_id: PaneId, dir: PathBuf) -> bool {
@@ -126,10 +131,7 @@ impl WorkspaceCtrl {
             .trees
             .keys()
             .copied()
-            .filter(|tree| match self.ws.linked_files(*tree) {
-                Some(target) => target == files,
-                None => self.last_active_files == Some(files),
-            })
+            .filter(|tree| self.files_for_tree(*tree) == Some(files))
             .collect();
         for id in &ids {
             if let Some(t) = self.trees.get_mut(id) {
@@ -143,6 +145,34 @@ impl WorkspaceCtrl {
             self.reveal_targets.insert(*id, dir.clone());
         }
         self.pump_reveal();
+    }
+
+    /// Al reintentar una carpeta ausente, el árbol puede conservar un listado hecho durante
+    /// la desconexión. Actualiza el ancestro cacheado más cercano en los árboles que siguen el panel
+    /// antes de pedir el reveal habitual. El resto de las ramas sigue usando su caché.
+    pub(super) fn retry_trees_for_files(&mut self, files: PaneId, dir: PathBuf) {
+        let branches: Vec<_> = self
+            .trees
+            .iter()
+            .filter(|(id, tree)| {
+                self.files_for_tree(**id) == Some(files) && tree.node_at(&dir).is_none()
+            })
+            .filter_map(|(id, tree)| {
+                tree.reveal_chain(&dir)
+                    .into_iter()
+                    .rev()
+                    .find(|path| {
+                        tree.node_at(path)
+                            .is_some_and(|node| node.children.is_some())
+                    })
+                    .map(|path| (*id, path))
+            })
+            .collect();
+        for (id, path) in branches {
+            self.schedule_tree_branch_refresh(id, &path);
+        }
+        self.pump_tree_refresh();
+        self.sync_trees_for_files(files, dir);
     }
 
     /// Alterna entre árbol común y dedicado. Al enlazar usa el último Files activo, que es
@@ -233,8 +263,15 @@ impl WorkspaceCtrl {
             });
             if let Some(p) = next.cloned() {
                 self.tree_expand(id, p);
-            } else {
-                // Ningún ancestro pendiente existe aún (esperando que cargue un padre): no-op.
+            } else if !self
+                .tree_listings
+                .keys()
+                .chain(self.pending_tree_listings.iter())
+                .any(|(pane, path)| *pane == id && chain.contains(path))
+            {
+                // Un ancestro que terminó sin ese hijo no podrá revelarlo. El panel de archivos
+                // conserva su ruta y estado; el árbol deja de pedir ticks por esa rama.
+                self.reveal_targets.remove(&id);
             }
         }
     }
@@ -244,7 +281,8 @@ impl WorkspaceCtrl {
     /// Expande la rama `path` del árbol del panel `id`: si ya tiene hijos, solo reabre
     /// (sin re-listar); si no, marca Loading y arranca un worker solo-directorios.
     pub fn tree_expand(&mut self, id: PaneId, path: PathBuf) {
-        if self.tree_listings.contains_key(&(id, path.clone())) {
+        let key = (id, path.clone());
+        if self.tree_listings.contains_key(&key) || self.pending_tree_listings.contains(&key) {
             return;
         }
         let already_loaded = self
@@ -260,16 +298,58 @@ impl WorkspaceCtrl {
             }
             t.begin_loading(&path);
         }
-        self.tree_listings
-            .insert((id, path.clone()), Listing::start_dirs_only(path));
+        self.queue_tree_listing(id, path);
+    }
+
+    fn queue_tree_listing(&mut self, id: PaneId, path: PathBuf) {
+        let key = (id, path.clone());
+        if self.tree_listings.contains_key(&key) {
+            self.pending_tree_listings.remove(&key);
+            return;
+        }
+        match Listing::try_start(
+            path.clone(),
+            self.listing_admission_for(&path),
+            naygo_core::listing::ListingFilter::DirsOnly,
+        ) {
+            Ok(listing) => {
+                self.pending_tree_listings.remove(&key);
+                self.tree_listings.insert(key, listing);
+            }
+            Err(naygo_core::listing::ListingStartError::Capacity) => {
+                self.pending_tree_listings.insert(key);
+            }
+            Err(naygo_core::listing::ListingStartError::Spawn(error)) => {
+                crate::logging::log_line(&format!("no se pudo iniciar listado del árbol: {error}"));
+                if let Some(tree) = self.trees.get_mut(&id) {
+                    tree.finish_loading(&path, naygo_core::tree::NodeOutcome::Error);
+                }
+            }
+        }
+    }
+
+    fn start_pending_tree_listings(&mut self) {
+        let mut keys: Vec<_> = self.pending_tree_listings.iter().cloned().collect();
+        keys.sort_by(|a, b| a.0 .0.cmp(&b.0 .0).then_with(|| a.1.cmp(&b.1)));
+        for (id, path) in keys {
+            self.pending_tree_listings.remove(&(id, path.clone()));
+            self.queue_tree_listing(id, path);
+            // Con dos cupos, una rama remota sin plaza no frena a las locales que siguen.
+            if !self.listing_admissions.any_capacity() {
+                break;
+            }
+        }
     }
 
     /// Colapsa la rama `path` del panel `id`: cancela su worker si está en vuelo.
     pub fn tree_collapse(&mut self, id: PaneId, path: PathBuf) {
+        self.pending_tree_listings.remove(&(id, path.clone()));
         // Un colapso explícito cancela también la restauración de sus descendientes.
         if let Some(pending) = self.tree_refresh_pending.get_mut(&id) {
             pending.retain(|p| !p.starts_with(&path));
         }
+        self.pending_tree_listings
+            .retain(|(pane, pending)| *pane != id || !pending.starts_with(&path));
         if let Some(l) = self.tree_listings.remove(&(id, path.clone())) {
             l.cancel();
         }
@@ -330,6 +410,7 @@ impl WorkspaceCtrl {
                 None => continue,
             };
             to_reload.extend(self.tree_refresh_pending.remove(&id).unwrap_or_default());
+            self.pending_tree_listings.retain(|(pane, _)| *pane != id);
             to_reload.sort();
             to_reload.dedup();
             to_reload.sort_by_key(|p| p.components().count());
@@ -347,6 +428,46 @@ impl WorkspaceCtrl {
             self.tree_refresh_pending.insert(id, to_reload);
         }
         self.pump_tree_refresh();
+    }
+
+    /// Invalidar sólo la rama afectada y conservar sus descendientes expandidos.
+    /// También recarga nodos cerrados ya cacheados para no reaparecer con hijos viejos.
+    pub(super) fn refresh_tree_directory(&mut self, dir: &std::path::Path) {
+        let ids: Vec<_> = self.trees.keys().copied().collect();
+        for id in ids {
+            self.schedule_tree_branch_refresh(id, dir);
+        }
+        self.pump_tree_refresh();
+    }
+
+    fn schedule_tree_branch_refresh(&mut self, id: PaneId, dir: &Path) {
+        let Some(tree) = self.trees.get_mut(&id) else {
+            return;
+        };
+        let Some(node) = tree.node_at_mut(dir) else {
+            return;
+        };
+        if !node.expanded {
+            node.children = None;
+            return;
+        }
+        let mut paths: Vec<_> = tree
+            .flat_paths()
+            .into_iter()
+            .filter(|p| p.starts_with(dir) && tree.node_at(p).is_some_and(|n| n.expanded))
+            .collect();
+        paths.push(dir.to_path_buf());
+        for path in &paths {
+            self.pending_tree_listings.remove(&(id, path.clone()));
+            if let Some(job) = self.tree_listings.remove(&(id, path.clone())) {
+                job.cancel();
+            }
+        }
+        let pending = self.tree_refresh_pending.entry(id).or_default();
+        pending.extend(paths);
+        pending.sort();
+        pending.dedup();
+        pending.sort_by_key(|p| p.components().count());
     }
 
     /// Restaurar de padre a hijo conforme llegan nodos. Recargar todos de golpe borraba
@@ -370,16 +491,20 @@ impl WorkspaceCtrl {
                     continue;
                 }
                 let key = (id, path.clone());
-                if let std::collections::hash_map::Entry::Vacant(job) =
-                    self.tree_listings.entry(key)
-                {
+                if !self.tree_listings.contains_key(&key) {
                     self.trees.get_mut(&id).unwrap().begin_loading(&path);
-                    job.insert(Listing::start_dirs_only(path));
+                    self.queue_tree_listing(id, path);
                 }
             }
             // Si ya no hay workers capaces de traer esos nodos, desaparecieron, están
             // ocultos o son inaccesibles. No mantener el timer activo indefinidamente.
-            if !waiting.is_empty() && self.tree_listings.keys().any(|(pane, _)| *pane == id) {
+            if !waiting.is_empty()
+                && (self.tree_listings.keys().any(|(pane, _)| *pane == id)
+                    || self
+                        .pending_tree_listings
+                        .iter()
+                        .any(|(pane, _)| *pane == id))
+            {
                 self.tree_refresh_pending.insert(id, waiting);
             }
         }
@@ -470,18 +595,39 @@ impl WorkspaceCtrl {
 
     /// Drena los workers de árbol en vuelo (asocia hijos por path). Devuelve true si NO
     /// queda ninguno (para que el timer pueda apagarse). Quita los terminados.
+    #[cfg(test)]
     pub fn pump_tree(&mut self) -> bool {
+        let mut budget = crate::listing::PollBudget::new();
+        let mut allowance = 1_024;
+        self.pump_tree_with_budget(&mut budget, &mut allowance)
+    }
+
+    pub(crate) fn pump_tree_with_budget(
+        &mut self,
+        budget: &mut crate::listing::PollBudget,
+        allowance: &mut usize,
+    ) -> bool {
+        self.start_pending_tree_listings();
         // Flags de visibilidad: el árbol esconde las subcarpetas ocultas/sistema/dotfile
         // igual que el panel. Se leen una vez (los `push_child` van detrás de `get_mut`).
         let vis = self.visibility_flags();
-        let keys: Vec<(PaneId, PathBuf)> = self.tree_listings.keys().cloned().collect();
+        let mut keys: Vec<(PaneId, PathBuf)> = self.tree_listings.keys().cloned().collect();
+        if !keys.is_empty() {
+            let start = self.tree_listing_cursor % keys.len();
+            keys.rotate_left(start);
+            self.tree_listing_cursor = (start + 1) % keys.len();
+        }
         for key in keys {
-            let (batch, done) = match self.tree_listings.get(&key) {
+            if *allowance == 0 || budget.remaining_entries == 0 || Instant::now() >= budget.deadline
+            {
+                break;
+            }
+            let (batch, done) = match self.tree_listings.get_mut(&key) {
                 // El tercer valor del poll (éxito) no aplica al árbol: una rama ilegible
                 // simplemente no muestra hijos.
                 Some(l) => {
-                    let (b, d, _ok) = l.poll();
-                    (b, d)
+                    let (b, terminal) = l.poll_with_shared_budget(budget, allowance);
+                    (b, terminal)
                 }
                 None => continue,
             };
@@ -502,11 +648,17 @@ impl WorkspaceCtrl {
                     }
                     t.push_child(parent, e.path);
                 }
-                if done {
-                    t.finish_loading(parent, naygo_core::tree::NodeOutcome::Done);
+                if let Some(outcome) = done.as_ref() {
+                    let node_outcome =
+                        if matches!(outcome, naygo_core::listing::ListingOutcome::Complete) {
+                            naygo_core::tree::NodeOutcome::Done
+                        } else {
+                            naygo_core::tree::NodeOutcome::Error
+                        };
+                    t.finish_loading(parent, node_outcome);
                 }
             }
-            if done {
+            if done.is_some() {
                 self.tree_listings.remove(&key);
             }
         }
@@ -519,6 +671,7 @@ impl WorkspaceCtrl {
         // No dejar dormir el timer mientras haya workers en vuelo O un reveal pendiente (sus
         // ramas se cargan en ticks sucesivos).
         self.tree_listings.is_empty()
+            && self.pending_tree_listings.is_empty()
             && self.reveal_targets.is_empty()
             && self.tree_refresh_pending.is_empty()
     }

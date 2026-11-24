@@ -1,0 +1,512 @@
+// Naygo — panel Preview (Fase 2b): vista previa liviana de texto/imagen.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
+//
+// El contenido lo calcula un worker en Rust (con debounce 150 ms y cancelación); aquí
+// solo se pinta según `mode`: 0=vacío 1=texto 2=imagen 3=mensaje. En modo texto, si la regla
+// forzó un lenguaje, se pinta el código resaltado (un Text por segmento); si no, texto plano.
+import { ScrollView } from "std-widgets.slint";
+import { PreviewVm, MetaFieldVm } from "types.slint";
+import { Tr } from "i18n.slint";
+import { Theme } from "theme.slint";
+
+// Ícono "abrir con el programa del sistema": un rectángulo con una flecha saliente, dibujado con
+// Path (no glifo de fuente, que bajo render por software puede no existir y salir invisible).
+component OpenExternalIcon inherits Rectangle {
+    in property <color> tint: Theme.text;
+    in property <length> size: 13px;
+    // Recuadro (la "ventana").
+    Path {
+        width: root.size;
+        height: root.size;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        stroke: root.tint;
+        stroke-width: 1.4px;
+        viewbox-width: 12;
+        viewbox-height: 12;
+        // Caja abierta por la esquina superior derecha.
+        MoveTo { x: 7; y: 1; }
+        LineTo { x: 1; y: 1; }
+        LineTo { x: 1; y: 11; }
+        LineTo { x: 11; y: 11; }
+        LineTo { x: 11; y: 5; }
+    }
+    // Flecha que sale hacia afuera.
+    Path {
+        width: root.size;
+        height: root.size;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        stroke: root.tint;
+        stroke-width: 1.4px;
+        viewbox-width: 12;
+        viewbox-height: 12;
+        MoveTo { x: 5; y: 7; }
+        LineTo { x: 11; y: 1; }
+        MoveTo { x: 7.5; y: 1; }
+        LineTo { x: 11; y: 1; }
+        LineTo { x: 11; y: 4.5; }
+    }
+}
+
+// Dos hojas superpuestas: copiar el contenido textual sin depender de glifos de fuente.
+component CopyIcon inherits Rectangle {
+    in property <color> tint: Theme.text;
+    in property <length> size: 13px;
+    Path {
+        width: root.size; height: root.size;
+        x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+        stroke: root.tint; stroke-width: 1.3px; viewbox-width: 12; viewbox-height: 12;
+        MoveTo { x: 4; y: 1; } LineTo { x: 11; y: 1; } LineTo { x: 11; y: 9; }
+        LineTo { x: 4; y: 9; } LineTo { x: 4; y: 1; }
+        MoveTo { x: 2; y: 3; } LineTo { x: 2; y: 11; } LineTo { x: 9; y: 11; }
+    }
+}
+
+// Borde de papel rasgado para indicar que el texto termina aquí sólo porque la vista previa está
+// acotada. Es vectorial (Path), por lo que no agrega recursos ni peso al binario.
+component TruncatedPaperEdge inherits Rectangle {
+    height: 30px;
+    background: transparent;
+    Path {
+        x: 0px; y: 1px; width: parent.width; height: 8px;
+        stroke: Theme.text-dim.with-alpha(0.72);
+        stroke-width: 1px;
+        viewbox-width: 80;
+        viewbox-height: 8;
+        MoveTo { x: 0; y: 3; } LineTo { x: 5; y: 6; } LineTo { x: 10; y: 2; }
+        LineTo { x: 15; y: 6; } LineTo { x: 20; y: 2; } LineTo { x: 25; y: 6; }
+        LineTo { x: 30; y: 2; } LineTo { x: 35; y: 6; } LineTo { x: 40; y: 2; }
+        LineTo { x: 45; y: 6; } LineTo { x: 50; y: 2; } LineTo { x: 55; y: 6; }
+        LineTo { x: 60; y: 2; } LineTo { x: 65; y: 6; } LineTo { x: 70; y: 2; }
+        LineTo { x: 75; y: 6; } LineTo { x: 80; y: 3; }
+    }
+    Text {
+        y: 11px;
+        text: Tr.preview-truncated;
+        color: Theme.text-dim;
+        font-size: 11px;
+        horizontal-alignment: center;
+    }
+}
+
+// Flecha circular: devuelve el modelo 3D a su orientación y zoom iniciales.
+component ResetViewIcon inherits Rectangle {
+    in property <color> tint: Theme.text;
+    in property <length> size: 13px;
+    Path {
+        width: root.size; height: root.size;
+        x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+        stroke: root.tint; stroke-width: 1.3px; viewbox-width: 12; viewbox-height: 12;
+        MoveTo { x: 10; y: 4; } CubicTo { control-1-x: 8; control-1-y: 0.5; control-2-x: 2; control-2-y: 1; x: 2; y: 6; }
+        CubicTo { control-1-x: 2; control-1-y: 10; control-2-x: 7; control-2-y: 12; x: 10; y: 8; }
+        MoveTo { x: 10; y: 4; } LineTo { x: 10; y: 1; } MoveTo { x: 10; y: 4; } LineTo { x: 7; y: 4; }
+    }
+}
+
+export component PreviewPanel inherits Rectangle {
+    in property <bool> active;
+    in property <PreviewVm> view;
+    callback focus-pane();   // marcar este panel como activo al hacer clic en cualquier parte
+    callback open-in-system();   // abrir el archivo previsualizado con el programa por defecto
+    callback mesh-orbit(float, float); // delta de arrastre para STL/3MF
+    callback mesh-zoom(float);         // rueda/touchpad para STL/3MF
+    callback reset-mesh();              // volver a la cámara inicial
+    callback cycle-color();
+    callback cycle-surface();
+    callback cancel-preview();          // cancelar inmediatamente, incluso con miniatura
+    callback retry-preview();
+    callback toggle-animation();
+    callback copy-text(string);         // copiar contenido textual ya cargado
+    callback hover-tip(string, length, length);   // tooltip flotante (texto, x centrada, y borde inferior) → AppWindow
+    // El wrap parte activado para que los textos siempre sean legibles en paneles angostos. El
+    // usuario puede apagarlo temporalmente si necesita respetar columnas/indentación exacta.
+    property <bool> wrap-text: true;
+    // Las imágenes parten ajustadas, como hasta ahora. El segundo modo mantiene exactamente sus
+    // píxeles rasterizados y deja que ScrollView aparezca solo si no caben en el panel.
+    in-out property <bool> fit-image: true;
+    background: Theme.active-panel-bg;
+    border-width: 1px;
+    border-color: root.active ? Theme.active-pane-border : Theme.divider;
+
+    // TouchArea de fondo: un clic en el cuerpo (texto, imagen o zona vacía) marca el panel
+    // como activo. Va PRIMERO (al fondo) para que el ScrollView del modo texto siga
+    // recibiendo sus propios gestos por encima.
+    bg-touch := TouchArea {
+        clicked => { root.focus-pane(); }
+    }
+
+    VerticalLayout {
+        padding: 6px;
+        spacing: 4px;
+        // Barra de título: rótulo + (si hay archivo) botón "abrir con el sistema".
+        HorizontalLayout {
+            height: 20px;
+            spacing: 6px;
+            // El rótulo interno muestra el PATH del archivo en preview (recortado con elipsis si
+            // no cabe), no un segundo "Vista previa" redundante con la pestaña. Sin archivo,
+            // cae al título genérico.
+            Text {
+                text: root.view.path != "" ? root.view.path : Tr.preview-title;
+                color: Theme.text-dim;
+                font-weight: 700;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+                overflow: elide;
+            }
+            // Cancelar no espera cinco segundos ni desaparece si ya existe una miniatura.
+            if root.view.loading: Text {
+                text: Tr.preview-loading;
+                color: Theme.text-dim;
+                font-size: Theme.font-xs;
+                vertical-alignment: center;
+            }
+            if root.view.can-cancel: Rectangle {
+                width: 52px;
+                height: 20px;
+                accessible-role: button;
+                accessible-label: Tr.preview-cancel;
+                accessible-action-default => { root.cancel-preview(); }
+                background: cancel-touch.has-hover ? Theme.error.brighter(12%) : Theme.error;
+                border-radius: Theme.radius-sm;
+                Text { text: Tr.preview-cancel; color: #ffffff; font-size: Theme.font-xs; horizontal-alignment: center; vertical-alignment: center; }
+                cancel-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.cancel-preview(); }
+                    changed has-hover => { root.hover-tip(self.has-hover ? Tr.preview-cancel-tip : "", self.absolute-position.x + self.width / 2, self.absolute-position.y + self.height); }
+                }
+            }
+            if root.view.can-retry: Rectangle {
+                width: max(66px, retry-label.preferred-width + 12px); height: 20px;
+                accessible-role: button;
+                accessible-label: Tr.missing-retry;
+                accessible-action-default => { root.retry-preview(); }
+                background: retry-touch.has-hover ? Theme.hover-bg : Theme.surface-raised;
+                border-radius: Theme.radius-sm;
+                retry-label := Text { text: Tr.missing-retry; color: Theme.text; font-size: Theme.font-xs; horizontal-alignment: center; vertical-alignment: center; }
+                retry-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.retry-preview(); }
+                    changed has-hover => { root.hover-tip(self.has-hover ? Tr.missing-retry : "", self.absolute-position.x + self.width / 2, self.absolute-position.y + self.height); }
+                }
+            }
+            if root.view.animation-state > 0: Rectangle {
+                width: max(65px, animation-label.preferred-width + 12px); height: 20px;
+                property <string> action-label: root.view.animation-state == 1 ? Tr.preview-animation-pause
+                    : root.view.animation-state == 2 ? Tr.preview-animation-resume : Tr.preview-animation-repeat;
+                background: animation-touch.has-hover ? Theme.hover-bg : Theme.surface-raised;
+                border-radius: Theme.radius-sm;
+                accessible-role: button;
+                accessible-label: self.action-label;
+                accessible-action-default => { root.toggle-animation(); }
+                animation-label := Text { text: parent.action-label; color: Theme.text; font-size: Theme.font-xs;
+                    horizontal-alignment: center; vertical-alignment: center; }
+                animation-focus := FocusScope {
+                    key-pressed(event) => {
+                        if event.text == " " || event.text == "\n" { root.toggle-animation(); return accept; }
+                        return reject;
+                    }
+                }
+                animation-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { animation-focus.focus(); root.toggle-animation(); }
+                    changed has-hover => { root.hover-tip(self.has-hover ? parent.action-label : "",
+                        self.absolute-position.x + self.width / 2, self.absolute-position.y + self.height); }
+                }
+            }
+            // Copiar el texto completo. No se toca el portapapeles al enfocar un archivo: es una
+            // acción explícita, predecible y útil aun en el renderer por software.
+            if root.view.mode == 1: Rectangle {
+                width: 26px; height: 20px;
+                accessible-role: button;
+                accessible-label: Tr.preview-copy-tip;
+                accessible-action-default => { root.copy-text(root.view.text); }
+                background: copy-touch.has-hover ? Theme.hover-bg : transparent;
+                border-radius: Theme.radius-sm;
+                CopyIcon { width: 100%; height: 100%; tint: copy-touch.has-hover ? Theme.text : Theme.text-dim; }
+                copy-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.copy-text(root.view.text); }
+                    changed has-hover => { root.hover-tip(self.has-hover ? Tr.preview-copy-tip : "", self.absolute-position.x + self.width / 2, self.absolute-position.y + self.height); }
+                }
+            }
+            // El botón de wrap es un control de lectura, no modifica el archivo ni la configuración.
+            if root.view.mode == 1: Rectangle {
+                width: 26px; height: 20px;
+                property <string> action-label: root.wrap-text ? Tr.preview-wrap-off-tip : Tr.preview-wrap-on-tip;
+                accessible-role: button;
+                accessible-label: self.action-label;
+                accessible-checked: root.wrap-text;
+                accessible-action-default => { root.wrap-text = !root.wrap-text; }
+                background: wrap-touch.has-hover ? Theme.hover-bg : transparent;
+                border-radius: Theme.radius-sm;
+                Text { text: root.wrap-text ? "↵" : "→"; color: wrap-touch.has-hover ? Theme.text : Theme.text-dim; horizontal-alignment: center; vertical-alignment: center; }
+                wrap-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.wrap-text = !root.wrap-text; }
+                    changed has-hover => { root.hover-tip(self.has-hover ? (root.wrap-text ? Tr.preview-wrap-off-tip : Tr.preview-wrap-on-tip) : "", self.absolute-position.x + self.width / 2, self.absolute-position.y + self.height); }
+                }
+            }
+            // Escala de imágenes estáticas. Las mallas siguen teniendo sus propios gestos de
+            // cámara; no se mezclan con este control de tamaño natural.
+            // Un único conmutador de escala: muestra el modo activo (↔ ajustada, 1:1 natural)
+            // y alterna al otro. Evita dos botones que representaban estados mutuamente excluyentes.
+            if root.view.mode == 2 && !root.view.mesh-interactive: Rectangle {
+                width: 26px; height: 20px;
+                property <string> action-label: root.fit-image ? Tr.preview-image-natural-tip : Tr.preview-image-fit-tip;
+                accessible-role: button;
+                accessible-label: self.action-label;
+                accessible-checked: root.fit-image;
+                accessible-action-default => { root.fit-image = !root.fit-image; }
+                background: image-scale-touch.has-hover ? Theme.hover-bg : transparent;
+                border-radius: Theme.radius-sm;
+                Text {
+                    text: root.fit-image ? "↔" : "1:1";
+                    color: image-scale-touch.has-hover ? Theme.text : Theme.text-dim;
+                    font-size: root.fit-image ? Theme.font-md : Theme.font-xs;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+                image-scale-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.fit-image = !root.fit-image; }
+                    // El símbolo muestra el estado actual; el tooltip describe la acción siguiente.
+                    changed has-hover => {
+                        root.hover-tip(
+                            self.has-hover
+                                ? (root.fit-image ? Tr.preview-image-natural-tip : Tr.preview-image-fit-tip)
+                                : "",
+                            self.absolute-position.x + self.width / 2,
+                            self.absolute-position.y + self.height
+                        );
+                    }
+                }
+            }
+            if root.view.mode == 2 && root.view.mesh-interactive: Rectangle {
+                width: 26px; height: 20px;
+                property <string> tip: Tr.preview-mesh-color + ": " + (root.view.mesh-color == 0 ? Tr.preview-mesh-blue : root.view.mesh-color == 1 ? Tr.preview-mesh-white : root.view.mesh-color == 2 ? Tr.preview-mesh-warm : Tr.preview-mesh-source);
+                accessible-role: button;
+                accessible-label: self.tip;
+                accessible-action-default => { root.cycle-color(); }
+                background: mesh-color-touch.has-hover ? Theme.hover-bg : transparent;
+                border-radius: Theme.radius-sm;
+                Rectangle {
+                    width: 12px; height: 12px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                    background: root.view.mesh-color == 0 ? #75b5de : root.view.mesh-color == 1 ? #eeeeee : root.view.mesh-color == 2 ? #d6a273 : #80c68c;
+                    border-width: 1px; border-color: Theme.text; border-radius: 6px;
+                }
+                mesh-color-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.cycle-color(); }
+                    changed has-hover => { root.hover-tip(self.has-hover ? parent.tip : "", self.absolute-position.x + self.width / 2, self.absolute-position.y + self.height); }
+                }
+            }
+            if root.view.mode == 2 && root.view.mesh-interactive: Rectangle {
+                width: 26px; height: 20px;
+                property <string> tip: Tr.preview-mesh-surface + ": " + (root.view.mesh-surface == 0 ? Tr.preview-mesh-solid : root.view.mesh-surface == 1 ? Tr.preview-mesh-edges : Tr.preview-mesh-wire);
+                accessible-role: button;
+                accessible-label: self.tip;
+                accessible-action-default => { root.cycle-surface(); }
+                background: mesh-surface-touch.has-hover ? Theme.hover-bg : transparent;
+                border-radius: Theme.radius-sm;
+                Text { text: root.view.mesh-surface == 0 ? "◆" : root.view.mesh-surface == 1 ? "▧" : "◇"; color: Theme.text; horizontal-alignment: center; vertical-alignment: center; }
+                mesh-surface-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.cycle-surface(); }
+                    changed has-hover => { root.hover-tip(self.has-hover ? parent.tip : "", self.absolute-position.x + self.width / 2, self.absolute-position.y + self.height); }
+                }
+            }
+            if root.view.mode == 2 && root.view.mesh-interactive: Rectangle {
+                width: 26px; height: 20px;
+                accessible-role: button;
+                accessible-label: Tr.preview-reset-view-tip;
+                accessible-action-default => { root.reset-mesh(); }
+                background: reset-touch.has-hover ? Theme.hover-bg : transparent;
+                border-radius: Theme.radius-sm;
+                ResetViewIcon { width: 100%; height: 100%; tint: reset-touch.has-hover ? Theme.text : Theme.text-dim; }
+                reset-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.reset-mesh(); }
+                    changed has-hover => { root.hover-tip(self.has-hover ? Tr.preview-reset-view-tip : "", self.absolute-position.x + self.width / 2, self.absolute-position.y + self.height); }
+                }
+            }
+            // Botón abrir con el programa del sistema (visible cuando hay algo en preview).
+            if root.view.mode != 0: Rectangle {
+                width: 26px;
+                height: 20px;
+                accessible-role: button;
+                accessible-label: Tr.preview-open-tip;
+                accessible-action-default => { root.open-in-system(); }
+                background: open-touch.has-hover ? Theme.hover-bg : transparent;
+                border-radius: Theme.radius-sm;
+                OpenExternalIcon {
+                    width: 100%;
+                    height: 100%;
+                    tint: open-touch.has-hover ? Theme.text : Theme.text-dim;
+                }
+                open-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.open-in-system(); }
+                    changed has-hover => {
+                        root.hover-tip(self.has-hover ? Tr.preview-open-tip : "",
+                            self.absolute-position.x + self.width / 2,
+                            self.absolute-position.y + self.height);
+                    }
+                }
+            }
+        }
+
+        // (La metadata por tipo ya se muestra en Propiedades; no se repite en la Vista previa para
+        // no duplicar la misma información — Nicolás lo pidió así.)
+
+        if root.view.mode == 0: Text {
+            text: root.view.loading ? Tr.preview-loading : Tr.preview-select;
+            color: Theme.text-dim;
+            vertical-alignment: center;
+        }
+
+        if root.view.mode == 1: VerticalLayout {
+            vertical-stretch: 1;
+            spacing: 2px;
+            sv := ScrollView {
+                vertical-stretch: 1;
+                // Cada entrega de texto es una vista NUEVA: tanto el path como el contenido
+                // participan en la clave. Antes sólo se observaba la ruta; el ScrollView podía
+                // conservar su offset al llegar el payload y mostrar un texto recién abierto por
+                // el medio. La misma señal reinicia selección/caret del editor de sólo lectura.
+                property <string> content-key: root.view.path + "\u{0}" + root.view.text;
+                changed content-key => { self.viewport-y = 0; }
+                // El viewport se define explícitamente con el tamaño real del editor. Sin esta
+                // pareja de propiedades Slint no conoce el alto total y no habilita scroll al
+                // seleccionar un bloque largo. El mismo editor se usa también para XML/código:
+                // mantener selección parcial y Ctrl+C es más útil que colorear un texto que no
+                // se puede copiar por fragmento.
+                viewport-width: root.wrap-text ? self.visible-width : max(self.visible-width, text-editor.preferred-width + 16px);
+                viewport-height: max(self.visible-height, text-editor.preferred-height);
+                // `TextInput` no expone `scroll-event`. Se vuelve hijo de esta TouchArea: los
+                // clicks y arrastres que usa para seleccionar se consumen en el editor, mientras
+                // que la rueda que el editor no maneja burbujea al contenedor y mueve el viewport.
+                // Así se conserva selección parcial y Ctrl+C sin cargar todo el archivo.
+                text-wheel := TouchArea {
+                    x: 8px;
+                    width: root.wrap-text ? parent.width - 16px : max(parent.width - 16px, text-editor.preferred-width);
+                    height: text-editor.preferred-height;
+                    scroll-event(ev) => {
+                        sv.viewport-y = clamp(
+                            sv.viewport-y + ev.delta-y,
+                            -(max(0px, sv.viewport-height - sv.visible-height)),
+                            0px);
+                        accept;
+                    }
+                    text-editor := TextInput {
+                        text: root.view.text;
+                        read-only: true;
+                        accessible-label: Tr.preview-content;
+                        single-line: false;
+                        color: Theme.text;
+                        font-family: Theme.preview-font;
+                        wrap: root.wrap-text ? word-wrap : no-wrap;
+                        selection-background-color: Theme.accent.with-alpha(0.75);
+                        selection-foreground-color: Theme.text;
+                        width: parent.width;
+                        height: self.preferred-height;
+                        page-height: sv.visible-height;
+                        // `TextInput` conserva selección y caret cuando su propiedad `text` cambia.
+                        // Al navegar, eso podía dejar seleccionada una posición del archivo anterior
+                        // —fuera del viewport y aparentemente inexistente. Reasignar tras vaciarlo
+                        // reinicia ese estado interno, manteniendo la selección normal sólo dentro
+                        // del archivo actualmente mostrado.
+                        property <string> content-key: root.view.path + "\u{0}" + root.view.text;
+                        changed content-key => {
+                            self.text = "";
+                            self.text = root.view.text;
+                            sv.viewport-y = 0;
+                        }
+                    }
+                }
+            }
+            if root.view.truncated: TruncatedPaperEdge { }
+            if root.view.text-info != "": Text {
+                text: root.view.text-info;
+                color: Theme.text-dim;
+                font-size: 10px;
+                horizontal-alignment: center;
+                overflow: elide;
+            }
+        }
+
+        if root.view.mode == 2: Rectangle {
+            vertical-stretch: 1;
+            // Ajustar al panel conserva el comportamiento por defecto. La calidad se decide en
+            // el worker y la UI solo reescala el bitmap ya listo, por lo que no hace I/O.
+            if root.fit-image || root.view.mesh-interactive: Image {
+                width: root.view.animation-state > 0 ? min(parent.width, root.view.image.width * 1px) : parent.width;
+                height: root.view.animation-state > 0 ? min(parent.height, root.view.image.height * 1px) : parent.height;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                source: root.view.image;
+                image-fit: contain;
+                image-rendering: smooth;
+            }
+            // Tamaño natural: el canvas adopta las dimensiones reales de la imagen. Si caben,
+            // queda centrada sin ampliarla; si no, ScrollView aporta barras y rueda nativas.
+            if !root.fit-image && !root.view.mesh-interactive: sv-natural := ScrollView {
+                viewport-width: max(self.visible-width, root.view.image.width * 1px);
+                viewport-height: max(self.visible-height, root.view.image.height * 1px);
+                natural-canvas := Rectangle {
+                    width: max(sv-natural.visible-width, root.view.image.width * 1px);
+                    height: max(sv-natural.visible-height, root.view.image.height * 1px);
+                    Image {
+                        x: max(0px, (parent.width - root.view.image.width * 1px) / 2);
+                        y: max(0px, (parent.height - root.view.image.height * 1px) / 2);
+                        width: root.view.image.width * 1px;
+                        height: root.view.image.height * 1px;
+                        source: root.view.image;
+                        image-fit: contain;
+                        image-rendering: smooth;
+                    }
+                }
+            }
+            mesh-touch := TouchArea {
+                enabled: root.view.mesh-interactive;
+                mouse-cursor: self.pressed ? grabbing : grab;
+                property <length> last-x: 0px;
+                property <length> last-y: 0px;
+                changed has-hover => {
+                    root.hover-tip(
+                        self.has-hover ? Tr.preview-mesh-controls-tip : "",
+                        self.absolute-position.x + self.width / 2,
+                        self.absolute-position.y + self.height
+                    );
+                }
+                moved => {
+                    if self.pressed {
+                        root.mesh-orbit((self.mouse-x - self.last-x) / 1px, (self.mouse-y - self.last-y) / 1px);
+                        self.last-x = self.mouse-x;
+                        self.last-y = self.mouse-y;
+                    }
+                }
+                pointer-event(ev) => {
+                    if ev.kind == PointerEventKind.down {
+                        self.last-x = self.mouse-x;
+                        self.last-y = self.mouse-y;
+                        root.focus-pane();
+                    }
+                }
+                scroll-event(ev) => {
+                    root.mesh-zoom(-ev.delta-y / 1px);
+                    accept;
+                }
+            }
+        }
+
+        if root.view.mode == 3: Text {
+            text: root.view.message;
+            color: Theme.text-dim;
+            vertical-alignment: center;
+            horizontal-alignment: center;
+            vertical-stretch: 1;
+        }
+    }
+}

@@ -14,6 +14,12 @@ use std::path::Path;
 /// Escribe `contents` en `path` de forma atómica (tmp + rename). Si la escritura o
 /// el rename fallan, limpia el `.tmp` best-effort y devuelve el error.
 pub fn write_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        std::fs::create_dir_all(parent)?;
+    }
     // `<nombre>.tmp` AL LADO del destino (mismo directorio = mismo volumen: el
     // rename es atómico). Se construye sobre el nombre completo, no con
     // `with_extension` (que reemplazaría el ".json").
@@ -55,14 +61,23 @@ mod tests {
     }
 
     #[test]
+    fn crea_el_directorio_padre_antes_de_escribir() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config").join("favorites.json");
+        write_atomic(&path, "{}").unwrap();
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "{}");
+    }
+
+    #[test]
     fn si_falla_limpia_el_tmp() {
         let dir = tempfile::tempdir().unwrap();
-        // Destino en un directorio que NO existe: el write del .tmp falla y no debe
-        // quedar nada (ni el destino ni el .tmp).
-        let path = dir.path().join("no_existe").join("x.json");
+        // Un archivo ocupa el lugar del directorio padre: no debe quedar un `.tmp`.
+        let parent = dir.path().join("archivo");
+        std::fs::write(&parent, b"bloqueo").unwrap();
+        let path = parent.join("x.json");
         let r = write_atomic(&path, "contenido");
         assert!(r.is_err());
         assert!(!path.exists());
-        assert!(!dir.path().join("no_existe").join("x.json.tmp").exists());
+        assert!(!parent.join("x.json.tmp").exists());
     }
 }

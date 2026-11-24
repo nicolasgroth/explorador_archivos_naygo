@@ -32,6 +32,7 @@ pub(crate) fn build_refresh_config_vm(
             settings_vm,
             recent_limit,
             frequent_dirs_limit,
+            preview_text_limit_index,
             auto_hl,
             anim_enabled,
             footer_en,
@@ -62,6 +63,7 @@ pub(crate) fn build_refresh_config_vm(
             let settings_vm = build_settings_vm(&c.config);
             let recent_limit = c.config.settings.recent_limit as i32;
             let frequent_dirs_limit = c.config.settings.frequent_dirs_limit as i32;
+            let preview_text_limit_index = c.config.preview_text_limit_index();
             let auto_hl = c.config.auto_highlight_code();
             let anim_enabled = c.config.animations_enabled();
             let footer_en = c.config.footer_enabled();
@@ -136,7 +138,7 @@ pub(crate) fn build_refresh_config_vm(
             // Datos para la grilla de íconos (Task 15).
             let icon_set_id = c.config.settings.icon_set.clone();
             let icon_overrides = c.config.settings.icon_overrides.clone();
-            let catalog = naygo_core::icon_set::IconSetCatalog::load(&c.config.config_dir);
+            let catalog = &c.config.icon_sets;
             let icon_catalog_info: Vec<(String, String, bool)> = catalog
                 .available()
                 .iter()
@@ -147,6 +149,7 @@ pub(crate) fn build_refresh_config_vm(
                 settings_vm,
                 recent_limit,
                 frequent_dirs_limit,
+                preview_text_limit_index,
                 auto_hl,
                 anim_enabled,
                 footer_en,
@@ -241,25 +244,15 @@ pub(crate) fn build_refresh_config_vm(
                 IconKey::Action(ActionIcon::Settings),
                 IconKey::Action(ActionIcon::Back),
             ];
-            let config_path = std::path::Path::new(&config_dir_str);
-            let c = ctrl.borrow();
+            let mut c = ctrl.borrow_mut();
             let tint = theme_text_rgb(&c.config.settings, &c.config.themes);
-            drop(c);
             let active = &icon_set_id;
             let cards: Vec<IconSetCardVm> = icon_catalog_info
                 .iter()
                 .map(|(id, label, tintable)| {
                     let samples: Vec<slint::Image> = sample_keys
                         .iter()
-                        .map(|k| {
-                            crate::icons::render_for_set(
-                                *k,
-                                id.as_str(),
-                                *tintable,
-                                tint,
-                                config_path,
-                            )
-                        })
+                        .map(|k| c.icons.get_for_set(*k, id.as_str(), *tintable, tint))
                         .collect();
                     IconSetCardVm {
                         id: id.as_str().into(),
@@ -307,9 +300,11 @@ pub(crate) fn build_refresh_config_vm(
         // Poblar el campo de límite de recientes (no está en SettingsVm).
         cfg.set_recent_limit(recent_limit);
         cfg.set_frequent_dirs_limit(frequent_dirs_limit);
+        cfg.set_preview_text_limit_index(preview_text_limit_index);
         // Auto-resaltado de código + footer (mostrar/plantilla/template/preview) + Home:
         // campos que no viven en SettingsVm; se vuelcan directo a las props de la ventana.
         cfg.set_auto_highlight_code(auto_hl);
+        cfg.set_preview_economical(ctrl.borrow().config.settings.preview_economical);
         cfg.set_animations_enabled(anim_enabled);
         cfg.set_footer_enabled(footer_en);
         cfg.set_footer_preset_index(footer_preset);
@@ -328,7 +323,7 @@ pub(crate) fn build_refresh_config_vm(
         // Tarjetas de tema para la galería de selección (config → Apariencia).
         cfg.set_theme_cards(ModelRc::from(Rc::new(VecModel::from(theme_cards))));
         // Estado del editor de temas (config → Apariencia). Cuando hay un tema en edición se
-        // vuelcan su nombre/base, el flag "paneles inactivos planos" y los 15 tokens (hex +
+        // vuelcan su nombre/base, el flag "paneles inactivos planos" y los 16 tokens (hex +
         // r/g/b por canal, para inicializar el color-picker, que no parsea hex).
         cfg.set_editing_active(editing_active);
         cfg.set_editing_name(editing_name.into());
@@ -380,32 +375,36 @@ pub(crate) fn build_refresh_toolbar_icons(
         let Some(ui) = ui_weak.upgrade() else {
             return;
         };
-        use naygo_core::icon_kind::{ActionIcon, IconKey};
         let mut c = ctrl.borrow_mut();
-        ui.set_tb_back(c.icons.get(IconKey::Action(ActionIcon::Back)));
-        ui.set_tb_forward(c.icons.get(IconKey::Action(ActionIcon::Forward)));
-        ui.set_tb_up(c.icons.get(IconKey::Action(ActionIcon::Up)));
-        ui.set_tb_refresh(c.icons.get(IconKey::Action(ActionIcon::Refresh)));
-        ui.set_tb_home(c.icons.get(IconKey::Action(ActionIcon::Home)));
-        ui.set_tb_search(c.icons.get(IconKey::Action(ActionIcon::Search)));
-        ui.set_tb_show_hidden(c.icons.get(IconKey::Action(ActionIcon::ShowHidden)));
-        ui.set_tb_history(c.icons.get(IconKey::Action(ActionIcon::History)));
-        ui.set_tb_favorites(c.icons.get(IconKey::Action(ActionIcon::Favorites)));
-        ui.set_tb_split(c.icons.get(IconKey::Action(ActionIcon::Split)));
-        ui.set_tb_panel(c.icons.get(IconKey::Action(ActionIcon::Panel)));
-        ui.set_tb_tabs(c.icons.get(IconKey::Action(ActionIcon::Tabs)));
-        ui.set_tb_swap(c.icons.get(IconKey::Action(ActionIcon::SwapPanes)));
-        ui.set_tb_clone(c.icons.get(IconKey::Action(ActionIcon::ClonePath)));
-        ui.set_tb_new_folder(c.icons.get(IconKey::Action(ActionIcon::NewFolder)));
-        ui.set_tb_terminal(c.icons.get(IconKey::Action(ActionIcon::Terminal)));
-        ui.set_tb_layouts(c.icons.get(IconKey::Action(ActionIcon::Layouts)));
-        ui.set_tb_settings(c.icons.get(IconKey::Action(ActionIcon::Settings)));
+        refresh_toolbar_icons(&mut c, &ui);
     })
+}
+
+pub(crate) fn refresh_toolbar_icons(c: &mut WorkspaceCtrl, ui: &AppWindow) {
+    use naygo_core::icon_kind::{ActionIcon, IconKey};
+    ui.set_tb_back(c.icons.get(IconKey::Action(ActionIcon::Back)));
+    ui.set_tb_forward(c.icons.get(IconKey::Action(ActionIcon::Forward)));
+    ui.set_tb_up(c.icons.get(IconKey::Action(ActionIcon::Up)));
+    ui.set_tb_refresh(c.icons.get(IconKey::Action(ActionIcon::Refresh)));
+    ui.set_tb_home(c.icons.get(IconKey::Action(ActionIcon::Home)));
+    ui.set_tb_search(c.icons.get(IconKey::Action(ActionIcon::Search)));
+    ui.set_tb_show_hidden(c.icons.get(IconKey::Action(ActionIcon::ShowHidden)));
+    ui.set_tb_history(c.icons.get(IconKey::Action(ActionIcon::History)));
+    ui.set_tb_favorites(c.icons.get(IconKey::Action(ActionIcon::Favorites)));
+    ui.set_tb_split(c.icons.get(IconKey::Action(ActionIcon::Split)));
+    ui.set_tb_panel(c.icons.get(IconKey::Action(ActionIcon::Panel)));
+    ui.set_tb_tabs(c.icons.get(IconKey::Action(ActionIcon::Tabs)));
+    ui.set_tb_swap(c.icons.get(IconKey::Action(ActionIcon::SwapPanes)));
+    ui.set_tb_clone(c.icons.get(IconKey::Action(ActionIcon::ClonePath)));
+    ui.set_tb_new_folder(c.icons.get(IconKey::Action(ActionIcon::NewFolder)));
+    ui.set_tb_terminal(c.icons.get(IconKey::Action(ActionIcon::Terminal)));
+    ui.set_tb_layouts(c.icons.get(IconKey::Action(ActionIcon::Layouts)));
+    ui.set_tb_settings(c.icons.get(IconKey::Action(ActionIcon::Settings)));
 }
 
 // Vuelca la tira de unidades de disco a la toolbar. Se llama al arrancar, al cambiar el set
 // de íconos (los íconos de disco cambian) y al cambiar los dispositivos (USB conectado/sacado).
-pub(crate) fn build_refresh_drives(
+pub(crate) fn build_render_drives(
     ctrl: Rc<RefCell<WorkspaceCtrl>>,
     ui_weak: slint::Weak<AppWindow>,
 ) -> Rc<dyn Fn()> {
@@ -422,6 +421,17 @@ pub(crate) fn build_refresh_drives(
             .map(to_nav_row)
             .collect();
         ui.set_drives(ModelRc::from(Rc::new(VecModel::from(drives))));
+    })
+}
+
+pub(crate) fn build_refresh_drives(
+    ctrl: Rc<RefCell<WorkspaceCtrl>>,
+    render: Rc<dyn Fn()>,
+    waker: naygo_platform::dir_watch::Waker,
+) -> Rc<dyn Fn()> {
+    Rc::new(move || {
+        ctrl.borrow_mut().request_drive_refresh(waker.clone());
+        render();
     })
 }
 

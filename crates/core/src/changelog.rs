@@ -33,6 +33,13 @@ pub struct ReleaseNotes {
 /// Busca un encabezado `## [<version>]` (la coincidencia es por el contenido
 /// EXACTO entre corchetes). Devuelve `None` si no existe tal bloque. El bloque
 /// termina en el siguiente `## ` o al final del texto.
+///
+/// Cada viñeta se devuelve como una sola línea de prosa: las líneas de
+/// continuación (no vacías, sin `- `) se unen al ítem con un espacio, y una
+/// línea en blanco cierra la viñeta (el párrafo suelto posterior se ignora).
+/// Decisión sobre sub-viñetas: una línea con sangría que empieza con `- ` se
+/// trata como un ítem propio de la misma sección (el CHANGELOG real no las usa;
+/// es lo más simple y no pierde texto).
 pub fn release_notes(changelog: &str, version: &str) -> Option<ReleaseNotes> {
     // Tolerar un BOM UTF-8 al inicio (común en archivos editados en Windows).
     let changelog = changelog.trim_start_matches('\u{FEFF}');
@@ -44,8 +51,10 @@ pub fn release_notes(changelog: &str, version: &str) -> Option<ReleaseNotes> {
     let date = date_in_header(header);
 
     let mut sections: Vec<NoteSection> = Vec::new();
+    // `true` mientras el último ítem de la sección actual admite continuación.
+    let mut open = false;
     for line in lines {
-        let trimmed = line.trim_start();
+        let trimmed = line.trim();
         if trimmed.starts_with("## ") {
             break; // empezó la siguiente versión
         }
@@ -54,12 +63,24 @@ pub fn release_notes(changelog: &str, version: &str) -> Option<ReleaseNotes> {
                 category: cat.trim().to_string(),
                 items: Vec::new(),
             });
+            open = false;
         } else if let Some(item) = trimmed.strip_prefix("- ") {
+            // Viñeta nueva (también una sub-viñeta con sangría: ítem propio).
             if let Some(last) = sections.last_mut() {
                 last.items.push(item.trim().to_string());
+                open = true;
             }
             // Una viñeta antes de cualquier `### ` se ignora (formato raro).
+        } else if trimmed.is_empty() {
+            open = false; // la línea en blanco cierra la viñeta
+        } else if open {
+            // Continuación con sangría: se une al último ítem con un espacio.
+            if let Some(item) = sections.last_mut().and_then(|s| s.items.last_mut()) {
+                item.push(' ');
+                item.push_str(trimmed);
+            }
         }
+        // Texto suelto sin viñeta abierta se ignora.
     }
 
     Some(ReleaseNotes {
@@ -197,5 +218,83 @@ mod tests {
         let cl = "## [1.0.0] —   \n### Añadido\n- x\n";
         let n = release_notes(cl, "1.0.0").unwrap();
         assert_eq!(n.date, None);
+    }
+
+    #[test]
+    fn vineta_en_varias_lineas_se_une_con_espacios() {
+        let cl = "## [1.0.0]
+### Añadido
+- Primera parte
+  segunda parte
+  tercera parte.
+- Otra.
+";
+        let n = release_notes(cl, "1.0.0").unwrap();
+        assert_eq!(
+            n.sections[0].items,
+            vec![
+                "Primera parte segunda parte tercera parte.".to_string(),
+                "Otra.".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn linea_en_blanco_cierra_la_vineta() {
+        let cl = "## [1.0.0]
+### Añadido
+- Viñeta.
+
+Párrafo suelto.
+";
+        let n = release_notes(cl, "1.0.0").unwrap();
+        assert_eq!(n.sections[0].items, vec!["Viñeta.".to_string()]);
+    }
+
+    #[test]
+    fn texto_suelto_antes_de_la_primera_vineta_se_ignora() {
+        let cl = "## [1.0.0]
+Intro suelta.
+### Añadido
+Texto previo.
+- Real
+  continua.
+";
+        let n = release_notes(cl, "1.0.0").unwrap();
+        assert_eq!(n.sections.len(), 1);
+        assert_eq!(n.sections[0].items, vec!["Real continua.".to_string()]);
+    }
+
+    #[test]
+    fn sub_vineta_con_sangria_es_un_item_propio() {
+        let cl = "## [1.0.0]
+### Añadido
+- Padre
+  - Hija
+  continuación de la hija
+";
+        let n = release_notes(cl, "1.0.0").unwrap();
+        assert_eq!(
+            n.sections[0].items,
+            vec![
+                "Padre".to_string(),
+                "Hija continuación de la hija".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn changelog_real_0_5_6_tiene_vinetas_completas() {
+        let n = release_notes(include_str!("../../../CHANGELOG.md"), "0.5.6")
+            .expect("0.5.6 existe en el CHANGELOG");
+        let first = &n.sections[0].items;
+        assert!(!first.is_empty());
+        assert!(first[0].ends_with('.'), "primer ítem cortado: {}", first[0]);
+        for s in &n.sections {
+            for item in &s.items {
+                assert!(!item.contains(char::from(10)));
+                assert!(!item.contains("  "), "doble espacio: {item}");
+            }
+        }
     }
 }

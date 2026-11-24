@@ -45,6 +45,48 @@ fn capture_roundtrip_and_metadata_only() {
         1
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn non_utf8_root_and_relative_records_round_trip_distinctly() {
+    use std::os::unix::ffi::OsStringExt;
+
+    let root = PathBuf::from(std::ffi::OsString::from_vec(b"/tmp/root-\xff".to_vec()));
+    let entry = PathBuf::from(std::ffi::OsString::from_vec(b"item-\xfe".to_vec()));
+    let gap = PathBuf::from(std::ffi::OsString::from_vec(b"blocked-\xfd".to_vec()));
+    let point = ComparisonPoint {
+        version: 1,
+        captured_at: 1,
+        scope: Scope {
+            root: root.clone(),
+            recursive: true,
+            exclusions: vec![gap.clone()],
+            hashed: false,
+        },
+        resolved_root: Some(root),
+        entries: vec![Record {
+            path: entry.clone(),
+            kind: EntryKind::File,
+            bytes: 1,
+            modified_ns: None,
+            sha256: None,
+        }],
+        gaps: vec![gap.clone()],
+        truncated: false,
+    };
+
+    let bytes = point.to_bytes().unwrap();
+    let restored: ComparisonPoint = serde_json::from_slice(&bytes).unwrap();
+    restored.validate().unwrap();
+    assert_eq!(restored.scope.root, point.scope.root);
+    assert_eq!(restored.entries[0].path, entry);
+    assert_eq!(restored.scope.exclusions, vec![gap.clone()]);
+    assert_eq!(restored.gaps, vec![gap]);
+    assert_ne!(
+        key(&PathBuf::from("item-�")),
+        key(&restored.entries[0].path)
+    );
+}
 #[test]
 fn added_modified_missing_and_no_missing_actions() {
     let t = tempfile::tempdir().unwrap();

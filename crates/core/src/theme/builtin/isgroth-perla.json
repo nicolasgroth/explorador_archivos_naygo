@@ -1,0 +1,22 @@
+{
+  "name": "Perla",
+  "base": "light",
+  "panel_bg": "#ededec",
+  "toolbar_bg": "#e2e3e1",
+  "active_panel_bg": "#f7f7f5",
+  "inactive_panel_bg": "#eaece9",
+  "row_bg": "#f5f5f3",
+  "row_alt_bg": "#edeeeb",
+  "row_inactive_bg": "#eceeeb",
+  "text": "#282e2c",
+  "text_dim": "#535c56",
+  "selection_bg": "#dce5df",
+  "accent": "#3e6554",
+  "error": "#ad3037",
+  "highlight": "#e0ebda",
+  "border": "#9ea8a0",
+  "active_bar": "#3e6554",
+  "flat_inactive_panels": true,
+  "use_inactive_row_color": true,
+  "icon_accent": "#3e6554"
+}

@@ -1,0 +1,2343 @@
+// Naygo — ventana de configuración (overlay, Fase 4). Categorías: General, Operaciones,
+// Pegado, Apariencia (tema+idioma en caliente), Atajos, Import/Export. Cada control emite un
+// callback con el nuevo valor; Rust persiste y aplica. Sin lógica de negocio aquí.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
+import { ListView, LineEdit, ScrollView, TextEdit } from "std-widgets.slint";
+import { SettingsVm, ShortcutRowVm, PreviewRuleVm, ThemeCardVm, NewsSection, IconChoiceVm } from "types.slint";
+import { Tr, TextUtil } from "i18n.slint";
+import { Theme } from "theme.slint";
+import { ThemeCombo } from "theme-combo.slint";
+import { ColorPicker } from "color-picker.slint";
+import { FontChoice } from "font-choice.slint";
+
+// Ícono "✕" dibujado con un Path (dos aspas), no con un glifo de fuente: bajo render por
+// software el carácter ✕/× a veces no existe en la fuente base y salía invisible (botón "vacío").
+// `tint` es el color de las aspas; el llamador pone el fondo/hover y el TouchArea.
+component CloseIcon inherits Rectangle {
+    in property <color> tint: Theme.text;
+    in property <length> size: 12px;
+    Path {
+        width: root.size;
+        height: root.size;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        stroke: root.tint;
+        stroke-width: 1.6px;
+        viewbox-width: 10;
+        viewbox-height: 10;
+        MoveTo { x: 1; y: 1; }
+        LineTo { x: 9; y: 9; }
+        MoveTo { x: 9; y: 1; }
+        LineTo { x: 1; y: 9; }
+    }
+}
+
+// Ícono "✓" (check) para el botón Guardar. Dibujado con Path (igual razón que CloseIcon: el
+// glifo de fuente puede faltar bajo render por software).
+component SaveIcon inherits Rectangle {
+    in property <color> tint: Theme.text;
+    in property <length> size: 12px;
+    Path {
+        width: root.size;
+        height: root.size;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        stroke: root.tint;
+        stroke-width: 1.8px;
+        fill: transparent;
+        viewbox-width: 16;
+        viewbox-height: 16;
+        MoveTo { x: 2.5; y: 8.5; }
+        LineTo { x: 6.5; y: 12.5; }
+        LineTo { x: 13.5; y: 3.5; }
+    }
+}
+
+// Ícono "↻" (flecha circular) para el botón Restaurar. Se aproxima el arco con segmentos rectos
+// (MoveTo/LineTo) en vez de ArcTo para no depender de esa primitiva: así compila seguro bajo el
+// render por software. Recorre ~300° de un círculo (centro 8,8 radio 5) dejando un hueco arriba a
+// la derecha, con una punta de flecha en el extremo de arranque.
+component RestoreIcon inherits Rectangle {
+    in property <color> tint: Theme.text;
+    in property <length> size: 12px;
+    Path {
+        width: root.size;
+        height: root.size;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        stroke: root.tint;
+        stroke-width: 1.4px;
+        fill: transparent;
+        viewbox-width: 16;
+        viewbox-height: 16;
+        // Polilínea que aproxima el arco (sentido horario, arrancando arriba a la derecha).
+        MoveTo { x: 11; y: 4; }
+        LineTo { x: 12.5; y: 5.5; }
+        LineTo { x: 13; y: 8; }
+        LineTo { x: 12.5; y: 10.5; }
+        LineTo { x: 11; y: 12.5; }
+        LineTo { x: 8.5; y: 13; }
+        LineTo { x: 6; y: 12.5; }
+        LineTo { x: 4; y: 11; }
+        LineTo { x: 3; y: 8.5; }
+        LineTo { x: 3.2; y: 6; }
+        LineTo { x: 4.5; y: 4; }
+        // Punta de flecha en el extremo de arranque (arriba a la derecha).
+        MoveTo { x: 11; y: 4; }
+        LineTo { x: 7.8; y: 4.2; }
+        MoveTo { x: 11; y: 4; }
+        LineTo { x: 11.4; y: 0.8; }
+    }
+}
+
+// Botón chico de texto + ícono (acciones del editor de temas). Misma estética que CfgBtn pero con
+// un ícono a la izquierda del label. El llamador pasa qué ícono mostrar (kind: "save"/"restore"/"cancel").
+component CfgIconBtn inherits Rectangle {
+    in property <string> label;
+    in property <string> kind;          // "save" | "restore" | "cancel"
+    in property <bool> danger: false;
+    callback clicked();
+    height: 26px;
+    min-width: max(90px, row.preferred-width + 20px);
+    background: touch.has-hover
+        ? (root.danger ? Theme.error : Theme.selection-bg)
+        : Theme.row-bg;
+    border-radius: 4px;
+    border-width: 1px;
+    border-color: Theme.border;
+    row := HorizontalLayout {
+        spacing: 6px;
+        alignment: center;
+        x: (parent.width - self.preferred-width) / 2;
+        // Ícono según el tipo (uno solo se muestra a la vez).
+        if root.kind == "save": SaveIcon { width: 14px; height: 26px; tint: Theme.text; }
+        if root.kind == "restore": RestoreIcon { width: 14px; height: 26px; tint: Theme.text; }
+        if root.kind == "cancel": CloseIcon { width: 14px; height: 26px; tint: Theme.text; }
+        Text {
+            text: root.label;
+            color: Theme.text;
+            font-size: 12px;
+            vertical-alignment: center;
+        }
+    }
+    touch := TouchArea { clicked => { root.clicked(); } }
+}
+
+// Estado del tooltip de ayuda de la ventana de Configuración. Un `global` (vive una vez por
+// árbol de componentes, y ConfigWindow es su propio árbol) evita tener que enhebrar un callback
+// `hover-tip` por cada uno de los ~40 Field. El `HelpIcon` escribe aquí al pasar el mouse; el
+// overlay del root de ConfigWindow lee estas tres propiedades y pinta el globo. Mismo patrón
+// conceptual que `hovered-tip`/`hovered-tip-x/y` de app-window.slint, pero centralizado.
+global CfgTip {
+    in-out property <string> text: "";   // texto del tip activo (vacío = ninguno)
+    in-out property <length> x: 0;        // X en coords de ventana (centro del ícono)
+    in-out property <length> y: 0;        // Y en coords de ventana (borde inferior del ícono)
+}
+
+// Ícono "?" de ayuda: un círculo con un signo de interrogación, dibujado con Path (no con un
+// glifo de fuente: bajo render por software un carácter puede faltar y salir invisible, misma
+// razón que CloseIcon/SaveIcon). Sutil (color text-dim) y se resalta en hover. Al pasar el mouse
+// publica su `tip` y posición en el global CfgTip; al salir, lo limpia.
+component HelpIcon inherits Rectangle {
+    in property <string> tip;
+    width: 16px;
+    height: 16px;
+    // Círculo + "?" dibujados a mano. El color sigue el hover para dar feedback.
+    property <color> ink: touch.has-hover ? Theme.accent : Theme.text-dim;
+    Path {
+        width: 14px;
+        height: 14px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        stroke: root.ink;
+        stroke-width: 1.2px;
+        fill: transparent;
+        viewbox-width: 20;
+        viewbox-height: 20;
+        // Círculo aproximado por segmentos (sin ArcTo, igual que RestoreIcon).
+        MoveTo { x: 10; y: 1.5; }
+        LineTo { x: 14; y: 3; }
+        LineTo { x: 17; y: 6; }
+        LineTo { x: 18.5; y: 10; }
+        LineTo { x: 17; y: 14; }
+        LineTo { x: 14; y: 17; }
+        LineTo { x: 10; y: 18.5; }
+        LineTo { x: 6; y: 17; }
+        LineTo { x: 3; y: 14; }
+        LineTo { x: 1.5; y: 10; }
+        LineTo { x: 3; y: 6; }
+        LineTo { x: 6; y: 3; }
+        Close { }
+    }
+    // El signo "?" como glifo de texto centrado (un Text simple se ve nítido y no depende de Path
+    // para una curva fina). Si la fuente base no tuviera "?" igual es ASCII universal, sin riesgo.
+    Text {
+        text: "?";
+        color: root.ink;
+        font-size: 11px;
+        font-weight: 700;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        x: 0; y: -0.5px;
+        width: 100%; height: 100%;
+    }
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        // Publica/limpia el tip en el global con la posición ABSOLUTA del ícono (coords de
+        // ventana), para que el overlay del root lo ancle justo debajo. +x para centrar bajo el
+        // ícono, +height para que el globo aparezca bajo su borde inferior.
+        changed has-hover => {
+            CfgTip.text = self.has-hover ? root.tip : "";
+            CfgTip.x = root.absolute-position.x + root.width / 2;
+            CfgTip.y = root.absolute-position.y + root.height;
+        }
+    }
+}
+
+// Una fila etiqueta + control (layout consistente). Si `tip` no está vacío, muestra un ícono
+// "?" de ayuda a la derecha de la etiqueta que, al pasar el mouse, despliega un globo con la
+// explicación de la opción (vía el global CfgTip + el overlay del root).
+component Field inherits HorizontalLayout {
+    in property <string> label;
+    in property <string> tip: "";
+    height: 30px;
+    spacing: 8px;
+    // Etiqueta + (opcional) ícono de ayuda, juntos a la izquierda. El conjunto estira para empujar
+    // el control a la derecha; el ícono queda pegado al texto de la etiqueta.
+    HorizontalLayout {
+        horizontal-stretch: 1;
+        spacing: 5px;
+        Text {
+            text: root.label;
+            color: Theme.text;
+            vertical-alignment: center;
+            // No estira: así el "?" queda junto al texto, no al final de la fila.
+            overflow: elide;
+        }
+        if root.tip != "": HelpIcon {
+            tip: root.tip;
+            y: (parent.height - self.height) / 2;
+        }
+        // Empuja el control (el @children) hacia la derecha.
+        Rectangle { horizontal-stretch: 1; }
+    }
+    @children
+}
+
+// Interruptor on/off pulido (reemplaza al CheckBox cuadrado). Animación mínima del pomo
+// (transición de color/posición instantánea-ish, sin costo de GPU).
+component Switch inherits Rectangle {
+    in-out property <bool> checked;
+    // Deshabilitado (p.ej. "arrancar minimizado" solo tiene sentido si autostart está activo):
+    // se atenúa y deja de reaccionar al clic, pero conserva el valor de `checked` a la vista.
+    in property <bool> enabled: true;
+    callback toggled(bool);
+    width: 36px;
+    height: 20px;
+    border-radius: 10px;
+    opacity: root.enabled ? 1.0 : 0.5;
+    background: root.checked ? Theme.accent : Theme.row-bg;
+    border-width: 1px;
+    border-color: root.checked ? Theme.accent : Theme.selection-bg;
+    knob := Rectangle {
+        width: 14px;
+        height: 14px;
+        border-radius: 7px;
+        background: white;
+        x: root.checked ? parent.width - self.width - 3px : 3px;
+        y: (parent.height - self.height) / 2;
+    }
+    TouchArea {
+        enabled: root.enabled;
+        clicked => {
+            root.checked = !root.checked;
+            root.toggled(root.checked);
+        }
+    }
+}
+
+// Botón chico de texto (acciones de la ventana de config).
+component CfgBtn inherits Rectangle {
+    in property <string> label;
+    in property <bool> danger: false;
+    callback clicked();
+    height: 26px;
+    // El botón crece con su texto: el ancho mínimo es el del texto + padding lateral, así
+    // ninguna etiqueta (ni la traducción más larga) se recorta. El piso de 80px mantiene un
+    // tamaño consistente para los botones cortos.
+    min-width: max(80px, lbl.preferred-width + 20px);
+    background: touch.has-hover
+        ? (root.danger ? Theme.error : Theme.selection-bg)
+        : Theme.row-bg;
+    border-radius: 4px;
+    border-width: 1px;
+    border-color: Theme.border;
+    lbl := Text {
+        text: root.label;
+        color: Theme.text;
+        font-size: 12px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        x: (parent.width - self.width) / 2;
+    }
+    touch := TouchArea { clicked => { root.clicked(); } }
+}
+
+// Ventana de configuración NATIVA e independiente del explorador (antes era un overlay dentro
+// de la ventana principal, que se "salía" al moverse y perdía foco). Ahora es su propia Window
+// del SO: se mueve, minimiza y cierra con su barra de título nativa, y vive en paralelo a la
+// ventana principal. Rust la muestra/oculta (show/hide) en vez del viejo `config-open`.
+export component ConfigWindow inherits Window {
+    title: Tr.cfg-title;
+    default-font-size: 13px;
+    default-font-family: Theme.interface-font;
+    icon: @image-url("../../../assets/icons/logo_naygo.png");
+    preferred-width: 760px;
+    preferred-height: 600px;
+    min-width: 560px;
+    min-height: 420px;
+    // Sin tope explícito, el SO toma como alto/ancho MÁXIMO el max-height/width COMPUTADO del
+    // contenido (que es finito) → la ventana no se podía alargar. Con un tope grande, se
+    // redimensiona libre en ambos ejes.
+    max-width: 4000px;
+    max-height: 4000px;
+    background: Theme.panel-bg;
+
+    in property <SettingsVm> vm;
+    in property <[ShortcutRowVm]> shortcuts;
+    in property <[ThemeCardVm]> theme-cards;
+    in property <string> config-dir;
+    in property <string> app-version;
+    in property <string> license-text;
+    // Categoría seleccionada (0..9). in-out para que Rust pueda saltar a la pestaña Íconos desde
+    // el handler de personalize-icon-set.
+    in-out property <int> cat: 3; // arranca en Apariencia (lo más visible)
+    // Acción cuyo atajo se está capturando (vacío = ninguna).
+    property <string> capturing: "";
+    // Ancho fijo del control de cada Field, para que todos los combos/inputs queden alineados
+    // (antes cada ComboBox tomaba su ancho natural y se veían dispares).
+    property <length> ctl-w: 240px;
+    // Orden VISUAL del sidebar (label, cat). `cat` es el índice interno del bloque `if root.cat == N`
+    // y NO cambia: solo reordenamos las entradas y mapeamos cada una a su cat interno. Así los 10
+    // bloques de contenido quedan intactos (frágiles de reindexar). El orden de abajo agrupa por
+    // afinidad temática. "Idioma" (cat 10) ya no aparece: su selector vive ahora en General (cat 0).
+    property <[{label: string, cat: int}]> nav-items: [
+        { label: Tr.cfg-cat-general, cat: 0 },
+        { label: Tr.cfg-cat-appearance, cat: 3 },
+        { label: Tr.cfg-cat-icons, cat: 9 },
+        { label: Tr.cfg-cat-preview, cat: 7 },
+        { label: Tr.cfg-cat-ops, cat: 1 },
+        { label: Tr.cfg-cat-paste, cat: 2 },
+        { label: Tr.cfg-cat-shortcuts, cat: 4 },
+        { label: Tr.cfg-cat-advanced, cat: 6 },
+        { label: Tr.cfg-cat-import, cat: 5 },
+        { label: Tr.cfg-cat-about, cat: 8 },
+    ];
+    // Texto del buscador de opciones (encuentra categorías y etiquetas de ajustes). Vacío = todas
+    // visibles. Estado puramente local: no se persiste ni se cablea a Rust.
+    property <string> search-text: "";
+    // Índice liviano de etiquetas existentes, traducido en caliente. No consulta disco ni
+    // modifica ajustes: encuentra la sección donde vive la opción, no solo su categoría.
+    property <[string]> category-terms: [
+        Tr.cfg-show-parent + " " + Tr.cfg-icon-only + " " + Tr.cfg-bar-position + " " + Tr.cfg-window-title + " " + Tr.cfg-size-no-subdirs + " " + Tr.cfg-autostart + " " + Tr.cfg-autostart-minimized + " " + Tr.cfg-default-table + " " + Tr.cfg-language,
+        Tr.cfg-ops-mode + " " + Tr.cfg-confirm-trash + " " + Tr.cfg-confirm-drop + " " + Tr.cfg-confirm-external-drop + " " + Tr.cfg-skip-external-drop-session + " " + Tr.cfg-show-op-summary + " " + Tr.cfg-auto-hide-operations + " " + Tr.cfg-animations,
+        Tr.cfg-paste-confirm + " " + Tr.cfg-paste-name + " " + Tr.cfg-paste-ext + " " + Tr.cfg-paste-image-name + " " + Tr.cfg-paste-image-fmt + " " + Tr.cfg-paste-jpg-quality,
+        Tr.theme-tok-icon-accent + " " + Tr.icons-open-settings + " " + Tr.fonts-title + " " + Tr.fonts-interface + " " + Tr.fonts-listings + " " + Tr.fonts-preview + " " + Tr.cfg-theme + " " + Tr.theme-customize + " " + Tr.theme-name + " " + Tr.theme-base + " " + Tr.theme-group-surfaces + " " + Tr.theme-group-rows + " " + Tr.theme-group-text + " " + Tr.theme-group-interaction + " " + Tr.theme-group-alerts + " " + Tr.theme-standard-colors + " " + Tr.theme-more-colors + " " + Tr.theme-use-inactive-row-color + " " + Tr.theme-flat-inactive + " " + Tr.cfg-icon-set + " " + Tr.cfg-system-file-icons + " " + Tr.icons-personalize + " " + Tr.cfg-date-format + " " + Tr.cfg-size-format + " " + Tr.cfg-row-density,
+        Tr.cfg-reset-all + " " + Tr.cfg-sc-action + " " + Tr.cfg-sc-combo + " " + Tr.cfg-change + " " + Tr.cfg-reset,
+        Tr.cfg-export-hint + " " + Tr.cfg-ie-lang + " " + Tr.cfg-export-lang + " " + Tr.cfg-import-lang + " " + Tr.cfg-ie-themes + " " + Tr.cfg-export-theme + " " + Tr.cfg-import-theme + " " + Tr.cfg-ie-icons + " " + Tr.icons-export + " " + Tr.icons-import + " " + Tr.cfg-ie-config + " " + Tr.cfg-export-config + " " + Tr.cfg-import-config,
+        Tr.cfg-ops-display + " " + Tr.cfg-low-power + " " + Tr.cfg-new-items-at-end + " " + Tr.cfg-tray-enabled + " " + Tr.cfg-close-to-tray + " " + Tr.cfg-global-hotkey + " " + Tr.cfg-recent-limit + " " + Tr.cfg-frequent-dirs-limit + " " + Tr.cfg-footer-section + " " + Tr.cfg-footer-enabled + " " + Tr.cfg-footer-template + " " + Tr.cfg-footer-tokens + " " + Tr.cfg-footer-preview + " " + Tr.cfg-home-dir,
+        Tr.cfg-preview-economical + " " + Tr.cfg-preview-text-limit + " " + Tr.cfg-auto-highlight + " " + Tr.cfg-preview-hint + " " + Tr.cfg-preview-ext + " " + Tr.cfg-preview-on + " " + Tr.cfg-preview-as + " " + Tr.cfg-preview-add-title,
+        Tr.about-version + " " + Tr.about-author + " " + Tr.about-company + " " + Tr.about-license + " " + Tr.about-stack + " " + Tr.about-notices + " " + Tr.about-repo + " " + Tr.about-news-title,
+        Tr.icons-section-base + " " + Tr.icons-section-objects + " " + Tr.icons-section-custom + " " + Tr.icons-change + " " + Tr.icons-import + " " + Tr.icons-export + " " + Tr.icons-reset + " " + Tr.icons-user-png,
+    ];
+    function category-matches(index: int) -> bool {
+        return root.search-text == "" || TextUtil.contains(
+            (root.nav-items[index].label + " " + root.category-terms[root.nav-items[index].cat]).to-lowercase(),
+            root.search-text.to-lowercase());
+    }
+    // Easter egg de "Acerca de": 5 clics seguidos en el logo disparan ~8s de "lluvia de Naygo"
+    // con un mensaje que se escribe letra a letra. `egg-progress` (0..1) lo anima un Timer; el
+    // contador de clics se reinicia si pasan más de 2s entre clics (ventana de encadenado).
+    property <int> egg-clicks: 0;
+    property <bool> egg-active: false;
+    property <float> egg-progress: 0;   // 0..1 a lo largo de los 8s del egg
+
+    // Settings (toggles/combos/text):
+    callback set-ops-mode(int);
+    callback set-window-title-mode(int);
+    callback set-confirm-trash(bool);
+    callback set-confirm-drop-between-panes(bool);
+    callback set-confirm-external-drops(bool);
+    callback set-skip-external-drop-confirmation-session(bool);
+    callback set-show-op-summary(bool);
+    callback set-auto-hide-operations(bool);
+    callback set-show-parent(bool);
+    callback set-icon-only(bool);
+    callback set-system-file-icons(bool);
+    callback set-font(int, string);
+    callback set-bar-position(int);
+    callback set-size-no-subdirs(bool);
+    callback set-autostart(bool);
+    callback set-autostart-minimized(bool);
+    callback set-paste-confirm(bool);
+    callback set-paste-text-name(string);
+    callback set-paste-text-ext(string);
+    callback set-language(string);
+    callback set-theme(string);
+    callback set-icon-set(string);
+    // Activa el set de íconos Y salta a la pestaña Íconos (cat 9) en un solo gesto.
+    callback personalize-icon-set(string);   // (set_id)
+    // --- Editor de temas (galería de Apariencia) ---
+    // Abrir el editor: "Personalizar" (builtin → duplica) o "Editar" (de usuario). Eliminar uno
+    // de usuario. Todos toman el id de la tarjeta.
+    callback theme-customize(string);
+    callback theme-edit(string);
+    callback theme-delete(string);
+    // Estado del editor (lo vuelca Rust): activo, nombre, base (0=Oscuro, 1=Claro) y los 16 tokens
+    // como hex "#rrggbb" + sus componentes r/g/b (para inicializar el picker, que no parsea hex).
+    in property <bool> editing-active: false;
+    in property <string> editing-name: "";
+    in property <int> editing-base-index: 0;
+    in property <[string]> editing-token-hex;
+    in property <[int]> editing-token-r;
+    in property <[int]> editing-token-g;
+    in property <[int]> editing-token-b;
+    // Nombres legibles de los 16 tokens (orden = índice del token).
+    property <[string]> token-names: [
+        Tr.theme-tok-accent, Tr.theme-tok-panel-bg, Tr.theme-tok-row-bg, Tr.theme-tok-row-alt-bg,
+        Tr.theme-tok-text, Tr.theme-tok-text-dim, Tr.theme-tok-selection-bg, Tr.theme-tok-active-bar,
+        Tr.theme-tok-error, Tr.theme-tok-highlight, Tr.theme-tok-border, Tr.theme-tok-row-inactive-bg,
+        Tr.theme-tok-active-panel-bg, Tr.theme-tok-inactive-panel-bg,
+        Tr.theme-tok-toolbar-bg,
+        Tr.theme-tok-icon-accent,
+    ];
+    // Orden visual del editor. Los índices siguen siendo los índices estables del tema para que
+    // los perfiles existentes y el callback `theme-set-token` no cambien de significado.
+    property <[int]> token-order: [
+        1, 14, 10, 12, 13, // superficies y paneles
+        2, 3, 11, 9,       // filas y tablas, incluidas novedades
+        4, 5, 15,          // texto y énfasis de íconos
+        0, 6, 7,           // interacción y foco
+        8,                 // alertas
+    ];
+    // Estado del checkbox "paneles inactivos planos" del editor (lo vuelca Rust desde el tema en
+    // edición).
+    in property <bool> editing-flat-inactive: false;
+    callback theme-set-flat-inactive(bool);
+    in property <bool> editing-use-inactive-row-color: true;
+    callback theme-set-use-inactive-row-color(bool);
+    // Token cuyo picker está abierto/expandido (-1 = ninguno).
+    property <int> editing-open-token: -1;
+    callback theme-set-name(string);
+    callback theme-set-base(int);
+    callback theme-set-token(int, string);   // (índice de token, nuevo hex) → preview en vivo
+    callback theme-save();
+    callback theme-restore();
+    callback theme-cancel();
+    callback set-date-format(int);
+    callback set-size-format(int);
+    callback set-row-density(int);
+    // Avanzado:
+    callback set-ops-display(int);
+    callback set-paste-image-fmt(int);
+    callback set-paste-image-name(string);
+    callback set-paste-jpg-quality(int);
+    callback set-low-power-mode(int);
+    callback set-new-items-at-end(bool);
+    callback set-tray-enabled(bool);
+    callback set-close-to-tray(bool);
+    callback set-global-hotkey-enabled(bool);
+    callback factory-reset();
+    // Historial de carpetas recientes (ventana 1–1000) y ranking (1–50).
+    in property <int> recent-limit: 200;
+    callback recent-limit-changed(int);
+    in property <int> frequent-dirs-limit: 10;
+    callback frequent-dirs-limit-changed(int);
+    // Auto-resaltado de código (Previsualización).
+    in property <bool> auto-highlight-code: true;
+    callback set-auto-highlight-code(bool);
+    in property <bool> preview-economical: false;
+    callback set-preview-economical(bool);
+    in property <int> preview-text-limit-index: 1;
+    callback set-preview-text-limit(int);
+    // Animaciones adicionales de mayor costo (p. ej. el brillo de la barra del panel de operaciones).
+    in property <bool> animations-enabled: false;
+    callback set-animations-enabled(bool);
+    // Pie de panel (Avanzado): mostrar/ocultar + plantilla (0..3 fijas, 4=Personalizada) +
+    // template personalizado + vista previa en vivo (renderizada por Rust).
+    in property <bool> footer-enabled: true;
+    callback set-footer-enabled(bool);
+    in property <int> footer-preset-index: 0;
+    callback set-footer-preset-index(int);
+    in property <string> footer-custom-template: "";
+    callback set-footer-custom-template(string);
+    in property <string> footer-preview: "";
+    // Carpeta de inicio (Home, Avanzado). Vacío = carpeta personal del usuario.
+    in property <string> home-dir: "";
+    callback set-home-dir(string);
+    callback browse-home();
+    // Plantilla de tabla por defecto (C4):
+    callback save-default-table();
+    callback clear-default-table();
+    // Reglas de previsualización (C3):
+    in property <[PreviewRuleVm]> preview-rules;
+    // Nombres legibles de los lenguajes de código (orden de CodeLang::all()), poblados desde Rust.
+    in property <[string]> lang-names;
+    // Novedades de esta versión (Acerca de, cat 8):
+    in property <[NewsSection]> release-notes;
+    callback preview-toggle(string);
+    // Modo de vista (0=Auto 1=Texto 2=Imagen 3=Código) y lenguaje (índice en lang-names) por ext.
+    callback preview-set-view-mode(string, int);
+    callback preview-set-view-lang(string, int);
+    callback preview-remove(string);
+    callback preview-add(string);
+    property <string> preview-add-draft: "";
+    // Borradores del modo de vista / lenguaje de la fila de alta; se aplican al agregar.
+    property <int> preview-add-view-draft: 0;
+    property <int> preview-add-lang-draft: 0;
+    // Etiquetas de los 4 modos de vista, para los combobox (orden = índice del modo).
+    property <[string]> view-mode-names: [Tr.preview-view-auto, Tr.preview-view-text, Tr.preview-view-image, Tr.preview-view-code];
+    // Factory reset en dos pasos: el primer clic arma, el segundo confirma.
+    property <bool> reset-armed: false;
+    // Atajos:
+    callback shortcut-capture(string);   // empezar a capturar el atajo de esta acción
+    callback shortcut-reset(string);     // reset de una acción
+    callback shortcuts-reset-all();
+    // Import/Export (por tópico). Cada export genera un .zip con la extensión propia del tópico
+    // (.naygolang / .naygotheme / .naygoconf); cada import filtra esa extensión en el selector.
+    // El de íconos reusa los callbacks import-icon-set/export-icon-set de la pestaña Íconos.
+    callback export-language();
+    callback export-theme();
+    callback export-config();
+    callback import-language();
+    callback import-theme();
+    callback import-config();
+    // Íconos (cat 9): selector de ícono por objeto, overrides y sets personalizados.
+    callback open-icon-picker(string);          // key → abre el picker (Task 14)
+    callback close-icon-picker();               // cierra el picker (Task 14)
+    callback set-icon-override(string, string); // (key, set_id)
+    callback set-icon-override-png(string);     // key
+    callback clear-icon-override(string);       // key
+    callback reset-icon-overrides();
+    callback import-icon-set();
+    callback export-icon-set();
+    // Acerca de: abrir el repositorio en el navegador.
+    callback open-repo();
+    // Cerrar la ventana.
+    callback close();
+    // Captura de tecla (la UI la enruta cuando `capturing` != "").
+    callback capture-key(string, bool, bool, bool);
+
+    // Contenido. Va en un Rectangle a `100%` de la Window (el shorthand de tamaño relativo de
+    // Slint, que SÍ sigue el tamaño real de la ventana al maximizar/redimensionar). Dentro, un
+    // VerticalLayout llena el Rectangle, y su fila de contenido (vertical-stretch) toma el alto
+    // sobrante. (Probado: anclar el layout con root.width/height NO bastaba porque un layout se
+    // auto-dimensiona; el Rectangle a 100% es el contenedor con tamaño concreto que necesitaba.)
+    body := Rectangle {
+        width: 100%;
+        height: 100%;
+        VerticalLayout {
+            padding: 14px;
+            spacing: 10px;
+
+            HorizontalLayout {
+                spacing: 12px;
+                vertical-stretch: 1;
+
+                // Barra lateral de categorías.
+                Rectangle {
+                    width: 170px;
+                    background: Theme.row-bg;
+                    border-radius: 6px;
+                    VerticalLayout {
+                        padding: 6px;
+                        spacing: 2px;
+                        // Encuentra categorías por su nombre y por las etiquetas de sus ajustes.
+                        LineEdit {
+                            height: 28px;
+                            placeholder-text: Tr.cfg-search;
+                            accessible-label: Tr.cfg-search;
+                            text: root.search-text;
+                            edited => { root.search-text = self.text; }
+                        }
+                        // Pestañas en el ORDEN VISUAL de `nav-items`. El `cat-touch` salta al cat
+                        // INTERNO del par (it.cat), no al índice de iteración, así el reorden no afecta
+                        // a los bloques `if root.cat == N`. El `if` filtra por el buscador: con texto,
+                        // solo se muestran las pestañas cuyo label contiene el texto.
+                        for it[i] in root.nav-items: Rectangle {
+                            // `matches`: la pestaña coincide con el buscador (o el buscador está vacío).
+                            // Slint 1.16 no tiene `contains`/substring en sus expresiones, así que el
+                            // match de subcadena (case-insensitive) lo resuelve Rust vía TextUtil.contains.
+                            // Lowercaseamos aquí (Slint sí tiene to-lowercase) y Rust hace un contains plano.
+                            property <bool> matches: root.category-matches(i);
+                            // Las filas ocultas no deben reservar alto: en un VerticalLayout `visible:false`
+                            // igual deja su hueco, así que colapsamos también el alto (0px) cuando no coincide.
+                            height: self.matches ? 30px : 0px;
+                            visible: self.matches;
+                            background: root.cat == it.cat ? Theme.selection-bg : (cat-touch.has-hover ? Theme.row-alt-bg : transparent);
+                            border-radius: 4px;
+                            border-width: cat-focus.has-focus ? 1px : 0px;
+                            border-color: Theme.accent;
+                            Text { text: it.label; color: Theme.text; vertical-alignment: center; x: 10px; }
+                            cat-focus := FocusScope {
+                                enabled: parent.matches;
+                                accessible-role: button;
+                                accessible-label: it.label;
+                                accessible-action-default => {
+                                    root.cat = it.cat; root.capturing = ""; root.reset-armed = false;
+                                }
+                                key-pressed(ev) => {
+                                    if ev.text == Key.Return || ev.text == " " {
+                                        root.cat = it.cat; root.capturing = ""; root.reset-armed = false;
+                                        return accept;
+                                    }
+                                    reject
+                                }
+                            }
+                            cat-touch := TouchArea { clicked => { cat-focus.focus(); root.cat = it.cat; root.capturing = ""; root.reset-armed = false; } }
+                        }
+                        if !root.category-matches(0) && !root.category-matches(1)
+                            && !root.category-matches(2) && !root.category-matches(3)
+                            && !root.category-matches(4) && !root.category-matches(5)
+                            && !root.category-matches(6) && !root.category-matches(7)
+                            && !root.category-matches(8) && !root.category-matches(9): Text {
+                            text: Tr.no-matches; color: Theme.text-dim; wrap: word-wrap;
+                        }
+                        // Espaciador estirable: da a esta columna max-height infinito. Sin él, la
+                        // suma de los ítems fijos le ponía un tope finito a la FILA, y la fila —aun
+                        // con vertical-stretch— no podía crecer al alto de la ventana (dejaba espacio
+                        // muerto abajo). Con el spacer, la fila estira a fondo.
+                        Rectangle { vertical-stretch: 1; }
+                    }
+                }
+
+                // Contenido de la categoría.
+                Rectangle {
+                    horizontal-stretch: 1;
+                    background: Theme.row-bg;
+                    border-radius: 6px;
+                    ScrollView {
+                        // Barra siempre visible: deja claro que hay más opciones abajo (antes el
+                        // scroll "fantasma" daba la ilusión de que no había más contenido).
+                        vertical-scrollbar-policy: always-on;
+                        VerticalLayout {
+                            // Anclar arriba: con la ventana alta, el contenido se queda pegado al
+                            // tope (espacio sobrante abajo) en vez de repartirse y "flotar" al medio.
+                            alignment: start;
+                            padding: 12px;
+                            spacing: 6px;
+
+                            // === General (cat 0) ===
+                            if root.cat == 0: VerticalLayout {
+                                spacing: 6px;
+                                Field {
+                                    label: Tr.cfg-show-parent;
+                                    tip: Tr.cfg-tip-show-parent;
+                                    Switch { checked: root.vm.show-parent; toggled => { root.set-show-parent(self.checked); } }
+                                }
+                                Field {
+                                    label: Tr.cfg-icon-only;
+                                    tip: Tr.cfg-tip-icon-only;
+                                    Switch { checked: root.vm.icon-only; toggled => { root.set-icon-only(self.checked); } }
+                                }
+                                Field {
+                                    label: Tr.cfg-bar-position;
+                                    tip: Tr.cfg-tip-bar-position;
+                                    ThemeCombo {
+                                        width: root.ctl-w;
+                                        model: [Tr.cfg-bar-top, Tr.cfg-bar-side];
+                                        current-index: root.vm.bar-position;
+                                        selected => { root.set-bar-position(self.current-index); }
+                                    }
+                                }
+                                Field {
+                                    label: Tr.cfg-window-title;
+                                    tip: Tr.cfg-tip-window-title;
+                                    ThemeCombo {
+                                        width: root.ctl-w;
+                                        model: [Tr.cfg-title-app, Tr.cfg-title-app-path, Tr.cfg-title-path];
+                                        current-index: root.vm.window-title-mode;
+                                        selected => { root.set-window-title-mode(self.current-index); }
+                                    }
+                                }
+                                Field {
+                                    label: Tr.cfg-size-no-subdirs;
+                                    tip: Tr.cfg-tip-size-no-subdirs;
+                                    Switch { checked: root.vm.size-no-subdirs; toggled => { root.set-size-no-subdirs(self.checked); } }
+                                }
+                                Field {
+                                    label: Tr.cfg-autostart;
+                                    tip: Tr.cfg-tip-autostart;
+                                    Switch { checked: root.vm.autostart; toggled => { root.set-autostart(self.checked); } }
+                                }
+                                Field {
+                                    label: Tr.cfg-autostart-minimized;
+                                    tip: Tr.cfg-tip-autostart-minimized;
+                                    Switch {
+                                        enabled: root.vm.autostart;
+                                        checked: root.vm.autostart-minimized;
+                                        toggled => { root.set-autostart-minimized(self.checked); }
+                                    }
+                                }
+                                // Plantilla de tabla por defecto (C4): usar la tabla del panel
+                                // activo como predeterminada para paneles nuevos.
+                                Field {
+                                    label: Tr.cfg-default-table;
+                                    tip: Tr.cfg-tip-default-table;
+                                    HorizontalLayout {
+                                        spacing: 6px;
+                                        Text {
+                                            text: root.vm.default-table-on ? Tr.cfg-default-table-on : Tr.cfg-default-table-off;
+                                            color: root.vm.default-table-on ? Theme.icon-accent : Theme.text-dim;
+                                            font-size: 11px;
+                                            vertical-alignment: center;
+                                        }
+                                        CfgBtn { label: Tr.cfg-default-table-save; clicked => { root.save-default-table(); } }
+                                        CfgBtn {
+                                            label: Tr.cfg-default-table-clear;
+                                            danger: root.vm.default-table-on;
+                                            clicked => { root.clear-default-table(); }
+                                        }
+                                    }
+                                }
+                                // Idioma (movido aquí desde su antigua categoría propia, que se eliminó;
+                                // se cambia en caliente). Usa el mismo modelo/callback que antes.
+                                Field {
+                                    label: Tr.cfg-language;
+                                    tip: Tr.cfg-tip-language;
+                                    ThemeCombo {
+                                        width: root.ctl-w;
+                                        model: root.vm.languages;
+                                        // ThemeCombo deriva current-value de current-index, así que
+                                        // inicializamos por índice para que el item resaltado sea el idioma activo.
+                                        current-index: root.vm.language-index;
+                                        selected => {
+                                            // languages muestra nombres nativos; language-codes tiene
+                                            // los códigos en el mismo orden. Usamos el índice seleccionado
+                                            // para obtener el código y no depender del texto mostrado.
+                                            root.set-language(root.vm.language-codes[self.current-index]);
+                                        }
+                                    }
+                                }
+                            }
+
+                            // === Operaciones (cat 1) ===
+                            if root.cat == 1: VerticalLayout {
+                                spacing: 6px;
+                                Field {
+                                    label: Tr.cfg-ops-mode;
+                                    tip: Tr.cfg-tip-ops-mode;
+                                    ThemeCombo {
+                                        width: root.ctl-w;
+                                        model: [Tr.cfg-ops-queue, Tr.cfg-ops-parallel];
+                                        current-index: root.vm.ops-mode;
+                                        selected => { root.set-ops-mode(self.current-index); }
+                                    }
+                                }
+                                Field {
+                                    label: Tr.cfg-confirm-trash;
+                                    tip: Tr.cfg-tip-confirm-trash;
+                                    Switch { checked: root.vm.confirm-trash; toggled => { root.set-confirm-trash(self.checked); } }
+                                }
+                                Field {
+                                    label: Tr.cfg-confirm-drop;
+                                    tip: Tr.cfg-tip-confirm-drop;
+                                    Switch { checked: root.vm.confirm-drop-between-panes; toggled => { root.set-confirm-drop-between-panes(self.checked); } }
+                                }
+                                Field {
+                                    label: Tr.cfg-confirm-external-drop;
+                                    tip: Tr.cfg-tip-confirm-external-drop;
+                                    Switch { checked: root.vm.confirm-external-drops; toggled => { root.set-confirm-external-drops(self.checked); } }
+                                }
+                                Field {
+                                    label: Tr.cfg-skip-external-drop-session;
+                                    tip: Tr.cfg-tip-skip-external-drop-session;
+                                    Switch {
+                                        checked: root.vm.skip-external-drop-confirmation-session;
+                                        enabled: root.vm.confirm-external-drops;
+                                        toggled => { root.set-skip-external-drop-confirmation-session(self.checked); }
+                                    }
+                                }
+                                Field {
+                                    label: Tr.cfg-show-op-summary;
+                                    tip: Tr.cfg-tip-show-op-summary;
+                                    Switch { checked: root.vm.show-op-summary; toggled => { root.set-show-op-summary(self.checked); } }
+                                }
+                                Field {
+                                    label: Tr.cfg-auto-hide-operations;
+                                    tip: Tr.cfg-tip-auto-hide-operations;
+                                    Switch { checked: root.vm.auto-hide-operations; toggled => { root.set-auto-hide-operations(self.checked); } }
+                                }
+                                Field {
+                                    label: Tr.cfg-animations;
+                                    tip: Tr.cfg-tip-animations;
+                                    Switch { checked: root.animations-enabled; toggled => { root.set-animations-enabled(self.checked); } }
+                                }
+                            }
+
+                            // === Pegado (cat 2) ===
+                            if root.cat == 2: VerticalLayout {
+                                spacing: 6px;
+                                Field {
+                                    label: Tr.cfg-paste-confirm;
+                                    tip: Tr.cfg-tip-paste-confirm;
+                                    Switch { checked: root.vm.paste-confirm; toggled => { root.set-paste-confirm(self.checked); } }
+                                }
+                                Field {
+                                    label: Tr.cfg-paste-name;
+                                    tip: Tr.cfg-tip-paste-name;
+                                    LineEdit {
+                                        text: root.vm.paste-text-name;
+                                        accessible-label: Tr.cfg-paste-name;
+                                        width: 220px;
+                                        edited => { root.set-paste-text-name(self.text); }
+                                    }
+                                }
+                                Field {
+                                    label: Tr.cfg-paste-ext;
+                                    tip: Tr.cfg-tip-paste-ext;
+                                    LineEdit {
+                                        text: root.vm.paste-text-ext;
+                                        accessible-label: Tr.cfg-paste-ext;
+                                        width: 100px;
+                                        edited => { root.set-paste-text-ext(self.text); }
+                                    }
+                                }
+                                // --- Imagen pegada ---
+                                Field {
+                                    label: Tr.cfg-paste-image-name;
+                                    LineEdit {
+                                        text: root.vm.paste-image-name;
+                                        accessible-label: Tr.cfg-paste-image-name;
+                                        width: 220px;
+                                        edited => { root.set-paste-image-name(self.text); }
+                                    }
+                                }
+                                Field {
+                                    label: Tr.cfg-paste-image-fmt;
+                                    ThemeCombo {
+                                        width: root.ctl-w;
+                                        model: [Tr.cfg-paste-fmt-png, Tr.cfg-paste-fmt-jpg];
+                                        current-index: root.vm.paste-image-fmt;
+                                        selected => { root.set-paste-image-fmt(self.current-index); }
+                                    }
+                                }
+                                // Calidad JPG: solo aplica al formato JPG (índice 1), por eso se oculta
+                                // cuando el formato es PNG. Entero 1–100 (el codificador eleva 0 a 1);
+                                // se clampa al vuelo igual que el límite de recientes.
+                                if root.vm.paste-image-fmt == 1: Field {
+                                    label: Tr.cfg-paste-jpg-quality;
+                                    LineEdit {
+                                        text: root.vm.paste-jpg-quality + "";
+                                        accessible-label: Tr.cfg-paste-jpg-quality;
+                                        width: root.ctl-w;
+                                        placeholder-text: "1–100";
+                                        edited(t) => {
+                                            if (t.to-float() >= 1) {
+                                                self.text = max(1, min(100, Math.round(t.to-float()))) + "";
+                                                root.set-paste-jpg-quality(max(1, min(100, Math.round(t.to-float()))));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // === Apariencia (cat 3) ===
+                            if root.cat == 3: VerticalLayout {
+                                spacing: 6px;
+                                Text { text: Tr.fonts-title; color: Theme.text; font-weight: 700; }
+                                Text { text: Tr.fonts-help; color: Theme.text-dim; wrap: word-wrap; }
+                                FontChoice { label: Tr.fonts-interface; family: root.vm.interface-font; default-label: Tr.fonts-system;
+                                    apply(family) => { root.set-font(0, family); } }
+                                FontChoice { label: Tr.fonts-listings; family: root.vm.listings-font; default-label: Tr.fonts-inherit;
+                                    apply(family) => { root.set-font(1, family); } }
+                                FontChoice { label: Tr.fonts-preview; family: root.vm.preview-font; default-label: "Consolas";
+                                    sample-family: Theme.preview-font;
+                                    apply(family) => { root.set-font(2, family); } }
+                                // Galería de temas RESPONSIVE: las tarjetas fluyen en N columnas según
+                                // el ancho disponible (no más una grilla fija de 3 que se encimaba). Cada
+                                // tarjeta se posiciona por índice (fila/columna calculadas). Un clic aplica
+                                // el tema en caliente; la activa lleva borde de acento + ★.
+                                HorizontalLayout {
+                                    spacing: 5px;
+                                    alignment: start;
+                                    Text { text: Tr.cfg-theme; color: Theme.text-dim; font-size: 12px; vertical-alignment: center; }
+                                    HelpIcon { tip: Tr.cfg-tip-theme; }
+                                }
+                                gallery := Rectangle {
+                                    // Geometría de las tarjetas (en una sola fuente para alto/ancho).
+                                    property <length> gap: 8px;
+                                    property <length> card-w: 168px;
+                                    property <length> card-h: 116px;
+                                    // Columnas que entran en el ancho actual (mínimo 1).
+                                    property <int> cols: max(1, floor((self.width + self.gap) / (self.card-w + self.gap)));
+                                    property <int> rows: ceil(root.theme-cards.length / self.cols);
+                                    // Alto necesario para todas las filas (la galería crece con el contenido).
+                                    height: self.rows * (self.card-h + self.gap) - self.gap;
+
+                                    for tc[i] in root.theme-cards: tcard := Rectangle {
+                                        property <int> gcol: mod(i, gallery.cols);
+                                        property <int> grow: floor(i / gallery.cols);
+                                        x: tcard.gcol * (gallery.card-w + gallery.gap);
+                                        y: tcard.grow * (gallery.card-h + gallery.gap);
+                                        width: gallery.card-w;
+                                        height: gallery.card-h;
+                                        background: tc.sw-panel;
+                                        border-radius: 7px;
+                                        border-width: tc.active ? 2px : 1px;
+                                        border-color: tc.active ? Theme.accent : Theme.border;
+                                        VerticalLayout {
+                                            padding: 8px;
+                                            spacing: 6px;
+                                            HorizontalLayout {
+                                                spacing: 4px;
+                                                Rectangle { width: 22px; height: 22px; border-radius: 4px; background: tc.sw-accent; }
+                                                Rectangle { width: 22px; height: 22px; border-radius: 4px; background: tc.sw-row; }
+                                                Rectangle { width: 22px; height: 22px; border-radius: 4px; background: tc.sw-highlight; }
+                                                Rectangle { width: 22px; height: 22px; border-radius: 4px; background: tc.sw-text; }
+                                            }
+                                            HorizontalLayout {
+                                                spacing: 4px;
+                                                Text {
+                                                    text: tc.name;
+                                                    color: tc.sw-text;
+                                                    font-size: 12px;
+                                                    font-weight: tc.active ? 800 : 500;
+                                                    vertical-alignment: center;
+                                                    horizontal-stretch: 1;
+                                                    overflow: elide;
+                                                }
+                                                if tc.active: Rectangle {
+                                                    width: 16px;
+                                                    height: 16px;
+                                                    Path {
+                                                        width: 14px; height: 14px;
+                                                        x: 1px; y: 1px;
+                                                        fill: Theme.accent;
+                                                        viewbox-width: 20; viewbox-height: 20;
+                                                        MoveTo { x: 10; y: 1; }
+                                                        LineTo { x: 12.6; y: 7.1; }
+                                                        LineTo { x: 19; y: 7.6; }
+                                                        LineTo { x: 14.2; y: 11.8; }
+                                                        LineTo { x: 15.7; y: 18; }
+                                                        LineTo { x: 10; y: 14.7; }
+                                                        LineTo { x: 4.3; y: 18; }
+                                                        LineTo { x: 5.8; y: 11.8; }
+                                                        LineTo { x: 1; y: 7.6; }
+                                                        LineTo { x: 7.4; y: 7.1; }
+                                                        Close { }
+                                                    }
+                                                }
+                                            }
+                                            // Espaciador para empujar la fila de botones al fondo de la tarjeta.
+                                            Rectangle { vertical-stretch: 1; }
+                                        }
+                                        // TouchArea de toda la tarjeta (aplica el tema al hacer clic). Va ANTES de la
+                                        // fila de botones para que esos botones, declarados después, queden por encima
+                                        // y capturen su propio clic sin disparar también el "aplicar tema".
+                                        TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => { root.set-theme(tc.id); }
+                                        }
+                                        // Fila de acciones por tema, anclada al fondo. Builtin → "Personalizar";
+                                        // de usuario → "Editar" + "Eliminar". Cada botón usa su propio TouchArea.
+                                        HorizontalLayout {
+                                            x: 8px;
+                                            y: parent.height - self.height - 8px;
+                                            width: parent.width - 16px;
+                                            height: 22px;
+                                            spacing: 4px;
+                                            // Botón "Personalizar" (solo builtin).
+                                            if tc.is-builtin: Rectangle {
+                                                horizontal-stretch: 1;
+                                                height: 22px;
+                                                border-radius: 4px;
+                                                background: custom-touch.has-hover ? Theme.accent : Theme.row-bg;
+                                                border-width: 1px;
+                                                border-color: Theme.border;
+                                                Text {
+                                                    text: Tr.theme-customize;
+                                                    color: custom-touch.has-hover ? white : Theme.text;
+                                                    font-size: 11px;
+                                                    horizontal-alignment: center;
+                                                    vertical-alignment: center;
+                                                }
+                                                custom-touch := TouchArea {
+                                                    mouse-cursor: pointer;
+                                                    clicked => { root.theme-customize(tc.id); }
+                                                }
+                                            }
+                                            // Botones "Editar" + "Eliminar" (solo temas de usuario).
+                                            if !tc.is-builtin: Rectangle {
+                                                horizontal-stretch: 1;
+                                                height: 22px;
+                                                border-radius: 4px;
+                                                background: edit-touch.has-hover ? Theme.accent : Theme.row-bg;
+                                                border-width: 1px;
+                                                border-color: Theme.border;
+                                                Text {
+                                                    text: Tr.theme-edit;
+                                                    color: edit-touch.has-hover ? white : Theme.text;
+                                                    font-size: 11px;
+                                                    horizontal-alignment: center;
+                                                    vertical-alignment: center;
+                                                }
+                                                edit-touch := TouchArea {
+                                                    mouse-cursor: pointer;
+                                                    clicked => { root.theme-edit(tc.id); }
+                                                }
+                                            }
+                                            if !tc.is-builtin: Rectangle {
+                                                width: 26px;
+                                                height: 22px;
+                                                border-radius: 4px;
+                                                background: del-touch.has-hover ? Theme.error : Theme.row-bg;
+                                                border-width: 1px;
+                                                border-color: Theme.border;
+                                                Text {
+                                                    text: "🗑";
+                                                    color: del-touch.has-hover ? white : Theme.text-dim;
+                                                    font-size: 11px;
+                                                    horizontal-alignment: center;
+                                                    vertical-alignment: center;
+                                                }
+                                                del-touch := TouchArea {
+                                                    mouse-cursor: pointer;
+                                                    clicked => { root.theme-delete(tc.id); }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                // ---------- Editor de tema (se muestra cuando hay un tema en edición) ----------
+                                // Vista expandible debajo de la galería: nombre + base + lista de los 16 tokens
+                                // (muestra de color + nombre + hex; clic abre el ColorPicker para ESE token, cuyo
+                                // `changed(hex)` dispara el preview en vivo en TODA la app). Botones guardar/
+                                // restaurar/cancelar al final.
+                                if root.editing-active: Rectangle {
+                                    border-radius: 8px;
+                                    border-width: 1px;
+                                    border-color: Theme.accent;
+                                    background: Theme.row-bg;
+                                    VerticalLayout {
+                                        padding: 10px;
+                                        spacing: 8px;
+                                        // Acciones DUPLICADAS arriba (mismas callbacks que la fila de
+                                        // abajo) para no tener que scrollear hasta el final del editor.
+                                        // Llevan ícono reconocible (✓ guardar, ↻ restaurar, ✕ cancelar).
+                                        HorizontalLayout {
+                                            spacing: 8px;
+                                            padding-bottom: 2px;
+                                            CfgIconBtn {
+                                                label: Tr.theme-save;
+                                                kind: "save";
+                                                clicked => { root.editing-open-token = -1; root.theme-save(); }
+                                            }
+                                            CfgIconBtn {
+                                                label: Tr.theme-restore;
+                                                kind: "restore";
+                                                clicked => { root.theme-restore(); }
+                                            }
+                                            CfgIconBtn {
+                                                label: Tr.theme-cancel;
+                                                kind: "cancel";
+                                                clicked => { root.editing-open-token = -1; root.theme-cancel(); }
+                                            }
+                                        }
+                                        // Nombre del tema.
+                                        Field {
+                                            label: Tr.theme-name;
+                                            LineEdit {
+                                                width: root.ctl-w;
+                                                text: root.editing-name;
+                                                accessible-label: Tr.theme-name;
+                                                edited(t) => { root.theme-set-name(t); }
+                                            }
+                                        }
+                                        // Base oscuro/claro.
+                                        Field {
+                                            label: Tr.theme-base;
+                                            ThemeCombo {
+                                                width: root.ctl-w;
+                                                model: [Tr.theme-base-dark, Tr.theme-base-light];
+                                                current-index: root.editing-base-index;
+                                                selected => { root.theme-set-base(self.current-index); }
+                                            }
+                                        }
+                                        // Los tokens se agrupan por la superficie o estado que afectan. `ti` conserva
+                                        // el índice de almacenamiento, aunque la visualización ya no sea el orden interno.
+                                        for ti in root.token-order: VerticalLayout {
+                                            spacing: 4px;
+                                            if ti == 1: Text {
+                                                text: Tr.theme-group-surfaces;
+                                                color: Theme.accent;
+                                                font-size: 11px;
+                                                font-weight: 700;
+                                            }
+                                            if ti == 2: Text {
+                                                text: Tr.theme-group-rows;
+                                                color: Theme.accent;
+                                                font-size: 11px;
+                                                font-weight: 700;
+                                            }
+                                            if ti == 4: Text {
+                                                text: Tr.theme-group-text;
+                                                color: Theme.accent;
+                                                font-size: 11px;
+                                                font-weight: 700;
+                                            }
+                                            if ti == 0: Text {
+                                                text: Tr.theme-group-interaction;
+                                                color: Theme.accent;
+                                                font-size: 11px;
+                                                font-weight: 700;
+                                            }
+                                            if ti == 8: Text {
+                                                text: Tr.theme-group-alerts;
+                                                color: Theme.accent;
+                                                font-size: 11px;
+                                                font-weight: 700;
+                                            }
+                                            Rectangle {
+                                                height: 30px;
+                                                border-radius: 4px;
+                                                background: tok-touch.has-hover ? Theme.row-alt-bg : transparent;
+                                                HorizontalLayout {
+                                                    padding-left: 4px;
+                                                    padding-right: 4px;
+                                                    spacing: 8px;
+                                                    // Muestra del color actual del token.
+                                                    Rectangle {
+                                                        width: 24px;
+                                                        height: 18px;
+                                                        y: (parent.height - self.height) / 2;
+                                                        border-radius: 3px;
+                                                        border-width: 1px;
+                                                        border-color: Theme.border;
+                                                        background: ti < root.editing-token-r.length
+                                                            ? rgb(root.editing-token-r[ti], root.editing-token-g[ti], root.editing-token-b[ti])
+                                                            : black;
+                                                    }
+                                                    Text {
+                                                        text: root.token-names[ti];
+                                                        color: Theme.text;
+                                                        font-size: 12px;
+                                                        vertical-alignment: center;
+                                                        horizontal-stretch: 1;
+                                                    }
+                                                    Text {
+                                                        text: ti < root.editing-token-hex.length ? root.editing-token-hex[ti] : "";
+                                                        color: Theme.text-dim;
+                                                        font-size: 12px;
+                                                        vertical-alignment: center;
+                                                    }
+                                                }
+                                                tok-touch := TouchArea {
+                                                    mouse-cursor: pointer;
+                                                    // Solo alterna qué token está abierto (uno a la vez). El color inicial
+                                                    // NO se setea aquí de forma imperativa: el ColorPicker es condicional
+                                                    // (`if` abajo), así que al hacer clic todavía no existe. Arranca con el
+                                                    // color del token por DATA-BINDING (init-r/g/b enlazados al modelo).
+                                                    clicked => {
+                                                        root.editing-open-token = root.editing-open-token == ti ? -1 : ti;
+                                                    }
+                                                }
+                                            }
+                                            // Picker para este token. Condicional: SOLO existe en el árbol cuando este token
+                                            // está abierto. Con `if` (en vez de `visible:`) el picker no reserva alto al estar
+                                            // cerrado → las demás filas quedan delgadas (~30px), sin huecos. Queda dentro del
+                                            // VerticalLayout de ESTE token, debajo de la fila, así se despliega bajo ella.
+                                            // El color inicial entra por binding (init-r/g/b ← modelo del token).
+                                            if root.editing-open-token == ti: ColorPicker {
+                                                init-r: ti < root.editing-token-r.length ? root.editing-token-r[ti] : 0;
+                                                init-g: ti < root.editing-token-g.length ? root.editing-token-g[ti] : 0;
+                                                init-b: ti < root.editing-token-b.length ? root.editing-token-b[ti] : 0;
+                                                standard-colors-label: Tr.theme-standard-colors;
+                                                more-colors-label: Tr.theme-more-colors;
+                                                changed(hex) => { root.theme-set-token(ti, hex); }
+                                            }
+                                        }
+                                        Field {
+                                            label: Tr.theme-use-inactive-row-color;
+                                            Switch { checked: root.editing-use-inactive-row-color; toggled => { root.theme-set-use-inactive-row-color(self.checked); } }
+                                        }
+                                        // Casilla "paneles inactivos planos": cuando se activa, las filas
+                                        // de un panel NO activo se pintan sin la cebra (todas del color
+                                        // "fila de panel inactivo"). Vive en el tema (se guarda con él) y
+                                        // refleja el preview en vivo igual que los colores.
+                                        HorizontalLayout {
+                                            spacing: 8px;
+                                            padding-top: 2px;
+                                            Text {
+                                                text: Tr.theme-flat-inactive;
+                                                color: Theme.text;
+                                                font-size: 12px;
+                                                vertical-alignment: center;
+                                                horizontal-stretch: 1;
+                                            }
+                                            Switch {
+                                                checked: root.editing-flat-inactive;
+                                                toggled(v) => { root.theme-set-flat-inactive(v); }
+                                            }
+                                        }
+                                        // Acciones del editor (también abajo, para tenerlas a mano
+                                        // tras revisar los tokens). Mismas callbacks e íconos que arriba.
+                                        HorizontalLayout {
+                                            spacing: 8px;
+                                            padding-top: 4px;
+                                            CfgIconBtn {
+                                                label: Tr.theme-save;
+                                                kind: "save";
+                                                clicked => { root.editing-open-token = -1; root.theme-save(); }
+                                            }
+                                            CfgIconBtn {
+                                                label: Tr.theme-restore;
+                                                kind: "restore";
+                                                clicked => { root.theme-restore(); }
+                                            }
+                                            CfgIconBtn {
+                                                label: Tr.theme-cancel;
+                                                kind: "cancel";
+                                                clicked => { root.editing-open-token = -1; root.theme-cancel(); }
+                                            }
+                                        }
+                                    }
+                                }
+                                // (El selector de idioma se movió a su propia categoría "Idioma"
+                                // del sidebar para que sea fácil de encontrar; ya no vive aquí.)
+                                // Un único catálogo en Íconos; abrirlo no aplica otro set.
+                                Field {
+                                    label: Tr.cfg-icon-set;
+                                    tip: Tr.cfg-tip-icon-set;
+                                    CfgBtn {
+                                        label: Tr.icons-open-settings;
+                                        clicked => { root.cat = 9; root.search-text = ""; root.capturing = ""; }
+                                    }
+                                }
+                                if root.vm.system-file-icons-supported: Field {
+                                    label: Tr.cfg-system-file-icons;
+                                    tip: Tr.cfg-tip-system-file-icons;
+                                    Switch {
+                                        checked: root.vm.use-system-file-icons;
+                                        toggled => { root.set-system-file-icons(self.checked); }
+                                    }
+                                }
+                                Field {
+                                    label: Tr.cfg-date-format;
+                                    tip: Tr.cfg-tip-date-format;
+                                    ThemeCombo {
+                                        width: root.ctl-w;
+                                        model: [Tr.cfg-date-iso-min, Tr.cfg-date-iso, Tr.cfg-date-dmy-min, Tr.cfg-date-dmy];
+                                        current-index: root.vm.date-format;
+                                        selected => { root.set-date-format(self.current-index); }
+                                    }
+                                }
+                                Field {
+                                    label: Tr.cfg-size-format;
+                                    tip: Tr.cfg-tip-size-format;
+                                    ThemeCombo {
+                                        width: root.ctl-w;
+                                        model: [Tr.cfg-size-auto, Tr.cfg-size-bytes, Tr.cfg-size-kb, Tr.cfg-size-mb];
+                                        current-index: root.vm.size-format;
+                                        selected => { root.set-size-format(self.current-index); }
+                                    }
+                                }
+                                Field {
+                                    label: Tr.cfg-row-density;
+                                    tip: Tr.cfg-tip-row-density;
+                                    ThemeCombo {
+                                        width: root.ctl-w;
+                                        model: [Tr.cfg-density-compact, Tr.cfg-density-comfortable];
+                                        current-index: root.vm.row-density;
+                                        selected => { root.set-row-density(self.current-index); }
+                                    }
+                                }
+                            }
+
+                            // === Atajos (cat 4) ===
+                            if root.cat == 4: VerticalLayout {
+                                spacing: 6px;
+                                HorizontalLayout {
+                                    height: 28px;
+                                    spacing: 5px;
+                                    Text {
+                                        text: root.capturing != "" ? Tr.cfg-capturing : Tr.cfg-shortcuts-hint;
+                                        color: root.capturing != "" ? Theme.icon-accent : Theme.text-dim;
+                                        vertical-alignment: center;
+                                    }
+                                    HelpIcon { tip: Tr.cfg-tip-shortcuts; y: (parent.height - self.height) / 2; }
+                                    Rectangle { horizontal-stretch: 1; }
+                                    CfgBtn { label: Tr.cfg-reset-all; clicked => { root.shortcuts-reset-all(); } }
+                                }
+                                // Encabezado de columnas: alinea con las celdas de ancho fijo de
+                                // abajo para que toda la tabla de atajos se lea ordenada.
+                                HorizontalLayout {
+                                    height: 22px;
+                                    padding-left: 6px;
+                                    padding-right: 6px;
+                                    spacing: 8px;
+                                    Text { text: Tr.cfg-sc-action; color: Theme.text-dim; font-size: 11px; vertical-alignment: center; horizontal-stretch: 1; }
+                                    Text { text: Tr.cfg-sc-combo; color: Theme.text-dim; font-size: 11px; vertical-alignment: center; horizontal-alignment: center; width: 140px; }
+                                    Rectangle { width: 90px; }
+                                    Rectangle { width: 80px; }
+                                }
+                                // La lista crece con el alto de la tarjeta (antes era fija en 360px
+                                // y dejaba vacío el resto al agrandar el popup).
+                                ListView {
+                                    // Alto fijo y generoso (la lista tiene ~50 acciones, scrollea).
+                                    // La tarjeta se ajusta a este alto, así no queda espacio vacío.
+                                    height: 380px;
+                                    for s[i] in root.shortcuts: Rectangle {
+                                        height: 32px;
+                                        background: Math.mod(i, 2) == 0 ? transparent : Theme.row-alt-bg;
+                                        border-radius: 4px;
+                                        HorizontalLayout {
+                                            padding-left: 6px;
+                                            padding-right: 6px;
+                                            spacing: 8px;
+                                            // Acción (estira). El combo y los botones van en celdas de
+                                            // ANCHO FIJO para que todas las filas queden alineadas.
+                                            Text {
+                                                text: s.label;
+                                                color: Theme.text;
+                                                vertical-alignment: center;
+                                                horizontal-stretch: 1;
+                                                overflow: elide;
+                                            }
+                                            // Combo actual (o "presioná…" al capturar). Celda fija.
+                                            Rectangle {
+                                                width: 140px;
+                                                Rectangle {
+                                                    width: 100%;
+                                                    height: 24px;
+                                                    y: (parent.height - self.height) / 2;
+                                                    background: root.capturing == s.action-key ? Theme.selection-bg : Theme.row-bg;
+                                                    border-radius: 4px;
+                                                    border-width: 1px;
+                                                    border-color: root.capturing == s.action-key ? Theme.accent : Theme.border;
+                                                    Text {
+                                                        text: root.capturing == s.action-key ? Tr.cfg-press : (s.chord-text != "" ? s.chord-text : Tr.cfg-no-shortcut);
+                                                        color: s.chord-text != "" ? Theme.text : Theme.text-dim;
+                                                        font-size: 11px;
+                                                        horizontal-alignment: center;
+                                                        vertical-alignment: center;
+                                                    }
+                                                }
+                                            }
+                                            // Botones en celdas fijas: mismo ancho en todas las filas.
+                                            Rectangle {
+                                                width: 90px;
+                                                CfgBtn {
+                                                    width: 100%;
+                                                    y: (parent.height - self.height) / 2;
+                                                    label: Tr.cfg-change;
+                                                    clicked => { root.capturing = s.action-key; root.shortcut-capture(s.action-key); fs.focus(); }
+                                                }
+                                            }
+                                            Rectangle {
+                                                width: 80px;
+                                                CfgBtn {
+                                                    width: 100%;
+                                                    y: (parent.height - self.height) / 2;
+                                                    label: Tr.cfg-reset;
+                                                    clicked => { root.shortcut-reset(s.action-key); }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // === Import / Export (cat 5) ===
+                            // === Importar / Exportar (cat 5) ===
+                            // Organizado por TÓPICO: cada bloque tiene un título en negrita y debajo
+                            // sus dos botones (Exportar / Importar), cada uno con su tooltip (?).
+                            // Las extensiones por tópico son: .naygolang / .naygotheme / .naygoset /
+                            // .naygoconf (todas son un .zip por dentro; el backend valida el contenido).
+                            if root.cat == 5: VerticalLayout {
+                                spacing: 6px;
+                                Text { text: Tr.cfg-export-hint; color: Theme.text-dim; wrap: word-wrap; }
+
+                                // -- Idioma --
+                                Text { text: Tr.cfg-ie-lang; color: Theme.text-dim; font-weight: 700; }
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    alignment: start;
+                                    HorizontalLayout {
+                                        spacing: 4px;
+                                        CfgBtn { label: Tr.cfg-export-lang; clicked => { root.export-language(); } }
+                                        HelpIcon { tip: Tr.cfg-tip-export-lang; y: (parent.height - self.height) / 2; }
+                                    }
+                                    HorizontalLayout {
+                                        spacing: 4px;
+                                        CfgBtn { label: Tr.cfg-import-lang; clicked => { root.import-language(); } }
+                                        HelpIcon { tip: Tr.cfg-tip-import-lang; y: (parent.height - self.height) / 2; }
+                                    }
+                                }
+
+                                // -- Temas --
+                                Rectangle { height: 4px; }
+                                Text { text: Tr.cfg-ie-themes; color: Theme.text-dim; font-weight: 700; }
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    alignment: start;
+                                    HorizontalLayout {
+                                        spacing: 4px;
+                                        CfgBtn { label: Tr.cfg-export-theme; clicked => { root.export-theme(); } }
+                                        HelpIcon { tip: Tr.cfg-tip-export-theme; y: (parent.height - self.height) / 2; }
+                                    }
+                                    HorizontalLayout {
+                                        spacing: 4px;
+                                        CfgBtn { label: Tr.cfg-import-theme; clicked => { root.import-theme(); } }
+                                        HelpIcon { tip: Tr.cfg-tip-import-theme; y: (parent.height - self.height) / 2; }
+                                    }
+                                }
+
+                                // -- Íconos -- (reusa los callbacks de la pestaña Íconos)
+                                Rectangle { height: 4px; }
+                                Text { text: Tr.cfg-ie-icons; color: Theme.text-dim; font-weight: 700; }
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    alignment: start;
+                                    HorizontalLayout {
+                                        spacing: 4px;
+                                        CfgBtn { label: Tr.icons-export; clicked => { root.export-icon-set(); } }
+                                        HelpIcon { tip: Tr.cfg-tip-export-icons; y: (parent.height - self.height) / 2; }
+                                    }
+                                    HorizontalLayout {
+                                        spacing: 4px;
+                                        CfgBtn { label: Tr.icons-import; clicked => { root.import-icon-set(); } }
+                                        HelpIcon { tip: Tr.cfg-tip-import-icons; y: (parent.height - self.height) / 2; }
+                                    }
+                                }
+
+                                // -- Configuración --
+                                Rectangle { height: 4px; }
+                                Text { text: Tr.cfg-ie-config; color: Theme.text-dim; font-weight: 700; }
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    alignment: start;
+                                    HorizontalLayout {
+                                        spacing: 4px;
+                                        CfgBtn { label: Tr.cfg-export-config; clicked => { root.export-config(); } }
+                                        HelpIcon { tip: Tr.cfg-tip-export-config; y: (parent.height - self.height) / 2; }
+                                    }
+                                    HorizontalLayout {
+                                        spacing: 4px;
+                                        CfgBtn { label: Tr.cfg-import-config; clicked => { root.import-config(); } }
+                                        HelpIcon { tip: Tr.cfg-tip-import-config; y: (parent.height - self.height) / 2; }
+                                    }
+                                }
+                            }
+
+                            // === Avanzado (cat 6) ===
+                            if root.cat == 6: VerticalLayout {
+                                spacing: 6px;
+                                Field {
+                                    label: Tr.cfg-ops-display;
+                                    tip: Tr.cfg-tip-ops-display;
+                                    ThemeCombo {
+                                        width: root.ctl-w;
+                                        model: [Tr.cfg-ops-display-panel, Tr.cfg-ops-display-modal, Tr.cfg-ops-display-always];
+                                        current-index: root.vm.ops-display;
+                                        selected => { root.set-ops-display(self.current-index); }
+                                    }
+                                }
+                                Field {
+                                    label: Tr.cfg-low-power;
+                                    tip: Tr.cfg-tip-low-power;
+                                    ThemeCombo {
+                                        width: root.ctl-w;
+                                        model: [Tr.cfg-low-power-auto, Tr.cfg-low-power-always, Tr.cfg-low-power-never];
+                                        current-index: root.vm.low-power-mode;
+                                        selected => { root.set-low-power-mode(self.current-index); }
+                                    }
+                                }
+                                Field {
+                                    label: Tr.cfg-new-items-at-end;
+                                    tip: Tr.cfg-tip-new-items-at-end;
+                                    Switch { checked: root.vm.new-items-at-end; toggled => { root.set-new-items-at-end(self.checked); } }
+                                }
+                                Field {
+                                    label: Tr.cfg-tray-enabled;
+                                    tip: Tr.cfg-tip-tray-enabled;
+                                    Switch { checked: root.vm.tray-enabled; toggled => { root.set-tray-enabled(self.checked); } }
+                                }
+                                Field {
+                                    label: Tr.cfg-close-to-tray;
+                                    tip: Tr.cfg-tip-close-to-tray;
+                                    Switch { checked: root.vm.close-to-tray; toggled => { root.set-close-to-tray(self.checked); } }
+                                }
+                                // Hotkey global (mostrar/ocultar Naygo desde cualquier app): toggle +
+                                // control de captura. Reusa el MISMO mecanismo de captura del editor de
+                                // atajos (root.capturing + fs.FocusScope + capture-key), con el
+                                // sentinel "__global_hotkey__" en vez de un action-key real — así
+                                // main.rs distingue esta captura de una reasignación de atajo normal.
+                                // El control de captura solo se habilita si el toggle está activo.
+                                Field {
+                                    label: Tr.cfg-global-hotkey;
+                                    tip: Tr.cfg-tip-global-hotkey;
+                                    HorizontalLayout {
+                                        spacing: 8px;
+                                        Switch {
+                                            checked: root.vm.global-hotkey-enabled;
+                                            toggled => { root.set-global-hotkey-enabled(self.checked); }
+                                        }
+                                        Rectangle {
+                                            width: 110px;
+                                            height: 24px;
+                                            y: (parent.height - self.height) / 2;
+                                            opacity: root.vm.global-hotkey-enabled ? 1.0 : 0.5;
+                                            background: root.capturing == "__global_hotkey__" ? Theme.selection-bg : Theme.row-bg;
+                                            border-radius: 4px;
+                                            border-width: 1px;
+                                            border-color: root.capturing == "__global_hotkey__" ? Theme.accent : Theme.border;
+                                            Text {
+                                                text: root.capturing == "__global_hotkey__" ? Tr.cfg-press : root.vm.global-hotkey-text;
+                                                color: Theme.text;
+                                                font-size: 11px;
+                                                horizontal-alignment: center;
+                                                vertical-alignment: center;
+                                            }
+                                            TouchArea {
+                                                enabled: root.vm.global-hotkey-enabled;
+                                                clicked => {
+                                                    root.capturing = "__global_hotkey__";
+                                                    root.shortcut-capture("__global_hotkey__");
+                                                    fs.focus();
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                // Historial de carpetas recientes: ventana configurable (1–1000).
+                                Field {
+                                    label: Tr.cfg-recent-limit;
+                                    tip: Tr.cfg-tip-recent-limit;
+                                    LineEdit {
+                                        text: root.recent-limit + "";
+                                        accessible-label: Tr.cfg-recent-limit;
+                                        width: root.ctl-w;
+                                        placeholder-text: "1–1000";
+                                        edited(t) => {
+                                            // Clampear al vuelo: acepta solo enteros 1–1000.
+                                            // `to-float` devuelve 0 si no parsea; vacío/texto
+                                            // quedan en 0 < 1 y no entran al if (no se aplican).
+                                            // Si el valor está fuera de rango se clampa a 1-100
+                                            // y se reescribe el campo visualmente al valor corregido.
+                                            if (t.to-float() >= 1) {
+                                                self.text = max(1, min(1000, Math.round(t.to-float()))) + "";
+                                                root.recent-limit-changed(max(1, min(1000, Math.round(t.to-float()))));
+                                            }
+                                        }
+                                    }
+                                }
+                                Field {
+                                    label: Tr.cfg-frequent-dirs-limit;
+                                    tip: Tr.cfg-tip-frequent-dirs-limit;
+                                    LineEdit {
+                                        text: root.frequent-dirs-limit + "";
+                                        accessible-label: Tr.cfg-frequent-dirs-limit;
+                                        width: root.ctl-w;
+                                        placeholder-text: "1–50";
+                                        edited(t) => {
+                                            if (t.to-float() >= 1) {
+                                                self.text = max(1, min(50, Math.round(t.to-float()))) + "";
+                                                root.frequent-dirs-limit-changed(max(1, min(50, Math.round(t.to-float()))));
+                                            }
+                                        }
+                                    }
+                                }
+                                // === Pie de panel (footer) ===
+                                Rectangle { height: 8px; }
+                                Text {
+                                    text: Tr.cfg-footer-section;
+                                    color: Theme.text-dim;
+                                    font-weight: 700;
+                                }
+                                Field {
+                                    label: Tr.cfg-footer-enabled;
+                                    tip: Tr.cfg-tip-footer-enabled;
+                                    Switch {
+                                        checked: root.footer-enabled;
+                                        toggled => { root.set-footer-enabled(self.checked); }
+                                    }
+                                }
+                                Field {
+                                    label: Tr.cfg-footer-template;
+                                    tip: Tr.cfg-tip-footer-template;
+                                    ThemeCombo {
+                                        width: root.ctl-w;
+                                        model: [
+                                            Tr.cfg-footer-preset-compact,
+                                            Tr.cfg-footer-preset-full,
+                                            Tr.cfg-footer-preset-disk,
+                                            Tr.cfg-footer-preset-selection,
+                                            Tr.cfg-footer-preset-custom,
+                                        ];
+                                        current-index: root.footer-preset-index;
+                                        selected => { root.set-footer-preset-index(self.current-index); }
+                                    }
+                                }
+                                // Plantilla personalizada: solo cuando el preset es "Personalizada…" (4).
+                                // Muestra el campo de tokens + la lista de tokens disponibles.
+                                if root.footer-preset-index == 4: VerticalLayout {
+                                    spacing: 4px;
+                                    HorizontalLayout {
+                                        spacing: 5px;
+                                        LineEdit {
+                                            horizontal-stretch: 1;
+                                            text: root.footer-custom-template;
+                                            placeholder-text: "{sel}/{total} · {marked}";
+                                            accessible-label: Tr.cfg-footer-template;
+                                            edited(t) => { root.set-footer-custom-template(t); }
+                                        }
+                                        HelpIcon { tip: Tr.cfg-tip-footer-custom; y: (parent.height - self.height) / 2; }
+                                    }
+                                    Text {
+                                        text: Tr.cfg-footer-tokens;
+                                        color: Theme.text-dim;
+                                        font-size: 11px;
+                                        wrap: word-wrap;
+                                    }
+                                }
+                                // Vista previa en vivo: render del preset/template actual sobre
+                                // datos de ejemplo (la calcula Rust y la repuebla en cada cambio).
+                                HorizontalLayout {
+                                    spacing: 6px;
+                                    Text {
+                                        text: Tr.cfg-footer-preview + ":";
+                                        color: Theme.text-dim;
+                                        font-size: 11px;
+                                        vertical-alignment: center;
+                                    }
+                                    Text {
+                                        text: root.footer-preview;
+                                        color: Theme.text;
+                                        font-size: 11px;
+                                        horizontal-stretch: 1;
+                                        overflow: elide;
+                                        vertical-alignment: center;
+                                    }
+                                }
+
+                                // === Carpeta de inicio (Home) ===
+                                Rectangle { height: 8px; }
+                                Field {
+                                    label: Tr.cfg-home-dir;
+                                    tip: Tr.cfg-tip-home-dir;
+                                    HorizontalLayout {
+                                        spacing: 6px;
+                                        LineEdit {
+                                            width: root.ctl-w - 90px;
+                                            text: root.home-dir;
+                                            accessible-label: Tr.cfg-home-dir;
+                                            // Sin placeholder largo aquí (se cortaba en el campo
+                                            // angosto). La explicación va completa en el Text de abajo.
+                                            edited(t) => { root.set-home-dir(t); }
+                                        }
+                                        CfgBtn {
+                                            label: Tr.cfg-home-dir-browse;
+                                            clicked => { root.browse-home(); }
+                                        }
+                                    }
+                                }
+                                Text {
+                                    text: Tr.cfg-home-dir-empty;
+                                    color: Theme.text-dim;
+                                    font-size: 11px;
+                                }
+
+                                // Factory reset en dos pasos: el primer clic arma la confirmación.
+                                Rectangle { height: 8px; }
+                                HorizontalLayout {
+                                    alignment: start;
+                                    spacing: 5px;
+                                    CfgBtn {
+                                        label: root.reset-armed ? Tr.cfg-factory-reset-confirm : Tr.cfg-factory-reset;
+                                        danger: root.reset-armed;
+                                        clicked => {
+                                            if (root.reset-armed) {
+                                                root.reset-armed = false;
+                                                root.factory-reset();
+                                            } else {
+                                                root.reset-armed = true;
+                                            }
+                                        }
+                                    }
+                                    HelpIcon { tip: Tr.cfg-tip-factory-reset; y: (parent.height - self.height) / 2; }
+                                }
+                            }
+
+                            // === Previsualización (cat 7) ===
+                            if root.cat == 7: VerticalLayout {
+                                spacing: 6px;
+                                Field {
+                                    label: Tr.cfg-preview-economical;
+                                    tip: Tr.cfg-tip-preview-economical;
+                                    Switch {
+                                        checked: root.preview-economical;
+                                        toggled => { root.set-preview-economical(self.checked); }
+                                    }
+                                }
+                                Field {
+                                    label: Tr.cfg-preview-text-limit;
+                                    tip: Tr.cfg-tip-preview-text-limit;
+                                    ThemeCombo {
+                                        width: root.ctl-w;
+                                        model: ["64 KiB", "256 KiB", "512 KiB", "1 MiB"];
+                                        current-index: root.preview-text-limit-index;
+                                        selected => { root.set-preview-text-limit(self.current-index); }
+                                    }
+                                }
+                                // Auto-resaltado de código: ARRIBA de la tabla de reglas.
+                                Field {
+                                    label: Tr.cfg-auto-highlight;
+                                    tip: Tr.cfg-tip-auto-highlight;
+                                    Switch {
+                                        checked: root.auto-highlight-code;
+                                        toggled => { root.set-auto-highlight-code(self.checked); }
+                                    }
+                                }
+                                HorizontalLayout {
+                                    spacing: 5px;
+                                    Text { text: Tr.cfg-preview-hint; color: Theme.text-dim; wrap: word-wrap; vertical-alignment: center; horizontal-stretch: 1; }
+                                    HelpIcon { tip: Tr.cfg-tip-preview-table; y: (parent.height - self.height) / 2; }
+                                }
+                                // Encabezado de la tabla.
+                                HorizontalLayout {
+                                    height: 22px;
+                                    spacing: 6px;
+                                    Text { text: Tr.cfg-preview-ext; color: Theme.text-dim; font-weight: 700; width: 90px; vertical-alignment: center; }
+                                    Text { text: Tr.cfg-preview-on; color: Theme.text-dim; font-weight: 700; width: 70px; vertical-alignment: center; }
+                                    Text { text: Tr.cfg-preview-as; color: Theme.text-dim; font-weight: 700; horizontal-stretch: 1; vertical-alignment: center; }
+                                    Rectangle { width: 24px; }
+                                }
+                                // Filas de reglas (scroll). Crece con el alto de la tarjeta.
+                                Rectangle {
+                                    // Alto fijo (la lista de reglas scrollea); la tarjeta se ajusta.
+                                    height: 320px;
+                                    background: Theme.panel-bg;
+                                    border-radius: 4px;
+                                    ListView {
+                                        for r in root.preview-rules: Rectangle {
+                                            height: 32px;
+                                            HorizontalLayout {
+                                                padding-left: 4px;
+                                                padding-right: 4px;
+                                                spacing: 6px;
+                                                Text { text: r.ext; color: Theme.text; width: 86px; vertical-alignment: center; }
+                                                Rectangle {
+                                                    width: 70px;
+                                                    Switch {
+                                                        checked: r.enabled;
+                                                        toggled => { root.preview-toggle(r.ext); }
+                                                    }
+                                                }
+                                                // Modo de vista de la regla.
+                                                ThemeCombo {
+                                                    horizontal-stretch: 1;
+                                                    model: root.view-mode-names;
+                                                    current-index: r.view-index;
+                                                    selected => { root.preview-set-view-mode(r.ext, self.current-index); }
+                                                }
+                                                // Lenguaje (solo cuando el modo es Código).
+                                                if r.view-index == 3: ThemeCombo {
+                                                    horizontal-stretch: 1;
+                                                    model: root.lang-names;
+                                                    current-index: r.lang-index;
+                                                    selected => { root.preview-set-view-lang(r.ext, self.current-index); }
+                                                }
+                                                // Quitar la regla: ✕ dibujada con Path (visible en
+                                                // software-render) + borde para que se lea como botón.
+                                                Rectangle {
+                                                    width: 26px;
+                                                    height: 24px;
+                                                    background: rm-touch.has-hover ? Theme.error : Theme.row-bg;
+                                                    border-radius: 3px;
+                                                    border-width: 1px;
+                                                    border-color: rm-touch.has-hover ? Theme.error : Theme.border;
+                                                    CloseIcon {
+                                                        width: 100%;
+                                                        height: 100%;
+                                                        size: 11px;
+                                                        tint: rm-touch.has-hover ? white : Theme.text-dim;
+                                                    }
+                                                    rm-touch := TouchArea {
+                                                        mouse-cursor: pointer;
+                                                        clicked => { root.preview-remove(r.ext); }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                // Alta de una extensión nueva: la extensión + el modo de vista (y el
+                                // lenguaje si es Código). El botón Agregar crea la regla y le aplica el
+                                // modo elegido.
+                                Rectangle { height: 4px; }
+                                Text {
+                                    text: Tr.cfg-preview-add-title;
+                                    color: Theme.text-dim;
+                                    font-size: 12px;
+                                }
+                                // Crea la regla y le aplica el modo de vista / lenguaje del borrador,
+                                // luego limpia los borradores. Reutilizado por el botón y el accepted.
+                                add-fn := Rectangle {
+                                    function add-rule() {
+                                        root.preview-add(root.preview-add-draft);
+                                        if (root.preview-add-view-draft != 0) {
+                                            root.preview-set-view-mode(root.preview-add-draft, root.preview-add-view-draft);
+                                        }
+                                        if (root.preview-add-view-draft == 3) {
+                                            root.preview-set-view-lang(root.preview-add-draft, root.preview-add-lang-draft);
+                                        }
+                                        root.preview-add-draft = "";
+                                        root.preview-add-view-draft = 0;
+                                        root.preview-add-lang-draft = 0;
+                                    }
+                                    HorizontalLayout {
+                                        spacing: 6px;
+                                        // Extensión (ej. sif).
+                                        LineEdit {
+                                            width: 110px;
+                                            text: root.preview-add-draft;
+                                            placeholder-text: Tr.cfg-preview-add-ph;
+                                            accessible-label: Tr.cfg-preview-add-title;
+                                            edited(t) => { root.preview-add-draft = t; }
+                                            accepted => { add-fn.add-rule(); }
+                                        }
+                                        // Modo de vista del alta.
+                                        ThemeCombo {
+                                            horizontal-stretch: 1;
+                                            model: root.view-mode-names;
+                                            current-index: root.preview-add-view-draft;
+                                            selected => { root.preview-add-view-draft = self.current-index; }
+                                        }
+                                        // Lenguaje (solo si el modo de alta es Código).
+                                        if root.preview-add-view-draft == 3: ThemeCombo {
+                                            horizontal-stretch: 1;
+                                            model: root.lang-names;
+                                            current-index: root.preview-add-lang-draft;
+                                            selected => { root.preview-add-lang-draft = self.current-index; }
+                                        }
+                                        CfgBtn {
+                                            label: Tr.cfg-preview-add;
+                                            clicked => { add-fn.add-rule(); }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // === Acerca de (cat 8) ===
+                            if root.cat == 8: VerticalLayout {
+                                spacing: 6px;
+                                alignment: start;
+                                HorizontalLayout {
+                                    alignment: center;
+                                    // Logo: 5 clics seguidos disparan el easter egg.
+                                    logo := Image {
+                                        source: @image-url("../../../assets/icons/logo_naygo.png");
+                                        width: 180px;
+                                        height: 180px;
+                                        image-fit: contain;
+                                        TouchArea {
+                                            clicked => { root.register-egg-click(); }
+                                        }
+                                    }
+                                }
+                                Text {
+                                    text: Tr.about-version + " " + root.app-version;
+                                    color: Theme.text;
+                                    horizontal-alignment: center;
+                                }
+                                Text {
+                                    text: Tr.about-author;
+                                    color: Theme.text;
+                                    font-weight: 700;
+                                    horizontal-alignment: center;
+                                }
+                                Text { text: Tr.about-company; color: Theme.text-dim; horizontal-alignment: center; }
+                                Text { text: Tr.about-license; color: Theme.text-dim; horizontal-alignment: center; }
+                                TextEdit {
+                                    text: root.license-text; read-only: true;
+                                    preferred-height: 240px; min-height: 140px;
+                                    accessible-label: Tr.about-license;
+                                }
+                                Text { text: Tr.about-stack; color: Theme.text-dim; horizontal-alignment: center; }
+                                Text {
+                                    text: Tr.about-notices;
+                                    color: Theme.text-dim;
+                                    font-size: 11px;
+                                    horizontal-alignment: center;
+                                    wrap: word-wrap;
+                                }
+                                HorizontalLayout {
+                                    alignment: center;
+                                    Rectangle {
+                                        width: repo-label.preferred-width + 12px;
+                                        height: 24px;
+                                        background: repo-touch.has-hover ? Theme.selection-bg : transparent;
+                                        border-radius: 4px;
+                                        repo-label := Text {
+                                            text: Tr.about-repo;
+                                            color: Theme.accent;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
+                                        repo-touch := TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => { root.open-repo(); }
+                                        }
+                                    }
+                                }
+                                // Separador y sección "Novedades de esta versión".
+                                Rectangle { height: 8px; }
+                                Text {
+                                    text: Tr.about-news-title;
+                                    color: Theme.text;
+                                    font-weight: 700;
+                                    horizontal-alignment: center;
+                                }
+                                if root.release-notes.length == 0: Text {
+                                    text: Tr.about-no-notes;
+                                    color: Theme.text-dim;
+                                    horizontal-alignment: center;
+                                }
+                                // Contenido acotado y centrado: da a las viñetas un ancho de
+                                // referencia para que `word-wrap` envuelva en vez de estirarse.
+                                HorizontalLayout {
+                                    alignment: center;
+                                    Rectangle {
+                                        max-width: 460px;
+                                        horizontal-stretch: 1;
+                                        VerticalLayout {
+                                            spacing: 6px;
+                                            for sec in root.release-notes: VerticalLayout {
+                                                spacing: 2px;
+                                                Text {
+                                                    text: sec.category;
+                                                    color: Theme.accent;
+                                                    font-weight: 700;
+                                                }
+                                                for it in sec.items: Text {
+                                                    text: "• " + it;
+                                                    color: Theme.text-dim;
+                                                    wrap: word-wrap;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // === Íconos (cat 9) ===
+                            if root.cat == 9: VerticalLayout {
+                                spacing: 6px;
+
+                                // -- Set base: único catálogo de tarjetas --
+                                HorizontalLayout {
+                                    spacing: 5px;
+                                    alignment: start;
+                                    Text { text: Tr.icons-section-base; color: Theme.text-dim; font-weight: 700; vertical-alignment: center; }
+                                    HelpIcon { tip: Tr.cfg-tip-icon-set-base; }
+                                }
+                                // Galería de sets en Íconos, sin duplicación en Apariencia y
+                                // sin botón "Personalizar" (ya estamos aquí). Un clic aplica el set en
+                                // caliente y la cuadrícula de objetos de abajo refleja el set nuevo.
+                                icon-gallery-9 := Rectangle {
+                                    property <length> gap: 8px;
+                                    property <length> card-w: 160px;
+                                    property <length> card-h: 80px;
+                                    property <int> cols: max(1, floor((self.width + self.gap) / (self.card-w + self.gap)));
+                                    property <int> rows: ceil(root.vm.icon-set-cards.length / self.cols);
+                                    height: self.rows * (self.card-h + self.gap) - self.gap;
+
+                                    for ic[i] in root.vm.icon-set-cards: icard9 := Rectangle {
+                                        property <int> gcol: mod(i, icon-gallery-9.cols);
+                                        property <int> grow: floor(i / icon-gallery-9.cols);
+                                        x: icard9.gcol * (icon-gallery-9.card-w + icon-gallery-9.gap);
+                                        y: icard9.grow * (icon-gallery-9.card-h + icon-gallery-9.gap);
+                                        width: icon-gallery-9.card-w;
+                                        height: icon-gallery-9.card-h;
+                                        background: Theme.row-bg;
+                                        border-radius: 7px;
+                                        border-width: ic.selected ? 2px : 1px;
+                                        border-color: ic.selected ? Theme.accent : Theme.border;
+                                        VerticalLayout {
+                                            padding: 8px;
+                                            spacing: 6px;
+                                            HorizontalLayout {
+                                                spacing: 4px;
+                                                for s in ic.samples: Image {
+                                                    source: s;
+                                                    width: 18px;
+                                                    height: 18px;
+                                                    image-fit: contain;
+                                                }
+                                            }
+                                            Text {
+                                                text: ic.label;
+                                                color: Theme.text;
+                                                font-size: 12px;
+                                                font-weight: ic.selected ? 800 : 500;
+                                                overflow: elide;
+                                            }
+                                        }
+                                        TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => { root.set-icon-set(ic.id); }
+                                        }
+                                    }
+                                }
+
+                                // -- Íconos por objeto --
+                                Rectangle { height: 8px; }
+                                HorizontalLayout {
+                                    spacing: 5px;
+                                    alignment: start;
+                                    Text { text: Tr.icons-section-objects; color: Theme.text-dim; font-weight: 700; vertical-alignment: center; }
+                                    HelpIcon { tip: Tr.cfg-tip-icon-objects; }
+                                }
+                                // Lista de filas de íconos. Alto fijo para que scrollee. Sin header
+                                // de columnas: las filas son autoexplicativas (ícono + nombre +
+                                // origen + botón Cambiar) y un header de 5 columnas alineadas a mano
+                                // es frágil. Basta el encabezado de sección de arriba.
+                                Rectangle {
+                                    height: 320px;
+                                    background: Theme.panel-bg;
+                                    border-radius: 4px;
+                                    ListView {
+                                        for row[idx] in root.vm.icon-rows: Rectangle {
+                                            height: 32px;
+                                            background: Math.mod(idx, 2) == 0 ? transparent : Theme.row-alt-bg;
+                                            border-radius: 3px;
+                                            HorizontalLayout {
+                                                padding-left: 4px;
+                                                padding-right: 4px;
+                                                spacing: 6px;
+                                                // Ícono efectivo.
+                                                Image {
+                                                    source: row.icon;
+                                                    width: 22px;
+                                                    height: 22px;
+                                                    image-fit: contain;
+                                                }
+                                                // Nombre traducido del objeto.
+                                                Text {
+                                                    text: row.label;
+                                                    color: Theme.text;
+                                                    vertical-alignment: center;
+                                                    horizontal-stretch: 1;
+                                                    overflow: elide;
+                                                }
+                                                // Origen (set base / override).
+                                                Text {
+                                                    text: row.origin;
+                                                    color: Theme.text-dim;
+                                                    font-size: 11px;
+                                                    vertical-alignment: center;
+                                                    width: 110px;
+                                                    overflow: elide;
+                                                }
+                                                // Badge "personalizado" cuando hay override.
+                                                if row.overridden: Text {
+                                                    text: Tr.icons-override-badge;
+                                                    color: Theme.accent;
+                                                    font-size: 10px;
+                                                    vertical-alignment: center;
+                                                    width: 80px;
+                                                }
+                                                if !row.overridden: Rectangle { width: 80px; }
+                                                // Botón Cambiar: abre el picker de ícono.
+                                                CfgBtn {
+                                                    label: Tr.icons-change;
+                                                    clicked => { root.open-icon-picker(row.key); }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // -- Set personalizado --
+                                Rectangle { height: 8px; }
+                                HorizontalLayout {
+                                    spacing: 5px;
+                                    alignment: start;
+                                    Text { text: Tr.icons-section-custom; color: Theme.text-dim; font-weight: 700; vertical-alignment: center; }
+                                    HelpIcon { tip: Tr.cfg-tip-icon-custom; }
+                                }
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    alignment: start;
+                                    CfgBtn { label: Tr.icons-import; clicked => { root.import-icon-set(); } }
+                                    CfgBtn { label: Tr.icons-export; clicked => { root.export-icon-set(); } }
+                                }
+                                CfgBtn {
+                                    label: Tr.icons-reset;
+                                    danger: true;
+                                    clicked => { root.reset-icon-overrides(); }
+                                }
+                            }
+
+                            // (La antigua categoría "Idioma" (cat 10) se eliminó: su selector vive
+                            // ahora al final de General (cat 0). El sidebar ya no la lista.)
+                        }
+                    }
+                }
+            }
+
+            // Pie: carpeta de config + versión.
+            HorizontalLayout {
+                height: 18px;
+                Text {
+                    text: Tr.cfg-config-dir + " " + root.config-dir;
+                    color: Theme.text-dim;
+                    font-size: 10px;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                    overflow: elide;
+                }
+                Text {
+                    text: Tr.cfg-version + " " + root.app-version;
+                    color: Theme.text-dim;
+                    font-size: 10px;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+
+    // FocusScope de captura de atajos: overlay full-size DESPUÉS del contenido (así el contenido
+    // —primer hijo— recibe el estiramiento de la Window; ver nota arriba). Solo activo en modo
+    // captura; el resto del tiempo está deshabilitado y no roba foco ni clics.
+    fs := FocusScope {
+        x: 0;
+        y: 0;
+        width: 100%;
+        height: 100%;
+        enabled: root.capturing != "";
+        key-pressed(ev) => {
+            if (root.capturing != "") {
+                root.capture-key(ev.text, ev.modifiers.control, ev.modifiers.shift, ev.modifiers.alt);
+                root.capturing = "";
+            }
+            accept
+        }
+    }
+
+    // --- Selector de ícono por objeto (Task 14) ---
+    // Overlay full-size, solo visible cuando hay un objeto en edición. El fondo semitransparente
+    // cubre la ventana; el TouchArea cierra el selector si el usuario hace clic fuera de la tarjeta.
+    if root.vm.icon-picker-key != "": Rectangle {
+        x: 0; y: 0;
+        width: 100%;
+        height: 100%;
+        background: #00000099;
+        // Clic en el fondo cierra el picker.
+        TouchArea { clicked => { root.close-icon-picker(); } }
+        // Tarjeta central.
+        picker-card := Rectangle {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: min(parent.width - 48px, 64px * 7 + 16px * 2 + 8px * 6 + 16px);
+            // 16 padding + ~20 título + 10 spacing + 64 tiles + ~16 holgura inferior
+            height: 160px;
+            background: Theme.panel-bg;
+            border-width: 1px;
+            border-color: Theme.border;
+            border-radius: 8px;
+            // NO BORRAR: este TouchArea vacío absorbe los clics en el espacio muerto de la
+            // tarjeta. Sin él, esos clics caen al backdrop y cierran el picker por accidente.
+            TouchArea { }
+            VerticalLayout {
+                spacing: 10px;
+                padding: 16px;
+                // Título genérico.
+                Text {
+                    text: Tr.icons-change;
+                    color: Theme.text;
+                    font-size: 14px;
+                    font-weight: 700;
+                    horizontal-alignment: center;
+                }
+                // Fila de opciones: una tarjeta por set de fábrica + opción PNG propio.
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: center;
+                    for ch in root.vm.icon-picker-choices: Rectangle {
+                        width: 64px;
+                        height: 64px;
+                        border-radius: 6px;
+                        background: ch-touch.has-hover ? Theme.selection-bg : Theme.row-bg;
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: 4px;
+                            Image {
+                                source: ch.icon;
+                                width: 26px;
+                                height: 26px;
+                                image-fit: contain;
+                                horizontal-alignment: center;
+                            }
+                            Text {
+                                text: ch.set-label;
+                                font-size: 10px;
+                                color: Theme.text-dim;
+                                horizontal-alignment: center;
+                                overflow: elide;
+                            }
+                        }
+                        ch-touch := TouchArea {
+                            clicked => {
+                                root.set-icon-override(root.vm.icon-picker-key, ch.set-id);
+                                root.close-icon-picker();
+                            }
+                        }
+                    }
+                    // Opción "PNG propio".
+                    Rectangle {
+                        width: 64px;
+                        height: 64px;
+                        border-radius: 6px;
+                        background: png-touch.has-hover ? Theme.selection-bg : Theme.row-bg;
+                        VerticalLayout {
+                            alignment: center;
+                            Text {
+                                text: Tr.icons-user-png;
+                                font-size: 11px;
+                                color: Theme.text;
+                                horizontal-alignment: center;
+                                wrap: word-wrap;
+                            }
+                        }
+                        png-touch := TouchArea {
+                            clicked => {
+                                root.set-icon-override-png(root.vm.icon-picker-key);
+                                root.close-icon-picker();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // --- Easter egg de "Acerca de": lluvia de Naygo + mensaje letra a letra ---
+    // Timer que cuenta los ~8s del egg avanzando `egg-progress` de 0 a 1.
+    egg-timer := Timer {
+            interval: 60ms;
+            running: root.egg-active;
+            triggered => {
+                root.egg-progress += 0.06s / 8s;   // 60ms / 8s por tick
+                if (root.egg-progress >= 1.0) {
+                    root.egg-active = false;
+                    root.egg-progress = 0;
+                }
+            }
+        }
+        // Timer de un disparo que reinicia el contador de clics si pasan >2s sin un nuevo clic.
+        egg-reset-timer := Timer {
+            interval: 2s;
+            running: false;
+            triggered => {
+                root.egg-clicks = 0;
+                self.running = false;
+            }
+        }
+
+        // Capa de lluvia: 24 carpetas cayendo, posicionadas por el reloj de animación. Solo
+        // visible (y por ende solo anima/repinta) mientras el egg está activo → bajo consumo.
+        if root.egg-active: Rectangle {
+            clip: true;
+            for i in 24: Text {
+                // Pseudoaleatorio determinista por índice (sin crate rand): fract(sin(i)*K).
+                property <float> s1: Math.sin(i * 12.9898 * 1rad) * 43758.547;
+                property <float> r1: self.s1 - Math.floor(self.s1);
+                property <float> s2: Math.sin(i * 78.233 * 1rad) * 12543.13;
+                property <float> r2: self.s2 - Math.floor(self.s2);
+                property <float> ticks: animation-tick() / 1ms;
+                text: "📁";
+                // Color explícito de acento: bajo render por software el emoji se dibuja
+                // monocromo con el color del texto; sin fijarlo se perdía en el tema claro.
+                color: Theme.accent;
+                font-size: 18px + self.r2 * 16px;
+                x: self.r1 * (parent.width - 30px);
+                // Caída cíclica: alto + 40px de margen; la velocidad varía por r2.
+                y: Math.mod(self.ticks * (0.05 + self.r2 * 0.12) + self.r1 * 800, (parent.height / 1px) + 40) * 1px - 40px;
+                opacity: 0.85;
+            }
+            // Mensaje que se escribe letra a letra a lo largo del egg. El prefijo lo recorta
+            // Rust (Slint no tiene substring por índice); `egg-progress` decide cuántas letras.
+            Text {
+                text: root.egg-prefix(Math.round(root.egg-progress * root.egg-message-len));
+                color: Theme.text;
+                font-size: 16px;
+                font-weight: 700;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                y: parent.height - 40px;
+                x: 0; width: parent.width;
+            }
+        }
+
+    // --- Tooltip de ayuda de las opciones (overlay) ---
+    // Globo flotante al nivel del root de ConfigWindow: se pinta DESPUÉS de todo el contenido
+    // (último hijo), así queda por encima del scroll y de los demás overlays. Aparece junto al
+    // ícono "?" que lo disparó: centrado en su X (CfgTip.x) y bajo su borde inferior (CfgTip.y).
+    // Si no cabe abajo (ícono cerca del borde inferior de la ventana), se voltea ARRIBA. Soporta
+    // varias líneas: ancho máximo ~280px con word-wrap. Mismo patrón que el tooltip de app-window.
+    if CfgTip.text != "": Rectangle {
+        // Alto aprox. del ícono disparador (para el cálculo del volteo).
+        property <length> src-h: 18px;
+        // ¿El globo se saldría por abajo? Entonces va ARRIBA del ícono.
+        property <bool> flip-up: CfgTip.y + 4px + self.height > root.height;
+        // Centrar bajo el ícono, sin salirse por los lados (clamp a 4px de cada borde).
+        x: min(max(CfgTip.x - self.width / 2, 4px), max(4px, root.width - self.width - 4px));
+        y: self.flip-up
+            ? max(4px, CfgTip.y - self.src-h - 4px - self.height)
+            : CfgTip.y + 4px;
+        // CLAVE del fix: el Rectangle es hijo directo del root (una Window sin layout) → por defecto
+        // se estira a TODO el ancho de la ventana (el bug: el globo ocupaba la ventana entera). Lo
+        // ligamos al ancho preferido del texto (mismo patrón que el tooltip de app-window). El Text
+        // tiene `max-width: 278px`, así su preferred-width es el ancho natural del tip topado a 278:
+        // un tip corto → globo angosto; uno largo → se topa a 278 y envuelve en varias líneas (el
+        // preferred-height crece). El `+16` es el padding lateral del globo.
+        width: htip.preferred-width + 16px;
+        height: htip.preferred-height + 14px;
+        background: Theme.panel-bg;
+        border-color: Theme.selection-bg;
+        border-width: 1px;
+        border-radius: 5px;
+        htip := Text {
+            x: 8px;
+            y: 7px;
+            text: CfgTip.text;
+            color: Theme.text;
+            font-size: 11px;
+            // `max-width` (tope estático, sin ciclo) hace que el preferred-width no pase de 278 y el
+            // texto envuelva ahí. El Rectangle adopta ese ancho.
+            max-width: 278px;
+            wrap: word-wrap;
+        }
+    }
+
+    // Cuenta un clic del logo; 5 seguidos (con <2s entre clics) disparan el egg.
+    function register-egg-click() {
+        root.egg-clicks += 1;
+        egg-reset-timer.running = false;
+        egg-reset-timer.running = true;
+        if (root.egg-clicks >= 5) {
+            root.egg-clicks = 0;
+            root.egg-progress = 0;
+            root.egg-active = true;
+        }
+    }
+
+    // Texto del mensaje del egg y su largo en caracteres (para el tipeo).
+    in property <string> egg-message: Tr.about-egg-message;
+    property <int> egg-message-len: root.egg-message.character-count;
+    // Rust devuelve los primeros `n` caracteres del mensaje (substring que Slint no ofrece).
+    pure callback egg-prefix(int) -> string;
+}

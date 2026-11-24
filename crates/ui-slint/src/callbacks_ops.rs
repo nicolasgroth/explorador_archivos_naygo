@@ -26,11 +26,30 @@ pub(crate) fn wire_ops(ui: &AppWindow, ctx: &WireCtx) {
         ..
     } = ctx;
     {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        let start_timer = start_timer.clone();
+        ui.on_preview_toggle_animation(move || {
+            if ctrl
+                .borrow_mut()
+                .preview
+                .toggle_animation(std::time::Instant::now())
+            {
+                start_timer();
+                sync_rows();
+            }
+        });
+    }
+    {
         // Botón "abrir con el programa del sistema" del panel de vista previa: ShellExecute
         // sobre la ruta del archivo previsualizado (la app no edita; abre con el editor del SO).
+        let ctrl = ctrl.clone();
         ui.on_preview_open(move |path| {
             if !path.is_empty() {
-                let _ = naygo_platform::open::open_default(std::path::Path::new(path.as_str()));
+                ctrl.borrow_mut()
+                    .submit_shell_silent(naygo_platform::open::ShellJob::Open(
+                        std::path::PathBuf::from(path.as_str()),
+                    ));
             }
         });
     }
@@ -59,6 +78,28 @@ pub(crate) fn wire_ops(ui: &AppWindow, ctx: &WireCtx) {
     {
         let ctrl = ctrl.clone();
         let sync_rows = sync_rows.clone();
+        let start_timer = start_timer.clone();
+        ui.on_preview_cycle_color(move || {
+            if ctrl.borrow_mut().preview.cycle_mesh_color() {
+                start_timer();
+                sync_rows();
+            }
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        let start_timer = start_timer.clone();
+        ui.on_preview_cycle_surface(move || {
+            if ctrl.borrow_mut().preview.cycle_mesh_surface() {
+                start_timer();
+                sync_rows();
+            }
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
         ui.on_preview_cancel(move || {
             if ctrl.borrow_mut().cancel_preview() {
                 sync_rows();
@@ -68,7 +109,18 @@ pub(crate) fn wire_ops(ui: &AppWindow, ctx: &WireCtx) {
     {
         let ctrl = ctrl.clone();
         ui.on_preview_copy_text(move |text| {
-            ctrl.borrow().copy_preview_text(text.as_str());
+            ctrl.borrow_mut().copy_preview_text(text.as_str());
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let sync_rows = sync_rows.clone();
+        let start_timer = start_timer.clone();
+        ui.on_preview_retry(move || {
+            if ctrl.borrow_mut().preview.retry(std::time::Instant::now()) {
+                start_timer();
+                sync_rows();
+            }
         });
     }
     {
@@ -153,7 +205,7 @@ pub(crate) fn wire_ops(ui: &AppWindow, ctx: &WireCtx) {
     {
         let ctrl = ctrl.clone();
         ui.on_copy_provenance(move || {
-            let _ = ctrl.borrow().copy_provenance();
+            let _ = ctrl.borrow_mut().copy_provenance();
         });
     }
     {
@@ -454,7 +506,7 @@ pub(crate) fn wire_ops(ui: &AppWindow, ctx: &WireCtx) {
         let ctrl = ctrl.clone();
         let ui_weak = ui.as_weak();
         ui.on_op_show_files(move |id| {
-            let (rows, label, context, can_retry) = {
+            let (rows, label, context, can_retry, detail_texts) = {
                 let c = ctrl.borrow();
                 let id = id as u64;
                 let rows = c.ops.op_file_list(id);
@@ -467,10 +519,19 @@ pub(crate) fn wire_ops(ui: &AppWindow, ctx: &WireCtx) {
                     .find(|o| o.id == id)
                     .map(|o| o.label.clone())
                     .unwrap_or_default();
-                (rows, label, context, c.ops.retry_files(id).is_some())
+                (
+                    rows,
+                    label,
+                    context,
+                    c.ops.retry_files(id).is_some(),
+                    OpDetailTexts::from_config(&c.config),
+                )
             };
             if let Some(ui) = ui_weak.upgrade() {
-                let vms: Vec<OpFileVm> = rows.into_iter().map(to_op_file_vm).collect();
+                let vms: Vec<OpFileVm> = rows
+                    .into_iter()
+                    .map(|row| to_op_file_vm(row, &detail_texts))
+                    .collect();
                 ui.set_op_file_list(ModelRc::from(Rc::new(VecModel::from(vms))));
                 ui.set_op_file_list_label(SharedString::from(label.as_str()));
                 ui.set_op_file_context(to_op_file_context_vm(context));

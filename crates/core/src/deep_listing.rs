@@ -12,7 +12,7 @@
 
 use crate::cancel::CancellationToken;
 use crate::fs_model::Entry;
-use crate::listing::entry_from_path;
+use crate::listing::entry_at;
 use crate::search::{fs_lister, ListResult};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -123,9 +123,11 @@ fn deep_walk(
 /// Construye el `Entry` de una entrada leyendo su metadata real (tamaño/fechas). Si la
 /// metadata no se puede leer, cae a un `Entry` mínimo con el tipo ya conocido del walk.
 fn make_entry(path: &Path, is_dir: bool) -> Entry {
-    match std::fs::metadata(path) {
-        Ok(m) => entry_from_path(path, Some(&m)),
-        Err(_) => Entry {
+    // Metadata del propio enlace, como el listado: un junction conserva sus atributos y no se
+    // sigue hasta un destino que podría no responder.
+    match entry_at(path) {
+        Some(entry) => entry,
+        None => Entry {
             name: path
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
@@ -151,6 +153,32 @@ mod tests {
     use crate::search::DirEntryRaw;
     use std::collections::HashMap;
     use std::sync::mpsc::channel;
+
+    /// Un enlace oculto+sistema conserva sus propios atributos en la vista profunda (no los de
+    /// su destino), igual que en el listado normal.
+    #[cfg(windows)]
+    #[test]
+    fn make_entry_de_enlace_usa_los_atributos_del_enlace() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("target");
+        std::fs::create_dir(&target).unwrap();
+        let link = dir.path().join("link");
+        if !crate::ops::make_junction(&link, &target) {
+            return;
+        }
+        let ok = std::process::Command::new("cmd")
+            .args(["/C", "attrib", "+h", "+s", "/L"])
+            .arg(&link)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if !ok {
+            return;
+        }
+        let entry = make_entry(&link, true);
+        assert_eq!(entry.kind, crate::fs_model::EntryKind::Directory);
+        assert!(entry.hidden && entry.system, "{entry:?}");
+    }
 
     fn raw(path: &str, is_dir: bool) -> DirEntryRaw {
         DirEntryRaw {

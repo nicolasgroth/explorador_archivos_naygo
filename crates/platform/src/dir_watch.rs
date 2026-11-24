@@ -61,19 +61,28 @@ fn try_watch(
         None,
         move |res: notify_debouncer_full::DebounceEventResult| {
             // `Ok` trae los eventos coalescidos del lote; `Err` trae errores del backend.
-            // Los errores se ignoran (filesystem hostil): el watcher sigue vivo.
+            // Un error pide resincronización; el watcher sigue vivo si el backend lo permite.
             if let Ok(events) = res {
                 let mut out = Vec::new();
+                let mut rescan = false;
                 for ev in events {
+                    rescan |= ev.event.need_rescan();
                     // `DebouncedEvent` deref-ea a `notify::Event`; usamos su campo `.event`.
                     normalize_into(&ev.event, &mut out);
                 }
-                if !out.is_empty() {
+                if rescan {
+                    out.clear();
+                }
+                if rescan || !out.is_empty() {
                     // Si el receptor se cayó (la UI cambió de carpeta), ignorar el envío.
                     let _ = tx.send(out);
                     // Despertar la UI: estaba dormida, debe drenar y aplicar los eventos.
                     waker();
                 }
+            } else {
+                // Overflow/error invalida el snapshot: el consumidor re-lista en worker.
+                let _ = tx.send(Vec::new());
+                waker();
             }
         },
     )

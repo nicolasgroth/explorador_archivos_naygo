@@ -4,6 +4,76 @@
 
 use super::*;
 
+/// Decide un pegado fuera de UI. Conserva el error real de `try_exists`: un destino inaccesible
+/// nunca se interpreta como libre para crear un archivo con otro nombre.
+fn decide_paste_worker(
+    content: &naygo_core::clipboard::ClipboardContent,
+    dir: &Path,
+    settings: &naygo_core::config::Settings,
+    now_secs: u64,
+) -> Result<naygo_core::clipboard::PastePlan, String> {
+    let probe_error = std::cell::RefCell::new(None);
+    let plan =
+        naygo_core::clipboard::decide_paste(content, dir, settings, now_secs, &|candidate| {
+            match candidate.try_exists() {
+                Ok(exists) => exists,
+                Err(error) => {
+                    let mut stored_error = probe_error.borrow_mut();
+                    if stored_error.is_none() {
+                        *stored_error = Some(format!("{}: {error}", candidate.display()));
+                    }
+                    false
+                }
+            }
+        });
+    probe_error.into_inner().map_or(Ok(plan), Err)
+}
+
+/// Lee el portapapeles y decide el pegado en un único worker; el propietario externo del clipboard
+/// puede tardar al materializar formatos diferidos, así que ninguna llamada del SO corre en UI.
+fn spawn_paste_target_probe<F>(
+    dir: PathBuf,
+    settings: naygo_core::config::Settings,
+    now_secs: u64,
+    read_clipboard: F,
+) -> std::io::Result<std::sync::mpsc::Receiver<Result<naygo_core::clipboard::PastePlan, String>>>
+where
+    F: FnOnce() -> naygo_core::clipboard::ClipboardContent + Send + 'static,
+{
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .name("paste-target-probe".into())
+        .spawn(move || {
+            let content = read_clipboard();
+            let result = decide_paste_worker(&content, &dir, &settings, now_secs);
+            let _ = tx.send(result);
+        })?;
+    Ok(rx)
+}
+
+/// Consulta colisiones en worker y conserva errores de acceso como fallo, nunca como destino libre.
+fn first_collision_worker(
+    paths: &[PathBuf],
+    dest: &Path,
+    cancel: &naygo_core::CancellationToken,
+) -> Result<bool, String> {
+    for source in paths {
+        if cancel.is_cancelled() {
+            return Err("consulta cancelada".to_string());
+        }
+        let Some(name) = source.file_name() else {
+            continue;
+        };
+        let candidate = dest.join(name);
+        match candidate.try_exists() {
+            Ok(true) => return Ok(true),
+            Ok(false) => {}
+            Err(error) => return Err(format!("{}: {error}", candidate.display())),
+        }
+    }
+    Ok(false)
+}
+
 impl WorkspaceCtrl {
     /// El id del panel Files activo (o el primer Files), para dirigir navegaciones desde
     /// paneles auxiliares (un Tree/Favoritos activo no es un Files).
@@ -43,6 +113,11 @@ impl WorkspaceCtrl {
     /// nació el gesto, no el activo (si no, arrastrar desde un panel inactivo no movía nada y
     /// obligaba a un clic extra para activarlo primero). Vacío si `id` no es un panel Files.
     pub fn selected_paths_of(&self, id: PaneId) -> Vec<PathBuf> {
+        // La vista profunda usa otra fuente de filas; el foco/selección de FilePaneState
+        // pertenece a la lista normal y nunca debe convertirse en rutas operables aquí.
+        if self.is_deep_active(id) {
+            return Vec::new();
+        }
         if self
             .ws
             .pane(id)
@@ -72,7 +147,7 @@ impl WorkspaceCtrl {
 
     /// Copiar la selección al portapapeles (limpia el corte).
     pub fn op_copy(&mut self) {
-        let paths = self.selected_paths();
+        let paths = self.operation_sources();
         if !paths.is_empty() {
             self.ops.set_copy(&paths);
         }
@@ -81,7 +156,7 @@ impl WorkspaceCtrl {
     /// Duplica la selección en su misma carpeta. La desambiguación y el recorrido del árbol se
     /// resuelven en el worker del core; este controlador no toca disco en el hilo UI.
     pub fn op_duplicate(&mut self) -> bool {
-        let paths = self.selected_paths();
+        let paths = self.operation_sources();
         if paths.is_empty() {
             return false;
         }
@@ -99,7 +174,7 @@ impl WorkspaceCtrl {
 
     /// Cortar la selección (marca corte visual).
     pub fn op_cut(&mut self) {
-        let paths = self.selected_paths();
+        let paths = self.operation_sources();
         if !paths.is_empty() {
             self.ops.set_cut(&paths);
         }
@@ -117,19 +192,69 @@ impl WorkspaceCtrl {
         let Some(dir) = self.active_dir() else {
             return false;
         };
-        let content = naygo_platform::clipboard::read();
+        if self.paste_probe.is_some() {
+            crate::logging::breadcrumb(
+                "op_paste: consulta de destino ocupada; nuevo pegado descartado",
+            );
+            self.pending_paste_probe_error = Some("consulta de destino ocupada".to_string());
+            return true;
+        }
         let now_secs = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        let exists = |p: &std::path::Path| p.exists();
-        let plan = naygo_core::clipboard::decide_paste(
-            &content,
-            &dir,
-            &self.config.settings,
-            now_secs,
-            &exists,
-        );
+        let settings = self.config.settings.clone();
+        let worker_dir = dir.clone();
+        let clipboard_io = match self.ops.clipboard_io_handle() {
+            Ok(clipboard_io) => clipboard_io,
+            Err(error) => {
+                self.pending_paste_probe_error = Some(error);
+                return true;
+            }
+        };
+        let rx = match spawn_paste_target_probe(worker_dir, settings, now_secs, move || {
+            clipboard_io.read()
+        }) {
+            Ok(rx) => rx,
+            Err(error) => {
+                self.pending_paste_probe_error = Some(error.to_string());
+                return true;
+            }
+        };
+        self.paste_probe = Some((dir, rx));
+        true
+    }
+
+    /// Drena la decisión asíncrona del pegado y arranca la acción con el destino capturado al
+    /// invocarla. Devuelve `false` mientras el worker siga pendiente para mantener vivo el tick.
+    pub fn pump_paste_probe(&mut self) -> bool {
+        let Some((_, rx)) = self.paste_probe.as_ref() else {
+            return true;
+        };
+        let result = match rx.try_recv() {
+            Ok(result) => result,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return false,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                Err("worker de consulta desconectado".to_string())
+            }
+        };
+        let (dir, _) = self.paste_probe.take().expect("probe existente");
+        let plan = match result {
+            Ok(plan) => plan,
+            Err(error) => {
+                self.pending_paste_probe_error = Some(error);
+                return true;
+            }
+        };
+        self.apply_paste_plan(dir, plan);
+        true
+    }
+
+    pub fn take_paste_probe_error(&mut self) -> Option<String> {
+        self.pending_paste_probe_error.take()
+    }
+
+    fn apply_paste_plan(&mut self, dir: PathBuf, plan: naygo_core::clipboard::PastePlan) -> bool {
         use naygo_core::clipboard::PastePlan;
         match plan {
             PastePlan::Transfer { paths, cut } => {
@@ -315,6 +440,98 @@ impl WorkspaceCtrl {
         self.drop_at_with_staging(content_x, content_y, move_hint, copy_forced, paths, None)
     }
 
+    /// El gesto interno resuelve el punto final con la geometría de la lista. OLE puede
+    /// notificar Leave antes de entregar las rutas, por lo que el hover ya no es un destino.
+    #[allow(clippy::too_many_arguments)]
+    pub fn drop_at_from_ole(
+        &mut self,
+        content_x: f32,
+        content_y: f32,
+        client_y: f32,
+        rendered_rows: Option<&slint::ModelRc<crate::RowData>>,
+        move_hint: bool,
+        copy_forced: bool,
+        internal_source: bool,
+        paths: Vec<std::path::PathBuf>,
+        staging: Option<naygo_platform::drop_target::StagedDrop>,
+    ) -> bool {
+        let was_idle = self.pending_drop.is_none();
+        if internal_source {
+            let Some(target) = self.pane_at(content_x, content_y) else {
+                return false;
+            };
+            if self.purpose_of(target) != Some(PanePurpose::Basket) {
+                let Some(dest_dir) = rendered_rows
+                    .and_then(|rows| self.internal_drop_folder(target, content_x, client_y, rows))
+                else {
+                    return false;
+                };
+                return self.queue_selected_external_drop(
+                    target,
+                    dest_dir,
+                    move_hint,
+                    copy_forced,
+                    paths,
+                    staging,
+                );
+            }
+        }
+        if !internal_source {
+            self.drag_over_row = None;
+            self.drag_over_deep_folder = None;
+        }
+        let routed =
+            self.drop_at_with_staging(content_x, content_y, move_hint, copy_forced, paths, staging);
+        if was_idle && self.pending_drop.is_some() {
+            self.pending_drop_external_confirmation = !internal_source;
+        }
+        routed
+    }
+
+    fn internal_drop_folder(
+        &self,
+        target: PaneId,
+        client_x: f32,
+        client_y: f32,
+        rendered_rows: &slint::ModelRc<crate::RowData>,
+    ) -> Option<PathBuf> {
+        use slint::Model;
+        let files = self.ws.pane(target)?.files.as_ref()?;
+        let viewport = self.drop_viewports.get(&target)?;
+        if viewport.row_height <= 0.0 || viewport.width <= 0.0 || viewport.height <= 0.0 {
+            return None;
+        }
+        let inside = (viewport.left..viewport.left + viewport.width).contains(&client_x)
+            && (viewport.top..viewport.top + viewport.height).contains(&client_y);
+        let row = inside.then(|| {
+            ((client_y - viewport.top - viewport.scroll_y) / viewport.row_height).floor() as usize
+        });
+        let deep = self.is_deep_active(target);
+        let entry = if deep {
+            let job = self.deep_job.as_ref()?;
+            if job.replacement_items.is_some() {
+                return None;
+            }
+            self.deep_visible_entry(target, row?)
+        } else {
+            row.and_then(|index| files.view_entry_at(index))
+        };
+        let rendered = row.and_then(|index| rendered_rows.row_data(index));
+        let folder = entry.filter(|entry| entry.is_dir());
+        match (folder, rendered.as_ref()) {
+            (Some(entry), Some(painted))
+                if painted.drop_folder.as_str() == entry.path.to_string_lossy() =>
+            {
+                Some(entry.path.clone())
+            }
+            (None, Some(painted)) if !deep && !painted.is_dir && entry.is_some() => {
+                Some(files.current_dir.clone())
+            }
+            (None, None) if !deep && entry.is_none() => Some(files.current_dir.clone()),
+            _ => None,
+        }
+    }
+
     /// Variante que enlaza el staging de un origen OLE virtual con el modal/cola/operación.
     pub fn drop_at_with_staging(
         &mut self,
@@ -325,7 +542,6 @@ impl WorkspaceCtrl {
         paths: Vec<std::path::PathBuf>,
         staging: Option<naygo_platform::drop_target::StagedDrop>,
     ) -> bool {
-        use naygo_core::dnd::{decide_drop, same_drive, DropAction};
         use naygo_core::workspace::layout::drop_hit;
         if paths.is_empty() {
             crate::logging::breadcrumb("drop_at: sin rutas, no-op");
@@ -372,6 +588,23 @@ impl WorkspaceCtrl {
             return true;
         }
 
+        // El hover captura identidad y posición; si el streaming cambió la fila no se adivina
+        // destino. Solo carpetas acreditadas, sin fallback silencioso a la raíz profunda.
+        if self.is_deep_active(target) {
+            let Some(dest_dir) = self.deep_hover_folder(target) else {
+                crate::logging::breadcrumb("drop_at: carpeta profunda no acreditada");
+                return false;
+            };
+            return self.queue_selected_external_drop(
+                target,
+                dest_dir,
+                move_hint,
+                copy_forced,
+                paths,
+                staging,
+            );
+        }
+
         // El resto de destinos debe ser un panel Files con carpeta resoluble. D-1: si el
         // `body-touch` de Slint detectó que el cursor cayó SOBRE una fila-carpeta de ESTE panel,
         // esa carpeta pasa a ser el destino. Así el arrastre dentro del mismo panel conserva todo
@@ -402,6 +635,23 @@ impl WorkspaceCtrl {
                 "drop_at: fila-carpeta destino detectada → {}",
                 dest_dir.display()
             ));
+        }
+        self.queue_selected_external_drop(target, dest_dir, move_hint, copy_forced, paths, staging)
+    }
+
+    /// Usa un destino elegido expresamente; comparte validación, conflictos y confirmación.
+    pub fn queue_selected_external_drop(
+        &mut self,
+        target: PaneId,
+        dest_dir: std::path::PathBuf,
+        move_hint: bool,
+        copy_forced: bool,
+        paths: Vec<std::path::PathBuf>,
+        staging: Option<naygo_platform::drop_target::StagedDrop>,
+    ) -> bool {
+        use naygo_core::dnd::{decide_drop, same_drive, DropAction};
+        if paths.is_empty() {
+            return false;
         }
         // No permitir soltar una carpeta sobre sí misma ni dentro de uno de sus descendientes.
         // `Path::starts_with` compara componentes, no prefijos de texto, y también cubre el caso
@@ -438,10 +688,15 @@ impl WorkspaceCtrl {
         } else {
             self.config.t("ops.file_kind_copy")
         };
-        // CONFIRMAR AL SOLTAR (decisión de Nicolás): NO ejecutamos la op aquí. Guardamos el drop ya
-        // validado en `pending_drop` y devolvemos true; la UI abre un modal "¿Copiar/Mover N a
-        // «destino»?" y, al confirmar, llama a `confirm_pending_drop` que arranca la op de verdad.
-        // Así un arrastre accidental entre paneles no copia/mueve archivos sin que el usuario lo vea.
+        if self.drop_collision_rx.is_some() {
+            self.pending_listing_error = Some(self.config.t("drop.check_busy"));
+            crate::logging::breadcrumb(
+                "drop_at: probe de conflicto ocupado; nuevo drop descartado",
+            );
+            return true;
+        }
+        // No ejecutar todavía: el probe worker decide si hace falta el diálogo específico de
+        // conflicto o el modal genérico de confirmar. Así se conserva la regla de un solo diálogo.
         let count = paths.len();
         crate::logging::breadcrumb(&format!(
             "drop_at: {} {} ítem(s) → {} (pendiente de confirmar)",
@@ -457,40 +712,109 @@ impl WorkspaceCtrl {
             count,
             staging,
         });
-        // UN SOLO POPUP COHERENTE (decisión de Nicolás): si el drop CHOCA con archivos que ya
-        // existen en el destino, NO mostramos primero "¿Copiar/Mover…?" y luego el conflicto —
-        // serían dos popups en cadena. En ese caso vamos DIRECTO a la op: el motor abre el diálogo
-        // de CONFLICTO (comparación lado a lado), que YA es la confirmación (Saltar/Sobrescribir/
-        // Mantener ambos/Cancelar). La confirmación "¿Copiar?" solo aporta cuando NO hay choque.
-        let hay_conflicto = {
-            let req = naygo_core::ops::transfer(is_move, paths, dest_dir);
-            self.ops.first_collision(&req)
-        };
-        // Confirmación opcional (decisión de Nicolás): el modal "¿Copiar/Mover…?" se muestra SOLO
-        // cuando (a) el ajuste está encendido Y (b) NO hay conflicto. Si hay conflicto, o el ajuste
-        // está apagado, ejecutamos directo reusando `confirm_pending_drop` (arranca la op y CONSUME
-        // `pending_drop`); el modal de CONFLICTO, si aplica, lo dispara `pump_ops` aparte.
-        //
-        // Devolvemos `true` en AMBOS casos (el drop fue ENRUTADO y manejado por este panel, así la
-        // UI no cae al fallback `drop_external`). Quién decide abrir el modal de confirmación es el
-        // llamador, que lee `pending_drop` DESPUÉS: queda `Some` → abre el modal; `None` (ya
-        // ejecutado directo) → no abre nada (pero el conflicto puede aparecer luego).
-        let confirmar = self.config.settings.confirm_drop_between_panes && !hay_conflicto;
-        if !confirmar {
-            let motivo = if hay_conflicto {
-                "hay conflicto → directo al diálogo de conflicto (sin doble popup)"
-            } else {
-                "confirmación de drop desactivada → ejecutar directo"
-            };
-            crate::logging::breadcrumb(&format!("drop_at: {motivo}"));
-            self.confirm_pending_drop();
+        self.pending_drop_external_confirmation = false;
+        self.pending_drop_confirmation = false;
+        // El probe de conflicto se hace en worker antes de elegir entre confirmación genérica y
+        // diálogo lado a lado. Mantener una sola plaza evita acumular threads cuando un destino
+        // de red no responde; el drop entrante se consume y se notifica mientras esté ocupada.
+        let (tx, rx) = std::sync::mpsc::channel();
+        let probe_cancel = naygo_core::CancellationToken::new();
+        let worker_cancel = probe_cancel.clone();
+        let probe_dest = dest_dir.clone();
+        let probe_paths = paths.clone();
+        let spawned = std::thread::Builder::new()
+            .name("drop-conflict-probe".into())
+            .spawn(move || {
+                let result = first_collision_worker(&probe_paths, &probe_dest, &worker_cancel);
+                let _ = tx.send(result);
+            });
+        if let Err(error) = spawned {
+            self.pending_drop = None;
+            self.pending_drop_external_confirmation = false;
+            self.pending_drop_confirmation = false;
+            self.pending_listing_error =
+                Some(format!("{}: {error}", self.config.t("drop.check_failed")));
+            return true;
         }
+        self.drop_collision_rx = Some(rx);
+        self.drop_collision_cancel = Some(probe_cancel);
         true
+    }
+
+    /// Drena la preconsulta de colisiones del drop y decide qué diálogo abrir. Devuelve true
+    /// mientras el worker siga vivo para mantener activo el timer de UI.
+    pub fn pump_drop_collision_probe(&mut self) -> DropProbeEvent {
+        let Some(rx) = self.drop_collision_rx.as_ref() else {
+            return DropProbeEvent::Idle;
+        };
+        let result = match rx.try_recv() {
+            Ok(result) => Some(result),
+            Err(std::sync::mpsc::TryRecvError::Empty) => return DropProbeEvent::Waiting,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                Some(Err("worker desconectado".to_string()))
+            }
+        };
+        self.drop_collision_rx = None;
+        self.drop_collision_cancel = None;
+        if self.pending_drop.is_none() {
+            return DropProbeEvent::Idle;
+        }
+        let occupied = match result.expect("se recibió resultado terminal") {
+            Ok(occupied) => occupied,
+            Err(error) => {
+                crate::logging::log_line(&format!("preconsulta de drop falló: {error}"));
+                self.pending_drop = None;
+                self.pending_drop_external_confirmation = false;
+                self.pending_listing_error =
+                    Some(format!("{}: {error}", self.config.t("drop.check_failed")));
+                return DropProbeEvent::Failed;
+            }
+        };
+        let should_confirm = if self.pending_drop_external_confirmation {
+            self.config.settings.confirm_external_drops
+                && !self.config.skip_external_drop_confirmation_session
+        } else {
+            !occupied && self.config.settings.confirm_drop_between_panes
+        };
+        if should_confirm {
+            self.pending_drop_confirmation = true;
+            return DropProbeEvent::Confirmation;
+        }
+        let reason = if occupied {
+            "hay conflicto → directo al diálogo de conflicto (sin doble popup)"
+        } else {
+            "confirmación de drop desactivada → ejecutar directo"
+        };
+        crate::logging::breadcrumb(&format!("drop_at: {reason}"));
+        self.confirm_pending_drop();
+        DropProbeEvent::Started
+    }
+
+    /// Consume la señal de que el probe terminó libre y la confirmación genérica puede abrirse.
+    pub fn take_pending_drop_confirmation(&mut self) -> Option<PendingDrop> {
+        if !std::mem::take(&mut self.pending_drop_confirmation) {
+            return None;
+        }
+        self.pending_drop.clone()
+    }
+
+    #[cfg(test)]
+    pub fn wait_drop_collision_probe_for_test(&mut self) -> DropProbeEvent {
+        for _ in 0..5_000 {
+            let event = self.pump_drop_collision_probe();
+            if event != DropProbeEvent::Waiting {
+                return event;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        panic!("preconsulta de conflicto no terminó en 5 s");
     }
 
     /// El usuario CONFIRMÓ el drop pendiente (botón Copiar/Mover del modal): arranca la op real.
     /// Devuelve true si había un drop pendiente y se lanzó. No-op (false) si no había ninguno.
     pub fn confirm_pending_drop(&mut self) -> bool {
+        self.pending_drop_confirmation = false;
+        self.pending_drop_external_confirmation = false;
         let Some(pd) = self.pending_drop.take() else {
             return false;
         };
@@ -523,6 +847,11 @@ impl WorkspaceCtrl {
     /// El usuario CANCELÓ el drop pendiente (botón Cancelar / Esc / clic fuera): lo descarta sin
     /// copiar ni mover nada.
     pub fn cancel_pending_drop(&mut self) {
+        self.pending_drop_external_confirmation = false;
+        if let Some(cancel) = &self.drop_collision_cancel {
+            cancel.cancel();
+        }
+        self.pending_drop_confirmation = false;
         if self.pending_drop.take().is_some() {
             crate::logging::breadcrumb("cancel_pending_drop: drop descartado por el usuario");
         }
@@ -536,7 +865,7 @@ impl WorkspaceCtrl {
         let paths = {
             let contextual = self.context_targets();
             if contextual.is_empty() {
-                self.selected_paths()
+                self.operation_sources()
             } else {
                 contextual
             }
@@ -594,7 +923,7 @@ impl WorkspaceCtrl {
     /// para varios). Al confirmar el modal, `name_confirm` arma la op `Compress` y la lanza.
     /// No-op si no hay selección o no hay carpeta activa.
     pub fn op_compress_prompt(&mut self) {
-        let sources = self.selected_paths();
+        let sources = self.operation_sources();
         if sources.is_empty() {
             return;
         }
@@ -615,7 +944,16 @@ impl WorkspaceCtrl {
     /// Extrae el `.zip` seleccionado (el primero de la selección) dentro de `dest` (una carpeta).
     /// No-op si no hay selección.
     pub fn op_extract_to(&mut self, dest: std::path::PathBuf) {
-        let Some(zip) = self.selected_paths().into_iter().next() else {
+        let deep = self
+            .ws
+            .active_id()
+            .is_some_and(|id| self.is_deep_active(id));
+        let sources = self.operation_sources();
+        if deep && sources.len() != 1 {
+            self.deep_selection_notice = true;
+            return;
+        }
+        let Some(zip) = sources.into_iter().next() else {
             return;
         };
         let req = naygo_core::ops::OpRequest {
@@ -632,10 +970,24 @@ impl WorkspaceCtrl {
     /// "Extraer aquí": crea (a través del motor) una subcarpeta con el nombre del zip sin
     /// extensión dentro de la carpeta activa y extrae ahí. No-op si no hay selección/carpeta.
     pub fn op_extract_here(&mut self) {
-        let Some(zip) = self.selected_paths().into_iter().next() else {
+        let deep = self
+            .ws
+            .active_id()
+            .is_some_and(|id| self.is_deep_active(id));
+        let sources = self.operation_sources();
+        if deep && sources.len() != 1 {
+            self.deep_selection_notice = true;
+            return;
+        }
+        let Some(zip) = sources.into_iter().next() else {
             return;
         };
-        let Some(dir) = self.active_dir() else {
+        let dir = if deep {
+            zip.parent().map(std::path::Path::to_path_buf)
+        } else {
+            self.active_dir()
+        };
+        let Some(dir) = dir else {
             return;
         };
         let sub = zip
@@ -649,6 +1001,24 @@ impl WorkspaceCtrl {
     /// entradas "Extraer aquí" / "Extraer en…" del menú contextual). Compara la extensión sin
     /// importar mayúsculas; una carpeta o varios ítems → false.
     pub fn sel_is_single_zip(&self) -> bool {
+        if let Some(id) = self.ws.active_id().filter(|id| self.is_deep_active(*id)) {
+            let Some(sel) = self.deep_complete_selection(id) else {
+                return false;
+            };
+            if sel.len() != 1 {
+                return false;
+            }
+            let Some(pos) = self.deep_position_of(id, &sel[0]) else {
+                return false;
+            };
+            return self.deep_visible_entry(id, pos).is_some_and(|entry| {
+                !entry.is_dir()
+                    && entry
+                        .path
+                        .extension()
+                        .is_some_and(|e| e.eq_ignore_ascii_case("zip"))
+            });
+        }
         let sel = self.selected_paths();
         if sel.len() != 1 {
             return false;
@@ -663,9 +1033,33 @@ impl WorkspaceCtrl {
     /// Rename inline (F2 / menú): pide a la UI abrir el editor en la celda Name de la fila
     /// enfocada. F2 repetido sobre el mismo archivo recorre nombre → extensión → todo.
     pub fn op_rename(&mut self) {
+        // Solo existe un borrador global en la ventana. Si otro panel pide F2 mientras
+        // permanece suspendido, volver a su dueño conserva texto, sesión y cursor en vez
+        // de reemplazarlo o confirmar un nombre sin intervención explícita.
+        if let Some(owner) = self.rename_active.as_ref().map(|request| request.pane) {
+            if self.ws.active_id() != Some(owner) && self.ws.pane(owner).is_some() {
+                self.set_active_tab(owner);
+                return;
+            }
+        }
         let Some(id) = self.active_files_id() else {
             return;
         };
+        if self.is_deep_active(id) {
+            let Some(pos) = self.deep_focused_position(id) else {
+                return;
+            };
+            let Some(entry) = self.deep_visible_entry(id, pos) else {
+                return;
+            };
+            let stage = self
+                .rename_active
+                .as_ref()
+                .filter(|r| r.pane == id && r.source == entry.path)
+                .map_or(0, |r| (r.stage + 1) % 3);
+            self.request_rename_at(id, pos, stage);
+            return;
+        }
         let Some(f) = self.ws.pane(id).and_then(|p| p.files.as_ref()) else {
             return;
         };
@@ -689,6 +1083,17 @@ impl WorkspaceCtrl {
         self.rename_requested.take()
     }
 
+    /// F2 dentro del editor conserva la sesión y calcula la selección sobre el borrador vivo.
+    pub fn rename_cycle_selection(&mut self, draft: &str) -> Option<(usize, usize)> {
+        let active = self.rename_active.as_mut()?;
+        active.stage = (active.stage + 1) % 3;
+        Some(if active.is_dir {
+            (0, draft.len())
+        } else {
+            naygo_core::rename::rename_selection_byte_offsets(draft, active.stage)
+        })
+    }
+
     /// Comprueba que un callback pertenece al editor que sigue activo. La UI lo consulta antes de
     /// cerrar sus propiedades: un callback tardío debe ser un no-op completo y no cerrar la sesión
     /// nueva aunque la operación de filesystem ya esté protegida.
@@ -698,20 +1103,35 @@ impl WorkspaceCtrl {
             .is_some_and(|active| active.pane == id && active.session == session)
     }
 
+    /// Reubica el editor al cambiar la vista. Una nueva identidad invalida notificaciones
+    /// tardías del editor desmontado, sin confirmar ni alterar el borrador de la ventana.
+    pub(crate) fn reposition_rename(&mut self, pos: usize) -> Option<u32> {
+        let active = self.rename_active.as_mut()?;
+        let session = self.next_rename_session;
+        self.next_rename_session = self.next_rename_session.wrapping_add(1).max(1);
+        active.session = session;
+        active.pos = pos;
+        Some(session)
+    }
+
     /// Crea una sesión de rename anclada a la ruta actual de la fila. Las carpetas se seleccionan
     /// completas aunque contengan puntos; para archivos se aplica el ciclo F2.
     fn request_rename_at(&mut self, id: PaneId, pos: usize, stage: u8) -> bool {
-        let Some(entry) = self
-            .ws
-            .pane(id)
-            .and_then(|p| p.files.as_ref())
-            .and_then(|f| f.view_entry_at(pos))
-        else {
+        let entry = if self.is_deep_active(id) {
+            self.deep_visible_entry(id, pos)
+        } else {
+            self.ws
+                .pane(id)
+                .and_then(|p| p.files.as_ref())
+                .and_then(|f| f.view_entry_at(pos))
+        };
+        let Some(entry) = entry else {
             return false;
         };
         let name = entry.name.clone();
         let source = entry.path.clone();
-        let selection = if entry.is_dir() {
+        let is_dir = entry.is_dir();
+        let selection = if is_dir {
             (0, name.len())
         } else {
             naygo_core::rename::rename_selection_byte_offsets(&name, stage)
@@ -724,6 +1144,7 @@ impl WorkspaceCtrl {
             pos,
             source,
             name,
+            is_dir,
             stage,
             selection,
         };
@@ -783,28 +1204,55 @@ impl WorkspaceCtrl {
             if active.pane != id || active.session != session {
                 return None;
             }
+            if self.is_deep_active(id) {
+                self.deep_position_of(id, &active.source)
+            } else {
+                self.ws
+                    .pane(id)
+                    .and_then(|p| p.files.as_ref())
+                    .and_then(|f| {
+                        f.view_indices().iter().position(|&real| {
+                            f.entries.get(real).is_some_and(|e| e.path == active.source)
+                        })
+                    })
+            }
+        };
+        let Some(current_pos) = current_pos else {
+            // Durante un listado parcial la fuente puede aún no estar visible. Confirmar
+            // el borrador solicitado es seguro, pero no adivinar la siguiente fila.
+            self.rename_commit(id, session, new_name);
+            return None;
+        };
+        let count = if self.is_deep_active(id) {
+            self.deep_visible_count(id)
+        } else {
             self.ws
                 .pane(id)
                 .and_then(|p| p.files.as_ref())
-                .and_then(|f| {
-                    f.view_indices().iter().position(|&real| {
-                        f.entries.get(real).is_some_and(|e| e.path == active.source)
-                    })
-                })
-                .unwrap_or(active.pos)
+                .map(|f| f.view_len())?
         };
-        self.rename_commit(id, session, new_name);
-        let count = self
-            .ws
-            .pane(id)
-            .and_then(|p| p.files.as_ref())
-            .map(|f| f.view_len())?;
         if count == 0 {
+            self.rename_commit(id, session, new_name);
             return None;
         }
         let next = (current_pos as i32 + dir).clamp(0, count as i32 - 1) as usize;
+        let invalidated_neighbor = self.is_deep_active(id)
+            && self.rename_active.as_ref().is_some_and(|active| {
+                active.is_dir
+                    && new_name.trim() != active.name
+                    && self.deep_visible_entry(id, next).is_some_and(|entry| {
+                        entry.path != active.source && entry.path.starts_with(&active.source)
+                    })
+            });
+        self.rename_commit(id, session, new_name);
+        if invalidated_neighbor {
+            // Un hijo de la carpeta renombrada aún tiene una ruta obsoleta durante el worker.
+            return None;
+        }
         // Mover el foco/selección a la fila nueva, para que el scroll la acompañe.
-        if let Some(f) = self.ws.pane_mut(id).and_then(|p| p.files.as_mut()) {
+        if self.is_deep_active(id) {
+            self.deep_focus_at(id, next);
+        } else if let Some(f) = self.ws.pane_mut(id).and_then(|p| p.files.as_mut()) {
             f.select_single(next);
         }
         self.request_rename_at(id, next, 0).then_some(next)
@@ -939,12 +1387,57 @@ fn trash_restore_receipts(
     actions
         .iter()
         .filter_map(|action| match action {
-            naygo_core::ops::undo::UndoAction::RestoreTrash { original } => {
-                Some(naygo_platform::trash::TrashReceipt {
-                    original: original.clone(),
-                })
-            }
+            naygo_core::ops::undo::UndoAction::RestoreTrash {
+                original,
+                trashed_path,
+            } => Some(naygo_platform::trash::TrashReceipt {
+                original: original.clone(),
+                trashed_path: trashed_path.clone(),
+            }),
             _ => None,
         })
         .collect()
+}
+
+#[cfg(test)]
+mod paste_probe_tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn probe_paste_elige_nombre_libre_fuera_del_callback() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = naygo_core::config::Settings::default();
+        let content = naygo_core::clipboard::ClipboardContent::Text("contenido".into());
+        let first = dir.path().join("pegado 1970-01-01 00.00.00.txt");
+        std::fs::write(&first, "ocupado").unwrap();
+
+        let plan = decide_paste_worker(&content, dir.path(), &settings, 0).unwrap();
+        let naygo_core::clipboard::PastePlan::CreateText { path, body } = plan else {
+            panic!("se esperaba un plan de creación de texto");
+        };
+        assert_eq!(body, "contenido");
+        assert_eq!(path, dir.path().join("pegado 1970-01-01 00.00.00 (2).txt"));
+    }
+
+    #[test]
+    fn lectura_de_portapapeles_y_plan_se_ejecutan_fuera_del_hilo_llamador() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = naygo_core::config::Settings::default();
+        let caller = std::thread::current().id();
+        let read_thread = Arc::new(Mutex::new(None));
+        let observed = Arc::clone(&read_thread);
+        let rx = spawn_paste_target_probe(dir.path().to_path_buf(), settings, 0, move || {
+            *observed.lock().unwrap() = Some(std::thread::current().id());
+            naygo_core::clipboard::ClipboardContent::Empty
+        })
+        .unwrap();
+
+        let result = rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("el worker debe entregar una respuesta")
+            .expect("clipboard vacío produce un plan válido");
+        assert!(matches!(result, naygo_core::clipboard::PastePlan::Nothing));
+        assert_ne!(*read_thread.lock().unwrap(), Some(caller));
+    }
 }

@@ -18,7 +18,7 @@
 
 use crate::cancel::CancellationToken;
 use crate::fs_model::{Entry, EntryKind};
-use crate::listing::entry_from_path;
+use crate::listing::entry_at;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread::{self, JoinHandle};
@@ -200,7 +200,7 @@ fn search_walk(
                     let name = e
                         .path
                         .file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
+                        .map(crate::path_display::display_os_str)
                         .unwrap_or_default();
                     let name_matches = matches_query(
                         &name,
@@ -261,7 +261,10 @@ fn file_contains_text(path: &Path, needle: &str, ignore_case: bool) -> bool {
     let Ok(meta) = std::fs::metadata(path) else {
         return false;
     };
-    if !meta.is_file() || meta.len() > MAX_CONTENT_FILE_BYTES {
+    if !meta.is_file()
+        || meta.len() > MAX_CONTENT_FILE_BYTES
+        || crate::listing::is_cloud_placeholder_offline(&meta)
+    {
         return false;
     }
     let Ok(bytes) = std::fs::read(path) else {
@@ -283,12 +286,13 @@ fn file_contains_text(path: &Path, needle: &str, ignore_case: bool) -> bool {
 /// Construye el `Entry` de una coincidencia leyendo su metadata real (tamaño/fechas). Si la
 /// metadata no se puede leer, cae a un `Entry` mínimo con el tipo ya conocido del walk.
 fn make_entry(path: &Path, is_dir: bool) -> Entry {
-    match std::fs::metadata(path) {
-        Ok(m) => entry_from_path(path, Some(&m)),
-        Err(_) => Entry {
+    // Metadata del propio enlace, como el listado (no se sigue el destino).
+    match entry_at(path) {
+        Some(entry) => entry,
+        None => Entry {
             name: path
                 .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
+                .map(crate::path_display::display_os_str)
                 .unwrap_or_default(),
             path: path.to_path_buf(),
             kind: if is_dir {
@@ -305,33 +309,16 @@ fn make_entry(path: &Path, is_dir: bool) -> Entry {
     }
 }
 
-/// ¿La metadata corresponde a un reparse point de Windows (symlink O junction)? Igual criterio
-/// que `sizing`: en Windows miramos `FILE_ATTRIBUTE_REPARSE_POINT`; en otras plataformas
-/// `is_symlink()` ya cubre los enlaces.
-#[cfg(windows)]
-fn is_reparse_point(meta: &std::fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt;
-    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-    meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-}
-
-#[cfg(not(windows))]
-fn is_reparse_point(_meta: &std::fs::Metadata) -> bool {
-    false
-}
-
 /// Lista un directorio del FS real para la búsqueda. `None` si no se puede leer (parcial).
-/// Usa `symlink_metadata` (no sigue enlaces) y marca symlinks/junctions como no-descendibles.
+/// Usa `symlink_metadata` (no sigue enlaces) y marca symlinks/junctions como no-descendibles
+/// (los placeholders de nube no son enlaces: se recorren).
 pub(crate) fn fs_lister(dir: &Path) -> ListResult {
     let rd = std::fs::read_dir(dir).ok()?;
     let mut out = Vec::new();
     for ent in rd.flatten() {
         let path = ent.path();
         let (is_dir, is_symlink) = match std::fs::symlink_metadata(&path) {
-            Ok(m) => (
-                m.is_dir(),
-                m.file_type().is_symlink() || is_reparse_point(&m),
-            ),
+            Ok(m) => (m.is_dir(), m.file_type().is_symlink()),
             // Entrada ilegible: la representamos como archivo no-symlink (no descenderá y se
             // intentará emparejar su nombre igual; su metadata se resolverá en make_entry).
             Err(_) => (false, false),
@@ -391,6 +378,44 @@ mod tests {
         assert!(matches_query("Informe.TXT", "Informe", false, false));
         assert!(matches_query("literal*.txt", "literal*", true, false));
         assert!(!matches_query("literalx.txt", "literal*", true, false));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn busqueda_por_nombre_escapado_encuentra_bytes_no_utf8_sin_colision() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let invalid_name = OsString::from_vec(b"foto-\xff.txt".to_vec());
+        let literal_escape_name = OsString::from_vec(b"foto-\\xFF.txt".to_vec());
+        std::fs::write(dir.path().join(&invalid_name), b"").unwrap();
+        std::fs::write(dir.path().join(&literal_escape_name), b"").unwrap();
+
+        let (tx, rx) = channel();
+        search_walk(
+            dir.path(),
+            &SearchOptions {
+                name_query: r"foto-\xFF.txt".into(),
+                recursive: false,
+                ..SearchOptions::default()
+            },
+            &fs_lister,
+            &CancellationToken::new(),
+            &tx,
+        );
+        drop(tx);
+
+        let hits: Vec<_> = collect(rx)
+            .into_iter()
+            .filter_map(|msg| match msg {
+                SearchMsg::Hit(entry) => Some((entry.name, entry.path)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].0, r"foto-\xFF.txt");
+        assert_eq!(hits[0].1.file_name(), Some(invalid_name.as_os_str()));
     }
 
     #[test]

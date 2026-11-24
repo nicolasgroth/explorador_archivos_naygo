@@ -11,8 +11,12 @@
 use crate::wire::WireCtx;
 use crate::*;
 use naygo_core::workspace::PaneId;
-use slint::{ModelRc, SharedString, VecModel};
+use slint::{ModelRc, SharedString};
 use std::rc::Rc;
+
+#[cfg(test)]
+#[path = "callbacks_pathbar_tests.rs"]
+mod tests;
 
 /// Registra los callbacks de la path-bar y del árbol de favoritos editable.
 pub(crate) fn wire_pathbar(ui: &AppWindow, ctx: &WireCtx) {
@@ -23,6 +27,10 @@ pub(crate) fn wire_pathbar(ui: &AppWindow, ctx: &WireCtx) {
         start_timer,
         ..
     } = ctx;
+    let validation_timer = Rc::new(slint::Timer::default());
+    let validation_cancel = Rc::new(std::cell::RefCell::new(
+        None::<naygo_core::CancellationToken>,
+    ));
     // --- Barra de ruta (breadcrumbs + edición + autocompletado) ---
     {
         // Clic en un breadcrumb: navegar ese panel a la ruta del segmento.
@@ -57,62 +65,215 @@ pub(crate) fn wire_pathbar(ui: &AppWindow, ctx: &WireCtx) {
         });
     }
     {
-        // Entrar a modo edición: cargar la ruta actual del panel y sus candidatos.
         let ctrl = ctrl.clone();
         let ui_weak = ui.as_weak();
+        let start_timer = start_timer.clone();
+        let validation_cancel = validation_cancel.clone();
         ui.on_path_edit_start(move |id| {
             let Some(ui) = ui_weak.upgrade() else {
                 return;
             };
             let path = ctrl.borrow().path_of(PaneId(id as u64));
-            let sugg = ctrl.borrow().path_autocomplete(&path);
-            ui.set_edit_pane(id);
-            ui.set_edit_text(path.into());
+            if path.is_empty() {
+                return;
+            }
+            if let Some(cancel) = validation_cancel.borrow_mut().take() {
+                cancel.cancel();
+            }
+            ctrl.borrow_mut().cancel_path_autocomplete();
+            ui.set_edit_revision(ui.get_edit_revision().wrapping_add(1));
+            ui.set_edit_session(ui.get_edit_session().wrapping_add(1));
+            ui.set_edit_error(SharedString::new());
+            ui.set_edit_validating(false);
+            ui.set_edit_base(path.clone().into());
+            ui.set_edit_text(path.clone().into());
             ui.set_edit_caret(-1);
-            ui.set_edit_suggestions(ModelRc::from(Rc::new(VecModel::from(
-                sugg.into_iter().map(SharedString::from).collect::<Vec<_>>(),
-            ))));
-        });
-    }
-    {
-        // El texto del editor cambió: pedir el autocompletado ASYNC (worker con debounce).
-        // Antes hacía un `read_dir` por tecla en el hilo de UI: contra un share de red caído
-        // tipear una ruta congelaba la app. El tick entrega el resultado (ver el timer).
-        let ctrl = ctrl.clone();
-        let start_timer = start_timer.clone();
-        ui.on_path_edit_changed(move |_id, text| {
+            ui.set_edit_suggestions(ModelRc::default());
+            ui.set_edit_toolbar(false);
+            ui.set_edit_pane(id);
             ctrl.borrow_mut()
-                .request_path_autocomplete(text.to_string(), std::time::Instant::now());
-            // Mantener el timer vivo para que el debounce venza y el resultado llegue.
+                .request_path_autocomplete(path, std::time::Instant::now());
             start_timer();
         });
     }
     {
-        // Enter en el editor: navegar a la ruta tecleada (si existe como carpeta) y salir.
+        let ctrl = ctrl.clone();
+        let ui_weak = ui.as_weak();
+        ui.on_toolbar_path_start(move || {
+            let Some(ui) = ui_weak.upgrade() else { return };
+            // Capturar ahora, no resolver active_id al confirmar ni al elegir sugerencias.
+            let Some(id) = ctrl.borrow().active_id() else {
+                return;
+            };
+            ui.invoke_path_edit_start(id.0 as i32);
+            if ui.get_edit_pane() == id.0 as i32 {
+                ui.set_edit_toolbar(true);
+                ui.set_toolbar_path_favorite(ctrl.borrow().is_pane_dir_favorite(id));
+            }
+        });
+    }
+    {
+        let ctrl = ctrl.clone();
+        let ui_weak = ui.as_weak();
+        let start_timer = start_timer.clone();
+        let validation_cancel = validation_cancel.clone();
+        ui.on_path_edit_changed(move |id, text| {
+            let Some(ui) = ui_weak.upgrade() else {
+                return;
+            };
+            if ui.get_edit_pane() != id {
+                return;
+            }
+            if let Some(cancel) = validation_cancel.borrow_mut().take() {
+                cancel.cancel();
+            }
+            ui.set_edit_revision(ui.get_edit_revision().wrapping_add(1));
+            ui.set_edit_error(SharedString::new());
+            ui.set_edit_validating(false);
+            ui.set_edit_suggestions(ModelRc::default());
+            let base = std::path::PathBuf::from(ui.get_edit_base().as_str());
+            let buffer = std::path::PathBuf::from(text.as_str());
+            let absolute = base.join(buffer).to_string_lossy().into_owned();
+            // El worker recibe ruta absoluta, pero la respuesta conserva el borrador original.
+            ctrl.borrow_mut().request_path_autocomplete_at(
+                text.to_string(),
+                absolute,
+                std::time::Instant::now(),
+            );
+            start_timer();
+        });
+    }
+    {
         let ctrl = ctrl.clone();
         let ui_weak = ui.as_weak();
         let sync_layout = sync_layout.clone();
         let start_timer = start_timer.clone();
+        let timer = validation_timer.clone();
+        let validation_cancel = validation_cancel.clone();
         ui.on_path_edit_commit(move |id, text| {
+            let Some(ui) = ui_weak.upgrade() else {
+                return;
+            };
+            if ui.get_edit_pane() != id {
+                return;
+            }
+            timer.stop();
+            if let Some(cancel) = validation_cancel.borrow_mut().take() {
+                cancel.cancel();
+            }
+            ui.set_edit_validating(false);
             ctrl.borrow_mut().cancel_path_autocomplete();
-            let dir = std::path::PathBuf::from(text.as_str());
-            if dir.is_dir() && ctrl.borrow_mut().navigate_pane_to(PaneId(id as u64), dir) {
-                start_timer();
+            ui.set_edit_suggestions(ModelRc::default());
+            ui.set_edit_revision(ui.get_edit_revision().wrapping_add(1));
+            let revision = ui.get_edit_revision();
+            let invalid = ctrl.borrow().config.t("path.edit.invalid");
+            let cleaned = match naygo_core::path_input::normalize(text.as_str()) {
+                Ok(path) => path,
+                Err(_) => {
+                    ui.set_edit_error(invalid.into());
+                    return;
+                }
+            };
+            let base = ui.get_edit_base().to_string();
+            if base.is_empty() || ctrl.borrow().path_of(PaneId(id as u64)) != base {
+                ui.invoke_path_edit_cancel(id);
+                return;
             }
-            if let Some(ui) = ui_weak.upgrade() {
-                ui.set_edit_pane(-1);
-            }
-            sync_layout();
+            let path = std::path::PathBuf::from(&base).join(cleaned);
+            let job = match crate::path_validation::PathValidation::start(path) {
+                Ok(job) => job,
+                Err(_) => {
+                    ui.set_edit_error(ctrl.borrow().config.t("path.edit.busy").into());
+                    return;
+                }
+            };
+            ui.set_edit_error(ctrl.borrow().config.t("path.edit.checking").into());
+            *validation_cancel.borrow_mut() = Some(job.cancellation_token());
+            ui.set_edit_validating(true);
+            let weak_timer = Rc::downgrade(&timer);
+            let ui_weak = ui.as_weak();
+            let ctrl = ctrl.clone();
+            let sync_layout = sync_layout.clone();
+            let start_timer = start_timer.clone();
+            // Capturamos panel, carpeta base y revisión. Cambiar foco no cambia el destino.
+            // El timer no posee al Rc de sí mismo: no crea un ciclo que sobreviva a la ventana.
+            timer.start(
+                slint::TimerMode::Repeated,
+                std::time::Duration::from_millis(30),
+                move || {
+                    let stop = || {
+                        if let Some(timer) = weak_timer.upgrade() {
+                            timer.stop();
+                        }
+                    };
+                    let Some(ui) = ui_weak.upgrade() else {
+                        stop();
+                        return;
+                    };
+                    if ui.get_edit_revision() != revision || ui.get_edit_pane() != id {
+                        stop();
+                        return;
+                    }
+                    if ctrl.borrow().path_of(PaneId(id as u64)) != base {
+                        stop();
+                        ui.invoke_path_edit_cancel(id);
+                        return;
+                    }
+                    let Some(result) = job.poll(std::time::Instant::now()) else {
+                        return;
+                    };
+                    stop();
+                    ui.set_edit_validating(false);
+                    match result {
+                        Ok(path) => {
+                            let navigated =
+                                ctrl.borrow_mut().navigate_pane_to(PaneId(id as u64), path);
+                            if navigated {
+                                ui.invoke_path_edit_cancel(id);
+                                start_timer();
+                                sync_layout();
+                            } else {
+                                ui.set_edit_error(invalid.clone().into());
+                            }
+                        }
+                        Err(crate::path_validation::ValidationError::Timeout) => {
+                            ui.set_edit_error(ctrl.borrow().config.t("path.edit.timeout").into());
+                        }
+                        Err(_) => ui.set_edit_error(invalid.clone().into()),
+                    }
+                },
+            );
         });
     }
     {
-        // Esc: salir de edición sin navegar.
         let ctrl = ctrl.clone();
         let ui_weak = ui.as_weak();
-        ui.on_path_edit_cancel(move |_id| {
-            ctrl.borrow_mut().cancel_path_autocomplete();
+        let timer = validation_timer.clone();
+        let validation_cancel = validation_cancel.clone();
+        ui.on_path_edit_cancel(move |id| {
             if let Some(ui) = ui_weak.upgrade() {
+                if ui.get_edit_pane() != id {
+                    return;
+                }
+                timer.stop();
+                if let Some(cancel) = validation_cancel.borrow_mut().take() {
+                    cancel.cancel();
+                }
+                ctrl.borrow_mut().cancel_path_autocomplete();
+                ui.set_edit_revision(ui.get_edit_revision().wrapping_add(1));
                 ui.set_edit_pane(-1);
+                if ui.get_edit_toolbar() {
+                    ui.set_edit_toolbar(false);
+                    ui.set_path_refocus_revision(ui.get_path_refocus_revision().wrapping_add(1));
+                }
+                let c = ctrl.borrow();
+                ui.set_toolbar_path_favorite(
+                    c.active_id().is_some_and(|id| c.is_pane_dir_favorite(id)),
+                );
+                ui.set_edit_input_focused(false);
+                ui.set_edit_validating(false);
+                ui.set_edit_error(SharedString::new());
+                ui.set_edit_suggestions(ModelRc::default());
             }
         });
     }
@@ -131,31 +292,28 @@ pub(crate) fn wire_pathbar(ui: &AppWindow, ctx: &WireCtx) {
         let ctrl = ctrl.clone();
         let ui_weak = ui.as_weak();
         ui.on_copy_path(move |id| {
-            ctrl.borrow().copy_pane_path(PaneId(id as u64));
+            ctrl.borrow_mut().copy_pane_path(PaneId(id as u64));
             if let Some(ui) = ui_weak.upgrade() {
                 ui.set_status(ui.global::<Tr>().get_pathbar_copied());
             }
         });
     }
     {
-        // Clic en un candidato: completar el último segmento del editor y seguir editando.
-        let ctrl = ctrl.clone();
         let ui_weak = ui.as_weak();
-        ui.on_path_suggestion_clicked(move |_id, name| {
+        ui.on_path_suggestion_clicked(move |id, name| {
             let Some(ui) = ui_weak.upgrade() else {
                 return;
             };
-            let buffer = ui.get_edit_text().to_string();
-            let (parent, _) = naygo_core::path_segments::split_edit_buffer(&buffer);
-            // Completar: padre + nombre elegido + separador (listo para seguir bajando).
+            if ui.get_edit_pane() != id {
+                return;
+            }
+            let (parent, _) =
+                naygo_core::path_segments::split_edit_buffer(ui.get_edit_text().as_str());
             let completed = format!("{parent}{name}\\");
-            let sugg = ctrl.borrow().path_autocomplete(&completed);
             ui.set_edit_text(completed.into());
             ui.set_edit_caret(ui.get_edit_text().len() as i32);
-            ui.set_edit_caret_revision(ui.get_edit_caret_revision() + 1);
-            ui.set_edit_suggestions(ModelRc::from(Rc::new(VecModel::from(
-                sugg.into_iter().map(SharedString::from).collect::<Vec<_>>(),
-            ))));
+            ui.set_edit_caret_revision(ui.get_edit_caret_revision().wrapping_add(1));
+            ui.invoke_path_edit_changed(id, ui.get_edit_text());
         });
     }
     {

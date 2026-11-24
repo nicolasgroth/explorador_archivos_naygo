@@ -1,0 +1,22 @@
+{
+  "name": "Bruma",
+  "base": "light",
+  "panel_bg": "#eaf0f3",
+  "toolbar_bg": "#dce6eb",
+  "active_panel_bg": "#f4f8fa",
+  "inactive_panel_bg": "#e5edf1",
+  "row_bg": "#f2f7f9",
+  "row_alt_bg": "#e8f0f4",
+  "row_inactive_bg": "#e5edf1",
+  "text": "#263440",
+  "text_dim": "#4b5d6a",
+  "selection_bg": "#d6e5ee",
+  "accent": "#355f7a",
+  "error": "#af303d",
+  "highlight": "#dceadf",
+  "border": "#95a9b5",
+  "active_bar": "#355f7a",
+  "flat_inactive_panels": true,
+  "use_inactive_row_color": true,
+  "icon_accent": "#355f7a"
+}

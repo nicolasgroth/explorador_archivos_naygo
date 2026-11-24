@@ -1,0 +1,22 @@
+{
+  "name": "Salvia",
+  "base": "light",
+  "panel_bg": "#e9efea",
+  "toolbar_bg": "#dce6df",
+  "active_panel_bg": "#f4f8f2",
+  "inactive_panel_bg": "#e5ede7",
+  "row_bg": "#f2f7f0",
+  "row_alt_bg": "#e8f0e6",
+  "row_inactive_bg": "#e6eee6",
+  "text": "#22342b",
+  "text_dim": "#475e4e",
+  "selection_bg": "#d6e6d9",
+  "accent": "#356649",
+  "error": "#ab303d",
+  "highlight": "#e2edcd",
+  "border": "#93a894",
+  "active_bar": "#356649",
+  "flat_inactive_panels": true,
+  "use_inactive_row_color": true,
+  "icon_accent": "#356649"
+}

@@ -1,0 +1,22 @@
+{
+  "name": "Grafito claro",
+  "base": "light",
+  "panel_bg": "#dce0e3",
+  "toolbar_bg": "#ccd2d8",
+  "active_panel_bg": "#e9edf0",
+  "inactive_panel_bg": "#d8dde1",
+  "row_bg": "#e7ebee",
+  "row_alt_bg": "#dce2e7",
+  "row_inactive_bg": "#dbe0e4",
+  "text": "#222c36",
+  "text_dim": "#46535f",
+  "selection_bg": "#c8d9e7",
+  "accent": "#3e5e7a",
+  "error": "#a82636",
+  "highlight": "#d5e4d6",
+  "border": "#8c9caa",
+  "active_bar": "#3e5e7a",
+  "flat_inactive_panels": true,
+  "use_inactive_row_color": true,
+  "icon_accent": "#3e5e7a"
+}

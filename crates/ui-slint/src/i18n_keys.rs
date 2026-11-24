@@ -89,6 +89,7 @@ where
         }
     };
     // Barra de herramientas.
+    tr.set_edit_path_tip(tip("action.edit_path", Action::EditPath));
     tr.set_toolbar_up(c.t("slint.toolbar.up").into());
     tr.set_toolbar_up_tip(tip("toolbar.up", Action::GoUp));
     tr.set_nav_back_tip(tip("slint.toolbar.back_tip", Action::GoBack));
@@ -130,6 +131,7 @@ where
     tr.set_layout_save_current(c.t("slint.layout.save_current").into());
     tr.set_layout_save_title(c.t("slint.layout.save_title").into());
     tr.set_layout_save_placeholder(c.t("slint.layout.save_placeholder").into());
+    tr.set_layout_save_non_utf8_path(c.t("slint.layout.save_non_utf8_path").into());
     // Menú desplegable "agregar panel".
     tr.set_add_files(c.t("slint.add.files").into());
     tr.set_add_tree(c.t("pane.tree.title").into());
@@ -198,6 +200,9 @@ where
     tr.set_queries_basket(c.t("queries.basket").into());
     tr.set_spaces_help(c.t("spaces.help").into());
     tr.set_spaces_root_help(c.t("spaces.root_help").into());
+    tr.set_spaces_favorites_scope(c.t("spaces.favorites_scope").into());
+    tr.set_spaces_favorites_global(c.t("spaces.favorites_global").into());
+    tr.set_spaces_favorites_private(c.t("spaces.favorites_private").into());
     tr.set_spaces_root(c.t("spaces.root").into());
     tr.set_spaces_working(c.t("spaces.working").into());
     tr.set_spaces_save_as(c.t("spaces.save_as").into());
@@ -226,6 +231,7 @@ where
     tr.set_basket_save_list(c.t("basket.save_list").into());
     tr.set_basket_open_list(c.t("basket.open_list").into());
     tr.set_destination_radar_browse(c.t("destination_radar.browse").into());
+    tr.set_drop_select_destination(c.t("drop.select_destination").into());
     tr.set_comparison_select_different_tip(c.t("slint.comparison.select_different_tip").into());
     tr.set_comparison_select_only_here_tip(c.t("slint.comparison.select_only_here_tip").into());
     tr.set_comparison_copy_tip(c.t("slint.comparison.copy_tip").into());
@@ -284,6 +290,11 @@ where
     tr.set_ops_verb_other(c.t("ops.verb_other").into());
     tr.set_ops_view_files(c.t("ops.view_files").into());
     tr.set_ops_files_word(c.t("ops.files_word").into());
+    tr.set_ops_file_singular(c.t("ops.file_singular").into());
+    tr.set_ops_folders_word(c.t("ops.folders_word").into());
+    tr.set_ops_folder_singular(c.t("ops.folder_singular").into());
+    tr.set_ops_entries_word(c.t("ops.entries_word").into());
+    tr.set_ops_entry_singular(c.t("ops.entry_singular").into());
     tr.set_ops_file_list_title(c.t("ops.file_list_title").into());
     tr.set_ops_file_skipped(c.t("ops.file_skipped").into());
     tr.set_ops_file_failed(c.t("ops.file_failed").into());
@@ -360,6 +371,8 @@ where
     tr.set_drop_confirm_copy(c.t("slint.drop.confirm_copy").into());
     tr.set_drop_confirm_move(c.t("slint.drop.confirm_move").into());
     tr.set_drop_confirm_more(c.t("slint.drop.confirm_more").into());
+    tr.set_drop_no_ask_session(c.t("slint.drop.no_ask_session").into());
+    tr.set_drop_no_ask_always(c.t("slint.drop.no_ask_always").into());
     // Menú contextual.
     tr.set_ctx_open(c.t("slint.ctx.open").into());
     // Submenú "Abrir ▸": "Abrir" reusa slint.ctx.open (mismo texto); Explorador reusa
@@ -453,6 +466,7 @@ where
     tr.set_batch_col_after(c.t("slint.batch.col_after").into());
     tr.set_batch_collision(c.t("slint.batch.collision").into());
     tr.set_batch_invalid(c.t("slint.batch.invalid").into());
+    tr.set_batch_non_utf8(c.t("slint.batch.non_utf8").into());
     tr.set_batch_items(c.t("slint.batch.items").into());
     tr.set_batch_apply(c.t("slint.batch.apply").into());
     // Menú/editor de columna (F2).
@@ -482,6 +496,7 @@ where
     tr.set_inspector_kind(c.t("slint.inspector.kind").into());
     tr.set_inspector_size(c.t("slint.inspector.size").into());
     tr.set_inspector_calc_size(c.t("slint.inspector.calc_size").into());
+    tr.set_inspector_unblock(c.t("provenance.unblock_title").into());
     tr.set_inspector_modified(c.t("slint.inspector.modified").into());
     tr.set_inspector_created(c.t("slint.inspector.created").into());
     tr.set_inspector_path(c.t("slint.inspector.path").into());
@@ -508,6 +523,7 @@ where
     tr.set_preview_title(c.t("pane.preview.title").into());
     tr.set_preview_select(c.t("slint.preview.select").into());
     tr.set_preview_truncated(c.t("slint.preview.truncated").into());
+    tr.set_preview_text_info(c.t("slint.preview.text_info").into());
     // Menú de dirección del botón "+".
     tr.set_split_right(c.t("slint.split.right").into());
     tr.set_split_down(c.t("slint.split.down").into());
@@ -540,6 +556,7 @@ where
     tr.set_cfg_preview_as_ph(c.t("slint.cfg.preview_as_ph").into());
     tr.set_preview_view_auto(c.t("slint.preview.view_auto").into());
     tr.set_preview_view_text(c.t("slint.preview.view_text").into());
+    tr.set_preview_content(c.t("slint.preview.content").into());
     tr.set_preview_view_image(c.t("slint.preview.view_image").into());
     tr.set_preview_view_code(c.t("slint.preview.view_code").into());
     tr.set_preview_lang(c.t("slint.preview.lang").into());
@@ -549,10 +566,23 @@ where
     tr.set_preview_cancel_tip(c.t("slint.preview.cancel_tip").into());
     tr.set_preview_copy_tip(c.t("slint.preview.copy_tip").into());
     tr.set_preview_image_fit_tip(c.t("slint.preview.image_fit_tip").into());
+    tr.set_preview_animation_pause(c.t("slint.preview.animation_pause").into());
+    tr.set_preview_animation_resume(c.t("slint.preview.animation_resume").into());
+    tr.set_preview_animation_repeat(c.t("slint.preview.animation_repeat").into());
     tr.set_preview_image_natural_tip(c.t("slint.preview.image_natural_tip").into());
     tr.set_preview_wrap_on_tip(c.t("slint.preview.wrap_on_tip").into());
     tr.set_preview_wrap_off_tip(c.t("slint.preview.wrap_off_tip").into());
     tr.set_preview_reset_view_tip(c.t("slint.preview.reset_view_tip").into());
+    tr.set_preview_mesh_color(c.t("slint.preview.mesh_color").into());
+    tr.set_preview_mesh_source(c.t("slint.preview.mesh_source").into());
+    tr.set_preview_mesh_blue(c.t("slint.preview.mesh_blue").into());
+    tr.set_preview_mesh_white(c.t("slint.preview.mesh_white").into());
+    tr.set_preview_mesh_warm(c.t("slint.preview.mesh_warm").into());
+    tr.set_preview_mesh_surface(c.t("slint.preview.mesh_surface").into());
+    tr.set_preview_mesh_solid(c.t("slint.preview.mesh_solid").into());
+    tr.set_preview_mesh_edges(c.t("slint.preview.mesh_edges").into());
+    tr.set_preview_mesh_wire(c.t("slint.preview.mesh_wire").into());
+    tr.set_preview_mesh_controls_tip(c.t("slint.preview.mesh_controls_tip").into());
     tr.set_cfg_ops_display(c.t("slint.cfg.ops_display").into());
     tr.set_cfg_ops_display_panel(c.t("slint.cfg.ops_display_panel").into());
     tr.set_cfg_ops_display_modal(c.t("slint.cfg.ops_display_modal").into());
@@ -574,6 +604,10 @@ where
     tr.set_cfg_factory_reset_confirm(c.t("slint.cfg.factory_reset_confirm").into());
     // Auto-resaltado (Previsualización) + pie de panel + Home (Avanzado).
     tr.set_cfg_auto_highlight(c.t("slint.cfg.auto_highlight").into());
+    tr.set_cfg_preview_economical(c.t("slint.cfg.preview_economical").into());
+    tr.set_cfg_tip_preview_economical(c.t("slint.cfg.tip_preview_economical").into());
+    tr.set_cfg_preview_text_limit(c.t("slint.cfg.preview_text_limit").into());
+    tr.set_cfg_tip_preview_text_limit(c.t("slint.cfg.tip_preview_text_limit").into());
     tr.set_cfg_footer_section(c.t("slint.cfg.footer_section").into());
     tr.set_cfg_footer_enabled(c.t("slint.cfg.footer_enabled").into());
     tr.set_cfg_footer_template(c.t("slint.cfg.footer_template").into());
@@ -637,7 +671,11 @@ where
     tr.set_cfg_title_path(c.t("slint.cfg.title_path").into());
     tr.set_cfg_confirm_trash(c.t("slint.cfg.confirm_trash").into());
     tr.set_cfg_confirm_drop(c.t("slint.cfg.confirm_drop").into());
+    tr.set_cfg_confirm_external_drop(c.t("slint.cfg.confirm_external_drop").into());
+    tr.set_cfg_skip_external_drop_session(c.t("slint.cfg.skip_external_drop_session").into());
     tr.set_cfg_show_op_summary(c.t("slint.cfg.show_op_summary").into());
+    tr.set_cfg_auto_hide_operations(c.t("slint.cfg.auto_hide_operations").into());
+    tr.set_cfg_tip_auto_hide_operations(c.t("slint.cfg.tip.auto_hide_operations").into());
     tr.set_cfg_paste_confirm(c.t("slint.cfg.paste_confirm").into());
     tr.set_cfg_paste_name(c.t("slint.cfg.paste_name").into());
     tr.set_cfg_paste_ext(c.t("slint.cfg.paste_ext").into());
@@ -668,6 +706,8 @@ where
     tr.set_theme_tok_active_bar(c.t("slint.theme.tok.active_bar").into());
     tr.set_theme_tok_error(c.t("slint.theme.tok.error").into());
     tr.set_theme_tok_highlight(c.t("slint.theme.tok.highlight").into());
+    tr.set_theme_tok_icon_accent(c.t("slint.theme.tok.icon_accent").into());
+    tr.set_icons_open_settings(c.t("slint.icons.open_settings").into());
     tr.set_theme_tok_border(c.t("slint.theme.tok.border").into());
     tr.set_theme_tok_row_inactive_bg(c.t("slint.theme.tok.row_inactive_bg").into());
     tr.set_theme_tok_active_panel_bg(c.t("slint.theme.tok.active_panel_bg").into());
@@ -682,6 +722,7 @@ where
     tr.set_theme_use_inactive_row_color(c.t("slint.theme.use_inactive_row_color").into());
     tr.set_cfg_language(c.t("slint.cfg.language").into());
     tr.set_cfg_icon_set(c.t("slint.cfg.icon_set").into());
+    tr.set_cfg_system_file_icons(c.t("slint.cfg.system_file_icons").into());
     tr.set_cfg_shortcuts_hint(c.t("slint.cfg.shortcuts_hint").into());
     tr.set_cfg_capturing(c.t("settings.shortcuts.capturing").into());
     tr.set_cfg_press(c.t("slint.cfg.press").into());
@@ -734,12 +775,17 @@ where
     tr.set_cfg_tip_ops_mode(c.t("slint.cfg.tip.ops_mode").into());
     tr.set_cfg_tip_confirm_trash(c.t("slint.cfg.tip.confirm_trash").into());
     tr.set_cfg_tip_confirm_drop(c.t("slint.cfg.tip.confirm_drop").into());
+    tr.set_cfg_tip_confirm_external_drop(c.t("slint.cfg.tip.confirm_external_drop").into());
+    tr.set_cfg_tip_skip_external_drop_session(
+        c.t("slint.cfg.tip.skip_external_drop_session").into(),
+    );
     tr.set_cfg_tip_show_op_summary(c.t("slint.cfg.tip.show_op_summary").into());
     tr.set_cfg_tip_paste_confirm(c.t("slint.cfg.tip.paste_confirm").into());
     tr.set_cfg_tip_paste_name(c.t("slint.cfg.tip.paste_name").into());
     tr.set_cfg_tip_paste_ext(c.t("slint.cfg.tip.paste_ext").into());
     tr.set_cfg_tip_theme(c.t("slint.cfg.tip.theme").into());
     tr.set_cfg_tip_icon_set(c.t("slint.cfg.tip.icon_set").into());
+    tr.set_cfg_tip_system_file_icons(c.t("slint.cfg.tip.system_file_icons").into());
     tr.set_cfg_tip_animations(c.t("slint.cfg.tip.animations").into());
     tr.set_cfg_tip_date_format(c.t("slint.cfg.tip.date_format").into());
     tr.set_cfg_tip_size_format(c.t("slint.cfg.tip.size_format").into());
@@ -771,4 +817,76 @@ where
     tr.set_cfg_tip_icon_set_base(c.t("slint.cfg.tip.icon_set_base").into());
     tr.set_cfg_tip_icon_objects(c.t("slint.cfg.tip.icon_objects").into());
     tr.set_cfg_tip_icon_custom(c.t("slint.cfg.tip.icon_custom").into());
+    tr.set_splash_subtitle(c.t("splash.subtitle").into());
+}
+
+/// Textos de la ventana de bienvenida (`Splash`): solo el subtítulo. Es una ventana efímera con su
+/// propia copia del global `Tr`; volcarle los ~750 textos de `apply` sería trabajo desperdiciado.
+#[cfg(not(debug_assertions))]
+pub fn apply_splash<'a, W>(splash: &'a W, c: &ConfigCtrl)
+where
+    W: ComponentHandle,
+    Tr<'a>: Global<'a, W>,
+{
+    splash
+        .global::<Tr>()
+        .set_splash_subtitle(c.t("splash.subtitle").into());
+}
+
+#[cfg(test)]
+mod tests {
+    /// Propiedades de `Tr` que NO traduce `apply` a propósito: son muestras de formato de fecha
+    /// (dígitos, iguales en todos los idiomas), no texto.
+    const LANGUAGE_NEUTRAL_PROPS: [&str; 4] = [
+        "cfg-date-iso-min",
+        "cfg-date-iso",
+        "cfg-date-dmy-min",
+        "cfg-date-dmy",
+    ];
+
+    /// Cada propiedad `in property <string>` del global `Tr` (`i18n.slint`) debe tener su setter en
+    /// este archivo: sin él, la UI se queda para siempre con el texto por defecto en español.
+    #[test]
+    fn every_tr_property_has_a_setter_in_apply() {
+        let slint_source = include_str!("../../ui-gen/ui/i18n.slint");
+        let rust_source = include_str!("i18n_keys.rs");
+        let global_body = slint_source
+            .split_once("export global Tr {")
+            .and_then(|(_, rest)| {
+                rest.split_once(
+                    "
+}",
+                )
+            })
+            .map(|(body, _)| body)
+            .expect("el global Tr debe existir en i18n.slint");
+        let mut checked = 0;
+        let mut missing = Vec::new();
+        for line in global_body.lines() {
+            let Some(rest) = line.trim().strip_prefix("in property <string> ") else {
+                continue;
+            };
+            let name = rest
+                .split([':', ';'])
+                .next()
+                .expect("split siempre devuelve un elemento")
+                .trim();
+            checked += 1;
+            if LANGUAGE_NEUTRAL_PROPS.contains(&name) {
+                continue;
+            }
+            let setter = format!("set_{}(", name.replace('-', "_"));
+            if !rust_source.contains(&setter) {
+                missing.push(name.to_string());
+            }
+        }
+        assert!(
+            checked > 500,
+            "el parseo de Tr no encontró propiedades: {checked}"
+        );
+        assert!(
+            missing.is_empty(),
+            "propiedades de Tr sin setter en i18n_keys.rs: {missing:?}"
+        );
+    }
 }

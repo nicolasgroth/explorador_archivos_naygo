@@ -5,10 +5,14 @@ Un explorador de archivos rápido y liviano para Windows 10/11, estilo **Command
 incluidos, temas y sets de íconos personalizables.
 
 <p align="center">
-  <img src="assets/screenshots/naygo-multipanel.png" alt="Naygo con árbol de carpetas, dos paneles de archivos y panel de propiedades" width="100%">
+  <img src="assets/screenshots/naygo-multipanel.png" alt="Naygo 0.5.4 con dos paneles de archivos y propiedades en tema dark-blue" width="100%">
 </p>
 
-<p align="center"><em>Ejemplo sintético: árbol, dos carpetas en paralelo y propiedades, todo en una sola ventana. Las rutas y nombres mostrados son ficticios.</em></p>
+<p align="center"><em>Captura real de Naygo 0.5.4: dos carpetas y propiedades en una ventana. Tema dark-blue, barra compacta y datos sintéticos.</em></p>
+
+Las capturas se actualizaron el 2026-11-08 con el ejecutable 0.5.4 y una configuración aislada;
+las rutas y nombres son ficticios. El procedimiento de captura está en
+[capturas sintéticas](docs/CAPTURAS-SINTETICAS.md).
 
 > **Estado:** UI en Slint (render por software, sin GPU). Funciona: multi-panel con
 > redimensionado en vivo (mover un divisor solo afecta a sus dos vecinos; doble clic =
@@ -26,6 +30,69 @@ incluidos, temas y sets de íconos personalizables.
 > **Guía de uso:** [`docs/GUIA-DE-USUARIO.md`](docs/GUIA-DE-USUARIO.md) (o **F1** en la app).
 > **Novedades por versión:** [`CHANGELOG.md`](CHANGELOG.md) (y la sección "Acerca de" muestra
 > las de la versión instalada).
+
+**Documentación del proyecto:** [índice](docs/README.md), [estado actual](docs/ESTADO-ACTUAL.md)
+y [arquitectura](docs/ARQUITECTURA.md). El [plan de rutas y preview](docs/plans/2026-09-09-rutas-preview-y-configuracion.md)
+separa avances locales por bloque de mejoras pendientes, sin anunciarlas como ya publicadas.
+[Code signing policy (política de firma de código)](docs/POLITICA-DE-FIRMA.md) describe el estado de
+la solicitud OSS y el procedimiento previsto para firmar las descargas.
+
+## Novedades de 0.5.7 (en preparación)
+
+Esta versión aún no está publicada; la última publicada es 0.5.6.
+
+- **Copiar y mover con enlaces.** Naygo ya no recorre junctions ni symlinks
+  dentro de las carpetas que copia o mueve: no hay bucles ni se borra el contenido al que apunta
+  un enlace. Ver [enlaces, nube y rutas largas](#enlaces-nube-y-rutas-largas).
+- **Identidad real del archivo.** Antes de sobrescribir o mover se comprueba si origen y destino
+  son el mismo archivo por otra ruta (hard link, mayúsculas, `\\?\`); si lo son, Naygo omite el
+  paso y deja el original intacto.
+- **Copias más fieles.** En Windows se conservan fechas, atributos y flujos alternativos
+  (`Zone.Identifier`), y un mover entre volúmenes escribe la copia en disco antes de borrar el
+  origen. Funcionan las rutas de más de 260 caracteres.
+- **Carpetas problemáticas.** Una subcarpeta ilegible se informa como fallo sin detener la
+  operación ni borrar su origen. Un recurso de red caído ya no bloquea los listados locales.
+  Restaurar desde la Papelera no pisa un archivo que aparezca en el destino.
+- **OneDrive.** La búsqueda por contenido y los puntos de comparación no descargan los archivos
+  que están solo en línea.
+- **Interfaz que no se congela.** Abrir archivos, la terminal o el Explorador corre en segundo
+  plano. El menú «Más opciones de Windows…» muestra completos «Enviar a» y «Abrir con», con
+  íconos (implementado; pendiente de validación manual).
+- **Menos CPU y memoria.** Medido en el PC de desarrollo ([benchmarks](docs/BENCHMARKS.md)):
+
+  | Medida | 0.5.6 | 0.5.7 |
+  |---|---|---|
+  | CPU en reposo por cada 20 s, ventana abierta | 5,33 · 2,14 · 1,86 · 0 · 4,47 s | 0,66 · 0,72 · 0,02 · 0,02 · 0,64 s |
+  | CPU en 12 s tras un cambio en una carpeta de 100.000 entradas | 8–12 s | 0,22 s |
+  | Memoria tras ese cambio (working set / privada) | 256 / 249 MiB | 176 / 157 MiB |
+  | Actualizar / agregar una fila con 100.000 entradas | 28,5 / 22,3 ms | 3,80 / 4,14 ms |
+
+  En release (working set / privada), Naygo usa 47/21 MiB en la bandeja, 56–59 / 26–28 MiB con la ventana en reposo y
+  ~185/167 MiB con una carpeta de 100.000 entradas abierta (≈1,4 KiB por fila), sin crecer en
+  reposo.
+- **Compilar cuesta menos.** El pico de RAM del build release bajó de 10,9 GiB a 6,7 GiB y el PDB
+  de 473 MB a 177 MB. En desarrollo, recompilar tras tocar un `.rs` de la UI bajó de 1 min 01 s a
+  18,9 s y `cargo check` de 41 s a 4,4 s. Salvedades: tocar un `.slint` quedó más lento
+  (1 min 02 s → 1 min 27 s) y el build release completo tardó unos 10 minutos más que la línea
+  base anterior, sin causa confirmada (esa línea base es de otro commit).
+
+Los cambios completos están en el [changelog](CHANGELOG.md) y el estado de la rama en el
+[estado actual](docs/ESTADO-ACTUAL.md).
+
+## Enlaces, nube y rutas largas
+
+- **Enlaces (junctions y symlinks).** Un junction a carpeta se lista como carpeta y se abre con
+  doble clic o Enter. Al copiar, si seleccionas un enlace a carpeta, se copia su contenido una vez;
+  los enlaces a carpeta que hay *dentro* de lo copiado no se recorren y se informan como fallidos.
+  Al mover, el enlace se traslada como enlace dentro del mismo volumen; entre volúmenes queda en
+  el origen. Calcular el tamaño no entra en enlaces anidados.
+- **OneDrive y otros proveedores de nube.** Los archivos "solo en línea" no se tratan como
+  enlaces. La búsqueda por contenido los omite y los puntos de comparación los marcan como
+  cobertura incompleta, para no descargarlos.
+- **Rutas largas.** Copiar y mover usan rutas extendidas, por lo que funcionan con más de 260
+  caracteres aunque la opción de rutas largas de Windows esté apagada.
+
+Detalle en la [guía de usuario](docs/GUIA-DE-USUARIO.md).
 
 ## Objetivos
 
@@ -48,7 +115,7 @@ incluidos, temas y sets de íconos personalizables.
 - **Consultas guardadas multiraíz** desde F3 o Ctrl+P: filtros de nombre/contenido, tamaño y
   fechas relativas, ejecución explícita cancelable, resultados seleccionables y envío a bandeja.
   Sin indexador residente. [Guía de consultas](docs/BUSQUEDAS-GUARDADAS.md).
-- **Espacios por tarea** desde Disposiciones o Ctrl+P: guardado explícito de paneles, rutas,
+- **Espacios por tarea** desde su botón en la barra o Ctrl+P: guardado explícito de paneles, rutas,
   columnas, filtros y bandeja; importar/exportar `.naygospace`, raíz portable y revisión antes
   de cambiar de tarea, sin interrumpir copias o movimientos. [Guía de espacios](docs/ESPACIOS.md).
 - Navegación por paneles dual (o múltiples), con ir atrás/adelante (incluidos los botones
@@ -57,6 +124,7 @@ incluidos, temas y sets de íconos personalizables.
   **común** para todos los paneles o **dedicado** a un Files; “Explorador enlazado” crea la
   pareja Árbol + Archivos ya agrupada y el vínculo se conserva al reiniciar.
 - Columnas estilo planilla: ordenar, filtrar por tipo de columna y reordenar arrastrando.
+- En Windows, íconos del sistema para archivos como opción configurable, desactivada por defecto.
 - Operaciones entre paneles (copiar, mover, eliminar) con cola opcional, progreso y cancelación;
   los borrados grandes incluyen planificación y vista previa configurable.
 - Asistente de sincronización recursiva entre dos paneles: izquierda→derecha,
@@ -85,14 +153,25 @@ incluidos, temas y sets de íconos personalizables.
   editable, resultados incrementales y rutas relativas.
 - Previsualización liviana: imágenes, SVG, PDF (texto y metadatos), texto/código, modelos
   3D STL/3MF rasterizados por CPU y contenido de archivos ZIP, TAR y TAR.GZ.
+  Los modelos 3D ofrecen rotación con el mouse, tonos y vistas sólidas, con bordes o en malla;
+  3MF admite colores de materiales básicos y puede usar la miniatura si no hay geometría usable.
+  Imágenes/SVG/PDF/comprimidos usan lectores aislados cancelables con límites Windows.
+  WebP/GIF/APNG animados con pausa/reanudación y repetición, decodificación secuencial
+  acotada y reloj dedicado al preview; sin convertir Naygo en reproductor de audio/vídeo.
 - Cálculo de tamaño de carpetas bajo demanda.
 - Barra de unidades de disco con espacio libre/total y porcentaje usado; ícono propio para
   unidades USB y expulsión segura.
-- Integración con Windows: menú contextual del shell, "Abrir con", ejecutar `.exe` como
-  administrador con Shift o clic derecho, detección de cambios y de
-  dispositivos, drag & drop —incluidos archivos virtuales desde 7-Zip/WinRAR—, bandeja del
-  sistema y arranque opcional con el sistema.
-- Sets de íconos: seis de fábrica (Lucide, Mono, Tabler, Material, Flat Color y Fluent),
+- Integración con Windows: menú contextual del shell (con sus submenús, como «Enviar a»), "Abrir con", ejecutar `.exe` como
+  administrador con Shift o clic derecho, detección de cambios y de dispositivos, y drag & drop
+  interno o externo desde Explorer y gestores de archivos. La recepción admite carpetas y archivos
+  virtuales de aplicaciones como 7-Zip/WinRAR, conserva el árbol temporal y confirma la ruta
+  completa del destino; si el panel cambia durante la preparación, exige elegir otro destino abierto.
+  La confirmación puede omitirse por una sesión o desactivarse en Configuración; los conflictos
+  siguen solicitando una decisión. La matriz de compatibilidad por aplicación sigue en validación.
+  Incluye bandeja del sistema y
+  arranque opcional con Windows.
+- Sets de íconos: diez de fábrica (Lucide, Mono, Tabler, Material, Flat Color, Fluent,
+  Outline, Tiles, Vivid y Pastel),
   cambio de ícono por objeto (o un PNG propio) y packs `.naygoset` para compartir.
 - Atajo global **Ctrl+Alt+Z** (configurable) que muestra Naygo y lo trae al frente desde
   cualquier aplicación.
@@ -112,7 +191,9 @@ Naygo no obliga a trabajar siempre con una interfaz compleja. Una plantilla pued
 la carpeta actual para navegar con la máxima claridad, y otra puede reunir árbol, varios
 paneles de archivos y propiedades para operaciones más exigentes.
 
-![Naygo en su disposición minimalista de un panel con datos de demostración](assets/screenshots/naygo-minimal.png)
+![Naygo 0.5.4 en disposición Minimalista, tema paper y archivos sintéticos](assets/screenshots/naygo-minimal.png)
+
+<p align="center"><em>Disposición Minimalista en tema paper; solo muestra datos de demostración.</em></p>
 
 Las disposiciones se pueden guardar y restaurar. El árbol puede ser común a todos los paneles
 o estar enlazado a uno específico, para que cada zona de trabajo conserve su propio contexto.
@@ -144,9 +225,26 @@ Rust + [Slint](https://slint.dev) (UI con renderizador por software, sin GPU) + 
 oficial `windows` para la integración con el Shell de Windows. Open source, sin dependencias
 de pago.
 
+## Arquitectura
+
+El workspace tiene cuatro crates:
+
+| Crate | Paquete | Responsabilidad |
+|---|---|---|
+| `crates/core` | `naygo-core` | Lógica pura, sin UI ni Windows: listados, operaciones, búsqueda, configuración, i18n, temas. |
+| `crates/platform` | `naygo-platform` | Todo lo que toca el sistema operativo: Shell, COM/OLE, Papelera, unidades, copia nativa. |
+| `crates/ui-gen` | `naygo-ui-gen` | Los archivos `.slint` y el código Rust que Slint genera desde ellos. |
+| `crates/ui-slint` | `naygo-ui-slint` (binario `naygo`) | La interfaz: controladores y puente entre `core` y Slint. |
+
+Regla de diseño: el hilo de la interfaz no hace I/O de disco. Detalle en
+[arquitectura](docs/ARQUITECTURA.md).
+
 ## Descargar
 
 **[⬇ Descargar Naygo (portable)](https://github.com/nicolasgroth/explorador_archivos_naygo/releases/latest/download/Naygo-portable.zip)** — siempre apunta a la última versión publicada. También está el [instalador](https://github.com/nicolasgroth/explorador_archivos_naygo/releases/latest/download/Naygo-setup.exe).
+
+El código de esta rama está en la versión 0.5.6 y prepara 0.5.7, aún sin publicar. Los enlaces
+de descarga corresponden a la última publicación de GitHub Releases.
 
 ## Instalación
 
@@ -183,7 +281,7 @@ naygo.exe [<carpeta>] [--theme <id>] [--layout <nombre>] [--help] [--version]
 - `<carpeta>`: abre Naygo en esa carpeta al iniciar (debe existir). Es lo que usa "Abrir en
   Naygo" del menú contextual del Explorador.
 - `--theme <id>`: aplica un tema solo en esa sesión (no cambia tu configuración). Los ids son
-  los temas de Configuración → Apariencia (p. ej. `dark-blue`, `winxp`, `macos`, `solarized-dark`).
+  los temas de Configuración → Apariencia (p. ej. `dark-blue`, `winxp`, `paper`, `solarized-dark`).
 - `--layout <nombre>`: aplica una plantilla de disposición de paneles (de las del menú Layouts,
   incluidas las tuyas).
 - `--tray`: arranca minimizado en la bandeja (sin mostrar la ventana). Es el argumento que
@@ -200,6 +298,9 @@ Los valores que no existan se ignoran (la app abre igual y deja un aviso).
 Libre de usar, modificar y distribuir. Si te sirve, se agradece mencionar a Nicolás Groth e
 ISGroth.
 
-Naygo usa software de terceros, cada uno bajo su propia licencia (todas permisivas; la interfaz
-usa [Slint](https://slint.dev) bajo su licencia *royalty-free*). Los avisos están en
-[`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md).
+Naygo usa software de terceros bajo sus propias licencias. La edición Windows mantiene MIT y
+publica su inventario en [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md). La alfa Linux
+requiere avisos específicos, incluida la excepción GPL-3 Linux-only para la bandeja; su estado
+documental y los pendientes de validación están en
+[`THIRD-PARTY-NOTICES-LINUX.md`](THIRD-PARTY-NOTICES-LINUX.md). La interfaz usa
+[Slint](https://slint.dev) bajo la licencia *royalty-free* seleccionada por el proyecto.

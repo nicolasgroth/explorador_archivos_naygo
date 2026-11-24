@@ -1,0 +1,115 @@
+// Naygo — barra accesible para pestañas de paneles.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
+import { TabVm } from "types.slint";
+import { Theme } from "theme.slint";
+import { Tr } from "i18n.slint";
+
+// La selección se refleja en AccessKit; el foco recorre con ←/→ y activa con Enter/Espacio.
+// Cerrar es una acción separada. No hay I/O ni trabajo de filesystem en esta capa.
+export component TabBar inherits Rectangle {
+    in property <[TabVm]> tabs;
+    in property <int> active-tab-index: 0;
+    callback select(int);
+    callback close(int);
+    property <int> current-focused: tab-focus.has-focus ? tab-focus.focused-tab : -1;
+    accessible-role: tab-list;
+    accessible-label: Tr.toolbar-tabs;
+    accessible-item-count: root.tabs.length;
+    accessible-delegate-focus: root.current-focused >= 0 ? root.current-focused : root.active-tab-index;
+
+    height: 26px;
+    background: Theme.header-bg;
+    tab-focus := FocusScope {
+        property <int> focused-tab: root.active-tab-index;
+        width: 0px;
+        height: 0px;
+        key-pressed(event) => {
+            if (event.text == Key.LeftArrow) {
+                self.focused-tab = Math.max(self.focused-tab - 1, 0);
+                return accept;
+            }
+            if (event.text == Key.RightArrow) {
+                self.focused-tab = Math.min(self.focused-tab + 1, root.tabs.length - 1);
+                return accept;
+            }
+            if (event.text == "\n" && root.tabs.length > 0) {
+                root.select(root.tabs[self.focused-tab].id);
+                return accept;
+            }
+            reject
+        }
+        key-released(event) => {
+            if (event.text == " " && root.tabs.length > 0) {
+                root.select(root.tabs[self.focused-tab].id);
+                return accept;
+            }
+            reject
+        }
+    }
+    HorizontalLayout {
+        padding: Theme.space-xs;
+        spacing: Theme.space-xs;
+        for t[index] in root.tabs: Rectangle {
+            accessible-role: tab;
+            accessible-label: t.label;
+            accessible-item-index: index;
+            accessible-item-selectable: true;
+            accessible-item-selected: t.active;
+            accessible-action-default => {
+                tab-focus.focused-tab = index;
+                root.select(t.id);
+            }
+            background: t.active ? Theme.active-pane-bg : (tab-touch.has-hover ? Theme.hover-bg : transparent);
+            border-width: tab-focus.has-focus && tab-focus.focused-tab == index ? 1px : 0px;
+            border-color: Theme.active-pane-border;
+            border-radius: Theme.radius-sm;
+            if t.active: Rectangle {
+                x: 4px;
+                y: parent.height - 2px;
+                width: parent.width - 8px;
+                height: 2px;
+                background: Theme.active-pane-border;
+                border-radius: 1px;
+            }
+            HorizontalLayout {
+                padding-left: 8px;
+                padding-right: 4px;
+                spacing: 4px;
+                Text {
+                    text: t.label;
+                    color: t.active ? Theme.text : Theme.text-dim;
+                    font-weight: t.active ? 700 : 500;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                Rectangle {
+                    width: 16px;
+                    accessible-role: button;
+                    accessible-label: Tr.missing-close;
+                    accessible-action-default => {
+                        tab-focus.focused-tab = index;
+                        root.close(t.id);
+                    }
+                    background: x-touch.has-hover ? Theme.error : transparent;
+                    border-radius: 3px;
+                    Text { text: "x"; color: Theme.error; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+                    x-touch := TouchArea {
+                        clicked => {
+                            tab-focus.focused-tab = index;
+                            tab-focus.focus();
+                            root.close(t.id);
+                        }
+                    }
+                }
+            }
+            tab-touch := TouchArea {
+                clicked => {
+                    tab-focus.focused-tab = index;
+                    tab-focus.focus();
+                    root.select(t.id);
+                }
+            }
+        }
+    }
+}

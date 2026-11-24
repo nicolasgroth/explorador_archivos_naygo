@@ -1,0 +1,196 @@
+// Naygo — menú contextual híbrido (Fase 3): acciones propias + nativo de Windows.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
+//
+// Menú propio dibujado en Slint con las acciones de Naygo y, al final, "Más opciones de
+// Windows…" que invoca el menú del Shell (platform::context_menu). Overlay posicionado en
+// el punto del clic; un velo cierra al hacer clic fuera. Sin glifos raros (solo texto).
+import { ContextMenuVm } from "types.slint";
+import { Tr } from "i18n.slint";
+import { Theme } from "theme.slint";
+
+component MenuRow inherits Rectangle {
+    in property <string> label;
+    callback clicked();
+    callback hover-changed(bool);
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-action-default => { root.clicked(); }
+    height: 26px;
+    background: t.has-hover ? Theme.hover-bg : transparent;
+    border-radius: Theme.radius-sm;
+    Text {
+        text: root.label;
+        color: Theme.text;
+        vertical-alignment: center;
+        x: 10px;
+    }
+    t := TouchArea {
+        changed has-hover => { root.hover-changed(self.has-hover); }
+        clicked => { root.clicked(); }
+    }
+}
+
+export component ContextMenu inherits Rectangle {
+    in property <ContextMenuVm> vm;
+    callback open();
+    callback open-here();        // submenú "Abrir ▸": navegar el panel activo a la carpeta (= doble-clic)
+    callback open-other-pane();  // submenú "Abrir ▸": abrir la carpeta en otro panel
+    callback open-new-pane();    // submenú "Abrir ▸": abrir la carpeta en un panel nuevo
+    callback open-with();
+    callback run-as-administrator();
+    callback copy();
+    callback cut();
+    callback paste();
+    callback rename();
+    callback delete();
+    callback copy-names();   // copiar nombre(s) de la selección
+    callback copy-path();    // copiar ruta(s) completa(s)
+    callback export-clipboard();
+    callback export-file();
+    callback export-clipboard-comma();
+    callback export-file-comma();
+    callback compress();     // comprimir la selección en un .zip (abre el modal de nombre)
+    callback extract-here(); // extraer el .zip seleccionado en una subcarpeta aquí
+    callback extract-to();   // extraer el .zip seleccionado en una carpeta elegida
+    callback terminal-ps();  // abrir PowerShell en la carpeta
+    callback terminal-cmd(); // abrir CMD en la carpeta
+    callback terminal-wt();  // abrir Windows Terminal en la carpeta
+    callback explorer();     // abrir el Explorador de Windows en la carpeta (modo carpeta)
+    callback new-folder();   // crear subcarpeta(s) en la carpeta (modo carpeta)
+    callback native();      // "Más opciones de Windows…"
+    callback synchronize();
+    callback add-to-basket();
+    callback transform-text();
+    callback dismiss();
+
+    property <bool> submenu-open: false;
+    function submenu-hover(hovered: bool) {
+        if hovered {
+            close-submenu.running = false;
+            root.submenu-open = true;
+        } else if root.submenu-open {
+            close-submenu.running = false;
+            close-submenu.running = true;
+        }
+    }
+    close-submenu := Timer {
+        interval: 250ms;
+        running: false;
+        triggered => { self.running = false; root.submenu-open = false; }
+    }
+    changed vm => { if !root.vm.active { root.submenu-open = false; close-submenu.running = false; } }
+
+    visible: root.vm.active;
+    // Velo a pantalla completa: clic fuera cierra.
+    veil := TouchArea {
+        clicked => { root.dismiss(); }
+    }
+    // Tarjeta del menú posicionada en el clic (acotada para no salirse por la derecha/abajo).
+    menu-card := Rectangle {
+        x: min(root.vm.x, root.width - self.width - 4px);
+        y: min(root.vm.y, root.height - self.height - 4px);
+        width: 210px;
+        height: items.preferred-height + 8px;
+        background: Theme.surface-floating;
+        border-color: Theme.divider;
+        border-width: 1px;
+        border-radius: Theme.radius-md;
+        TouchArea {} // captura clics dentro de la tarjeta (no cierra)
+        items := VerticalLayout {
+            padding: 4px;
+            spacing: 1px;
+            // --- Submenú "Abrir ▸" (solo cuando el target del menú es una carpeta) ---
+            // El panel flotante vive como hermano de esta tarjeta para recibir eventos de puntero.
+            // Un cierre diferido permite cruzar de la fila al submenú sin perderlo.
+            if root.vm.target-is-folder: Rectangle {
+                height: 26px;
+                background: open-row-touch.has-hover || root.submenu-open ? Theme.hover-bg : transparent;
+                border-radius: Theme.radius-sm;
+                HorizontalLayout {
+                    padding-left: 10px;
+                    padding-right: 8px;
+                    Text { text: Tr.ctx-open; color: Theme.text; vertical-alignment: center; horizontal-stretch: 1; }
+                    Text { text: "▸"; color: Theme.text-dim; vertical-alignment: center; }
+                }
+                open-row-touch := TouchArea { changed has-hover => { root.submenu-hover(self.has-hover); } }
+            }
+            if root.vm.target-is-folder: Rectangle { height: 1px; background: Theme.border; }
+            // --- Modo CARPETA (clic derecho en zona vacía): acciones de la carpeta ---
+            // "Abrir en Explorador de Windows" ya vive en el submenú "Abrir ▸" de arriba (el
+            // target-is-folder cubre folder-mode), así que no se duplica aquí.
+            if root.vm.folder-mode: MenuRow { label: Tr.ctx-new-folder; clicked => { root.new-folder(); } }
+            if root.vm.folder-mode: MenuRow { label: Tr.ctx-synchronize; clicked => { root.synchronize(); } }
+            if root.vm.folder-mode: MenuRow { label: Tr.ctx-delete; clicked => { root.delete(); } }
+            if root.vm.folder-mode: Rectangle { height: 1px; background: Theme.border; }
+            if root.vm.folder-mode: MenuRow { label: Tr.ctx-paste; clicked => { root.paste(); } }
+            if root.vm.folder-mode: MenuRow { label: Tr.ctx-export-clipboard; clicked => { root.export-clipboard(); } }
+            if root.vm.folder-mode: MenuRow { label: Tr.ctx-export-file; clicked => { root.export-file(); } }
+            if root.vm.folder-mode: MenuRow { label: Tr.ctx-export-clipboard-comma; clicked => { root.export-clipboard-comma(); } }
+            if root.vm.folder-mode: MenuRow { label: Tr.ctx-export-file-comma; clicked => { root.export-file-comma(); } }
+            if root.vm.folder-mode: Rectangle { height: 1px; background: Theme.border; }
+            // --- Modo ARCHIVO (clic derecho en una fila): acciones del/los archivo(s) ---
+            // "Abrir" estándar SOLO si el target NO es carpeta: si es carpeta, el submenú
+            // "Abrir ▸" de arriba ya ofrece "Abrir" (evita dos filas "Abrir" con acciones distintas).
+            if !root.vm.folder-mode && !root.vm.target-is-folder && (!root.vm.deep-mode || root.vm.single-target): MenuRow { label: Tr.ctx-open; clicked => { root.open(); } }
+            // "Abrir con…" solo para archivos: las carpetas ya tienen su submenú "Abrir ▸" propio.
+            if !root.vm.folder-mode && !root.vm.target-is-folder && (!root.vm.deep-mode || root.vm.single-target): MenuRow { label: Tr.ctx-open-with; clicked => { root.open-with(); } }
+            if root.vm.target-is-executable: MenuRow { label: Tr.ctx-run-as-administrator; clicked => { root.run-as-administrator(); } }
+            if !root.vm.folder-mode: Rectangle { height: 1px; background: Theme.border; }
+            if !root.vm.folder-mode: MenuRow { label: Tr.ctx-copy; clicked => { root.copy(); } }
+            if !root.vm.folder-mode: MenuRow { label: Tr.ctx-cut; clicked => { root.cut(); } }
+            if !root.vm.folder-mode: MenuRow { label: Tr.ctx-paste; clicked => { root.paste(); } }
+            if !root.vm.folder-mode: Rectangle { height: 1px; background: Theme.border; }
+            if !root.vm.folder-mode && (!root.vm.deep-mode || root.vm.single-target): MenuRow { label: Tr.ctx-rename; clicked => { root.rename(); } }
+            if !root.vm.folder-mode: MenuRow { label: Tr.ctx-delete; clicked => { root.delete(); } }
+            if !root.vm.folder-mode: Rectangle { height: 1px; background: Theme.border; }
+            if !root.vm.folder-mode: MenuRow { label: Tr.ctx-copy-names; clicked => { root.copy-names(); } }
+            if !root.vm.folder-mode: MenuRow { label: Tr.ctx-copy-path; clicked => { root.copy-path(); } }
+            if !root.vm.folder-mode: MenuRow { label: Tr.ctx-export-clipboard; clicked => { root.export-clipboard(); } }
+            if !root.vm.folder-mode: MenuRow { label: Tr.ctx-export-file; clicked => { root.export-file(); } }
+            if !root.vm.folder-mode: MenuRow { label: Tr.ctx-export-clipboard-comma; clicked => { root.export-clipboard-comma(); } }
+            if !root.vm.folder-mode: MenuRow { label: Tr.ctx-export-file-comma; clicked => { root.export-file-comma(); } }
+            if !root.vm.folder-mode: MenuRow { label: Tr.ctx-add-basket; clicked => { root.add-to-basket(); } }
+            if !root.vm.folder-mode: MenuRow { label: Tr.ctx-transform-text; clicked => { root.transform-text(); } }
+            if !root.vm.folder-mode: Rectangle { height: 1px; background: Theme.border; }
+            // Comprimir/Extraer (.zip). "Comprimir en .zip…" siempre que haya selección; las
+            // dos de extraer solo si la selección es exactamente un archivo .zip.
+            if !root.vm.folder-mode && root.vm.has-selection: MenuRow { label: Tr.ctx-compress; clicked => { root.compress(); } }
+            if !root.vm.folder-mode && root.vm.is-single-zip: MenuRow { label: Tr.ctx-extract-here; clicked => { root.extract-here(); } }
+            if !root.vm.folder-mode && root.vm.is-single-zip: MenuRow { label: Tr.ctx-extract-to; clicked => { root.extract-to(); } }
+            if !root.vm.folder-mode: Rectangle { height: 1px; background: Theme.border; }
+            // --- Común a ambos modos: terminales + menú nativo de Windows ---
+            MenuRow { label: Tr.ctx-terminal-ps; clicked => { root.terminal-ps(); } }
+            MenuRow { label: Tr.ctx-terminal-cmd; clicked => { root.terminal-cmd(); } }
+            if root.vm.has-wt: MenuRow { label: Tr.ctx-terminal-wt; clicked => { root.terminal-wt(); } }
+            if root.vm.has-native: Rectangle { height: 1px; background: Theme.border; }
+            if root.vm.has-native: MenuRow {
+                label: Tr.ctx-more-windows;
+                clicked => { root.native(); }
+            }
+        }
+    }
+    // Hermano de la tarjeta: Slint puede dibujar un hijo fuera del padre sin que esa zona
+    // participe en hit-testing. Aquí el área completa recibe hover y clics de verdad.
+    open-sub := Rectangle {
+        visible: root.vm.active && root.vm.target-is-folder && root.submenu-open;
+        x: menu-card.x + menu-card.width - 4px + self.width <= root.width
+            ? menu-card.x + menu-card.width - 4px : max(0px, menu-card.x + 4px - self.width);
+        y: max(0px, min(menu-card.y + 4px, root.height - self.height));
+        width: 230px;
+        height: sub-items.preferred-height + 8px;
+        background: Theme.surface-floating;
+        border-color: Theme.divider;
+        border-width: 1px;
+        border-radius: Theme.radius-md;
+        TouchArea { changed has-hover => { root.submenu-hover(self.has-hover); } }
+        sub-items := VerticalLayout {
+            padding: 4px;
+            spacing: 1px;
+            if !root.vm.folder-mode || root.vm.show-open-here: MenuRow { label: Tr.ctx-open; hover-changed(v) => { root.submenu-hover(v); } clicked => { root.open-here(); } }
+            MenuRow { label: Tr.ctx-open-other-pane; hover-changed(v) => { root.submenu-hover(v); } clicked => { root.open-other-pane(); } }
+            MenuRow { label: Tr.ctx-open-new-pane; hover-changed(v) => { root.submenu-hover(v); } clicked => { root.open-new-pane(); } }
+            MenuRow { label: Tr.ctx-explorer; hover-changed(v) => { root.submenu-hover(v); } clicked => { root.explorer(); } }
+        }
+    }
+}

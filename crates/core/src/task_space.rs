@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 use crate::config::{WorkspacePersist, CONFIG_VERSION};
+use crate::favorites::Favorites;
 use crate::workspace::{PaneId, PanePurpose, Workspace};
 use crate::CancellationToken;
 use serde::{Deserialize, Serialize};
@@ -10,9 +11,21 @@ use std::collections::HashSet;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
+const LEGACY_VERSION: u32 = 1;
 pub const MAX_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_BASKET: usize = 10_000;
+pub const MAX_FAVORITES: usize = 10_000;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FavoriteScope {
+    /// Los espacios antiguos y los nuevos por defecto comparten el árbol global.
+    #[default]
+    Global,
+    /// El árbol se guarda dentro del documento `.naygospace`.
+    PerSpace,
+}
 
 #[cfg(test)]
 #[path = "task_space_tests.rs"]
@@ -24,10 +37,13 @@ pub struct TaskSpace {
     pub version: u32,
     pub name: String,
     pub workspace: WorkspacePersist,
+    #[serde(with = "crate::path_wire::vec")]
     pub basket: Vec<PathBuf>,
     #[serde(default)]
+    #[serde(with = "crate::path_wire::vec")]
     pub saved_searches: Vec<PathBuf>,
     #[serde(default)]
+    #[serde(with = "crate::path_wire::vec")]
     pub saved_recipes: Vec<PathBuf>,
     #[serde(default)]
     pub visual_filters: Vec<(PaneId, String)>,
@@ -35,8 +51,13 @@ pub struct TaskSpace {
     pub typeahead: String,
     #[serde(default)]
     pub filter_hide_nonmatches: bool,
+    #[serde(default)]
+    pub favorite_scope: FavoriteScope,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub favorites: Option<Favorites>,
     /// Si existe, las rutas del payload son relativas a esta raíz explícita.
     /// Puede sustituirse al abrir en otra máquina; nunca se adivina buscando en disco.
+    #[serde(with = "crate::path_wire::option")]
     pub base_root: Option<PathBuf>,
 }
 
@@ -91,6 +112,12 @@ impl TaskSpace {
     /// Comprobación léxica: no abre ni canonicaliza las referencias del snapshot.
     pub fn references_under(&self, root: &Path) -> bool {
         self.paths().any(|path| relative_to(path, root).is_some())
+            || self.favorites.as_ref().is_some_and(|favorites| {
+                favorites
+                    .list_flat()
+                    .iter()
+                    .any(|favorite| relative_to(&favorite.path, root).is_some())
+            })
     }
     /// Normaliza el orden de mapas serializados, no el orden del layout ni de la bandeja.
     pub fn signature(&self) -> Result<String, SpaceError> {
@@ -102,7 +129,9 @@ impl TaskSpace {
         Ok(revision(&normalized.to_bytes()?))
     }
     pub fn validate(&self) -> Result<(), SpaceError> {
-        if self.version != VERSION || self.workspace.version != CONFIG_VERSION {
+        if !matches!(self.version, LEGACY_VERSION | VERSION)
+            || self.workspace.version != CONFIG_VERSION
+        {
             return Err(SpaceError::Version);
         }
         if !valid_name(&self.name) {
@@ -113,9 +142,16 @@ impl TaskSpace {
             || self.visual_filters.len() > 64
             || self.saved_searches.len() > 64
             || self.saved_recipes.len() > 64
+            || self
+                .favorites
+                .as_ref()
+                .is_some_and(|favorites| favorites.list_flat().len() > MAX_FAVORITES)
             || self.typeahead.len() > 4096
         {
             return Err(SpaceError::Limit);
+        }
+        if matches!(self.favorite_scope, FavoriteScope::PerSpace) != self.favorites.is_some() {
+            return Err(SpaceError::Invalid);
         }
         let layout = self.workspace.layout.pane_ids();
         let ids: HashSet<_> = self.workspace.purposes.iter().map(|(id, _)| *id).collect();
@@ -179,6 +215,24 @@ impl TaskSpace {
                 return Err(SpaceError::Invalid);
             }
         }
+        if let Some(favorites) = &self.favorites {
+            for favorite in favorites.list_flat() {
+                let path = favorite.path;
+                if path.as_os_str().len() > 32_768 {
+                    return Err(SpaceError::Limit);
+                }
+                if self.base_root.is_some() {
+                    if path
+                        .components()
+                        .any(|c| !matches!(c, Component::Normal(_)))
+                    {
+                        return Err(SpaceError::Invalid);
+                    }
+                } else if !path.is_absolute() {
+                    return Err(SpaceError::Invalid);
+                }
+            }
+        }
         if self
             .base_root
             .as_ref()
@@ -217,6 +271,9 @@ impl TaskSpace {
         }
         for path in &mut self.saved_recipes {
             *path = map(path)?;
+        }
+        if let Some(favorites) = &mut self.favorites {
+            favorites.try_map_paths(&mut map)?;
         }
         Ok(())
     }
@@ -265,9 +322,7 @@ fn relative_to(path: &Path, root: &Path) -> Option<PathBuf> {
     let mut parts = path.components();
     for expected in root.components() {
         let actual = parts.next()?;
-        if actual.as_os_str().to_string_lossy().to_lowercase()
-            != expected.as_os_str().to_string_lossy().to_lowercase()
-        {
+        if !crate::path_identity::component_eq(actual.as_os_str(), expected.as_os_str()) {
             return None;
         }
     }
@@ -289,8 +344,11 @@ pub fn read(path: &Path, token: &CancellationToken) -> Result<(TaskSpace, String
     if bytes.len() > MAX_BYTES {
         return Err(SpaceError::Limit);
     }
-    let space: TaskSpace = serde_json::from_slice(&bytes).map_err(|_| SpaceError::Invalid)?;
+    let mut space: TaskSpace = serde_json::from_slice(&bytes).map_err(|_| SpaceError::Invalid)?;
     space.validate()?;
+    // v1 never had a favorites scope. Normalize it in memory to v2/global while keeping the
+    // original byte revision for optimistic concurrency on the first explicit update.
+    space.version = VERSION;
     Ok((space, revision(&bytes)))
 }
 
@@ -306,6 +364,8 @@ pub fn from_workspace(name: String, workspace: WorkspacePersist) -> Result<TaskS
         visual_filters: Vec::new(),
         typeahead: String::new(),
         filter_hide_nonmatches: false,
+        favorite_scope: FavoriteScope::Global,
+        favorites: None,
         base_root: None,
     };
     space.validate()?;

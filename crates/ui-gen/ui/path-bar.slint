@@ -1,0 +1,40 @@
+// Naygo — path-bar minima (Fase 1): ruta actual + boton subir.
+// Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
+// SPDX-License-Identifier: MIT
+import { Theme } from "theme.slint";
+import { Tr } from "i18n.slint";
+export component PathBar inherits Rectangle {
+    in property <string> path;
+    callback go-up();
+    height: 30px;
+    background: Theme.row-bg;
+    border-radius: 4px;
+    HorizontalLayout {
+        padding: 4px;
+        spacing: 6px;
+        Rectangle {
+            width: 30px;
+            accessible-role: button;
+            accessible-label: Tr.toolbar-up-tip;
+            accessible-action-default => { root.go-up(); }
+            background: up-touch.has-hover ? Theme.selection-bg : transparent;
+            border-radius: 4px;
+            Text {
+                text: "↑";
+                color: white;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+            up-touch := TouchArea {
+                clicked => {
+                    root.go-up();
+                }
+            }
+        }
+        Text {
+            text: root.path;
+            color: Theme.text;
+            vertical-alignment: center;
+        }
+    }
+}

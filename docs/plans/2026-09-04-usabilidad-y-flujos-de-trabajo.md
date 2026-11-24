@@ -9,7 +9,14 @@ Estado: séptima entrega implementada, validada automáticamente y empaquetada (
 No representa la aceptación completa del plan: faltan pruebas visuales instaladas, escenarios
 reales de red/permisos y revisión editorial de traducciones.
 
-## Distribución actual — séptima entrega
+## Contexto temporal
+
+Este plan conserva la evidencia de sus entregas de 0.5.0. El código fue integrado
+posteriormente en la base 0.5.1 del 7 de septiembre; «sin commit» y «working tree»
+describen aquel momento, no el estado presente. Consultar [estado vigente](../ESTADO-ACTUAL.md).
+Los pendientes de aceptación siguen abiertos; el nuevo plan de rutas/preview no los reemplaza.
+
+## Distribución histórica — séptima entrega
 
 2026-09-05, hora America/Santiago. `scripts/build-release.ps1` ejecutado solo, salida 0;
 log `target/agent-out/recipes-release.log`. Release: 25 min 26 s; Inno: 85,390 s.

@@ -36,6 +36,7 @@ where
     theme.set_active_bar(col(t.active_bar));
     theme.set_error(col(t.error));
     theme.set_highlight(col(t.highlight));
+    theme.set_icon_accent(col(t.icon_accent));
     theme.set_border(col(t.border));
     theme.set_flat_inactive_panels(t.flat_inactive_panels);
     theme.set_use_inactive_row_color(t.use_inactive_row_color);

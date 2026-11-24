@@ -56,12 +56,23 @@ impl WorkspaceCtrl {
                 .collect(),
             purposes: self.ws.panes().iter().map(|p| (p.id, p.purpose)).collect(),
             tree_links: self.ws.tree_links(),
+            operations_placement: self.operations_placement.clone(),
         }
     }
 
-    /// Guarda la sesión actual en disco (la llama la UI al cerrar la ventana).
+    /// Guarda la sesión actual en disco para pruebas de round-trip.
+    #[cfg(test)]
     pub fn save_session(&self) {
         naygo_core::config::save_workspace(&self.config.config_dir, &self.session_persist());
+    }
+
+    /// Encola el snapshot de sesión para cierres y callbacks de UI; el filesystem corre en el
+    /// worker JSON compartido. La escritura directa queda para herramientas y pruebas.
+    pub fn save_session_async(&self) -> Result<naygo_core::config::SaveTicket, String> {
+        if self.startup_load_failed {
+            return Err("se omitió guardar la sesión porque falló la carga inicial".into());
+        }
+        naygo_core::config::save_workspace_async(&self.config.config_dir, &self.session_persist())
     }
 
     /// Intenta restaurar la sesión guardada (al arrancar). Si hay un workspace.json válido,
@@ -78,6 +89,14 @@ impl WorkspaceCtrl {
         let Some(persist) = persist else {
             return false;
         };
+        self.apply_loaded_session(persist)
+    }
+
+    /// Aplica un snapshot ya leído por el worker inicial; no hace I/O de configuración.
+    pub(crate) fn apply_loaded_session(
+        &mut self,
+        persist: naygo_core::config::WorkspacePersist,
+    ) -> bool {
         let Some(restored) = Workspace::from_persist(&persist) else {
             return false;
         };
@@ -86,12 +105,20 @@ impl WorkspaceCtrl {
             l.cancel();
         }
         self.listings.clear();
+        self.pending_file_listings.clear();
+        self.automatic_listings.clear();
         self.trees.clear();
+        self.pending_tree_listings.clear();
         // Soltar el deep job si lo había: el workspace va a ser reemplazado completo.
         if let Some(d) = self.deep_job.take() {
             d.token.cancel();
         }
+        self.pending_created_activation.clear();
+        self.creation_selection.clear();
         self.ws = restored;
+        self.operations_placement = persist.operations_placement;
+        self.automatic_operations_pane = None;
+        self.automatic_operations_prior.clear();
         // Relanzar el contenido de cada panel restaurado.
         let panes: Vec<(PaneId, PanePurpose, Option<PathBuf>)> = self
             .ws
@@ -121,7 +148,7 @@ impl WorkspaceCtrl {
                     }
                 }
                 PanePurpose::Tree => {
-                    let mut t = build_tree();
+                    let mut t = self.build_tree();
                     let target = self.ws.linked_files(id).or(self.last_active_files);
                     if let Some(cur) = target
                         .and_then(|files| self.ws.pane(files))
@@ -155,6 +182,7 @@ impl WorkspaceCtrl {
         for (id, dir) in files {
             self.sync_trees_for_files(id, dir);
         }
+        self.refresh_missing_cache();
         true
     }
 
@@ -174,13 +202,21 @@ impl WorkspaceCtrl {
             l.cancel();
         }
         self.listings.clear();
+        self.pending_file_listings.clear();
+        self.automatic_listings.clear();
         self.trees.clear();
         self.tree_listings.clear();
+        self.pending_tree_listings.clear();
         self.reveal_targets.clear();
         if let Some(d) = self.deep_job.take() {
             d.token.cancel();
         }
+        self.pending_created_activation.clear();
+        self.creation_selection.clear();
         self.ws = naygo_core::workspace::Workspace::from_template(&tpl, &home);
+        self.operations_placement = None;
+        self.automatic_operations_pane = None;
+        self.automatic_operations_prior.clear();
         self.relaunch_all_panes();
     }
 
@@ -191,26 +227,23 @@ impl WorkspaceCtrl {
         use std::fmt::Write;
         let mut s = String::new();
         for p in self.ws.panes() {
-            let dir = p
-                .files
-                .as_ref()
-                .map(|f| f.current_dir.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            let _ = write!(s, "{}:{:?}:{}|", p.id.0, p.purpose, dir);
+            let _ = write!(s, "{}:{:?}:", p.id.0, p.purpose);
+            if let Some(files) = &p.files {
+                s.push_str(&native_path_fingerprint(&files.current_dir));
+            } else {
+                s.push('-');
+            }
+            s.push('|');
         }
         for (tree, files) in self.ws.tree_links() {
             let _ = write!(s, "link:{}>{};", tree.0, files.0);
         }
         let _ = write!(
             s,
-            "active={:?};layout={:?}",
+            "active={:?};layout={:?};operations_placement={:?}",
             self.ws.active_id().map(|a| a.0),
-            self.ws
-                .layout
-                .pane_ids()
-                .iter()
-                .map(|i| i.0)
-                .collect::<Vec<_>>()
+            self.ws.layout,
+            self.operations_placement
         );
         s
     }
@@ -222,8 +255,17 @@ impl WorkspaceCtrl {
     pub fn maybe_persist_session(&mut self) {
         let fp = self.session_fingerprint();
         if self.last_saved_fingerprint.as_deref() != Some(fp.as_str()) {
-            self.save_session();
-            self.last_saved_fingerprint = Some(fp);
+            if self.startup_async_enabled {
+                self.startup_session_dirty = true;
+                self.last_saved_fingerprint = Some(fp);
+                return;
+            }
+            match self.save_session_async() {
+                Ok(_) => self.last_saved_fingerprint = Some(fp),
+                Err(error) => crate::logging::log_line(&format!(
+                    "no se pudo encolar la sesión del workspace: {error}"
+                )),
+            }
         }
     }
 
@@ -255,7 +297,7 @@ impl WorkspaceCtrl {
     }
 
     /// Aplica un lote de eventos del watcher al panel `pane`: muta sus entries SIN re-listar,
-    /// re-ordena, resalta+selecciona los archivos recién llegados (Created), y devuelve las rutas
+    /// resalta+selecciona los archivos recién llegados (Created), y devuelve las rutas
     /// NUEVAS (para que el watcher las marque "fresh"). No-op si el panel no es Files.
     ///
     /// Dos comportamientos, ambos sobre los Created (no se distingue origen app vs externo: tanto
@@ -264,9 +306,8 @@ impl WorkspaceCtrl {
     /// - Resaltado + selección: los nuevos quedan SELECCIONADOS por su posición de vista, para que
     ///   el usuario vea cuáles llegaron (sobre todo tras copiar). El foco va al último (scroll).
     /// - "Archivos nuevos al final" (setting `new_items_at_end`): se empuja `group_new_at_end` al
-    ///   panel, de modo que `view_indices` agrupe las recién aparecidas al final de la vista en vez
-    ///   de en su posición ordenada. Al refrescar (F5) o navegar, el resaltado se limpia y todo
-    ///   vuelve a su orden normal.
+    ///   panel, de modo que `view_indices` agrupe las recién aparecidas al final hasta ordenar,
+    ///   refrescar (F5) o navegar.
     ///
     /// NOTA: esta versión resuelve la metadata leyendo el disco; la UI usa
     /// `apply_watch_events_resolved`, que la recibe ya leída por el hilo del watcher. Por eso
@@ -277,16 +318,12 @@ impl WorkspaceCtrl {
         pane: PaneId,
         events: &[naygo_core::listing::DirEvent],
     ) -> Vec<std::path::PathBuf> {
-        self.apply_watch_events_inner(pane, events, &|p| {
-            std::fs::metadata(p)
-                .ok()
-                .map(|m| naygo_core::listing::entry_from_path(p, Some(&m)))
-        })
+        self.apply_watch_events_inner(pane, events, &naygo_core::listing::entry_at)
     }
 
     /// Versión con metadata PRE-RESUELTA en el hilo del watcher (`resolved`, ver
-    /// `watch::WatchBatch`): el `read_entry` consulta primero ese mapa y solo cae al disco
-    /// (defensivo) ante una ruta que no esté. Es la que usa el tick de la UI.
+    /// `watch::WatchBatch`): `read_entry` sólo consulta ese mapa, nunca el disco.
+    /// Un lote vacío solicita reconciliación async. Es la que usa el tick de la UI.
     pub fn apply_watch_events_resolved(
         &mut self,
         pane: PaneId,
@@ -296,13 +333,22 @@ impl WorkspaceCtrl {
             Option<naygo_core::fs_model::Entry>,
         >,
     ) -> Vec<std::path::PathBuf> {
+        if events.is_empty() {
+            if let Some(dir) = self
+                .ws
+                .pane(pane)
+                .and_then(|p| p.files.as_ref())
+                .map(|f| f.current_dir.clone())
+            {
+                self.reconcile_listing(pane, dir.clone());
+                self.refresh_tree_directory(&dir);
+            }
+            return Vec::new();
+        }
         self.apply_watch_events_inner(pane, events, &|p| match resolved.get(p) {
             Some(e) => e.clone(),
-            // Defensa: la ruta no vino pre-resuelta (no debería pasar con los lotes del
-            // watcher). Leer del disco como antes.
-            None => std::fs::metadata(p)
-                .ok()
-                .map(|m| naygo_core::listing::entry_from_path(p, Some(&m))),
+            // Defensa ante un lote incompleto: nunca resolverlo en el hilo de UI.
+            None => None, // Nunca convertir un lote incompleto en I/O dentro de la UI.
         })
     }
 
@@ -326,6 +372,18 @@ impl WorkspaceCtrl {
             .pane(pane)
             .and_then(|p| p.files.as_ref())
             .map(|f| f.current_dir.clone());
+        // Un lote nativo puede partir un rename en Remove/Create. Esperar el recibo conserva
+        // identidad y el snapshot que sigue a la operación recupera los demás cambios del disco.
+        if current_dir
+            .as_deref()
+            .is_some_and(|dir| self.ops.rename_running_in(dir))
+        {
+            return Vec::new();
+        }
+        let protected = self
+            .creation_selection
+            .get(&pane)
+            .filter(|state| state.overridden && current_dir.as_ref() == Some(&state.dir));
         let Some(f) = self.ws.pane_mut(pane).and_then(|p| p.files.as_mut()) else {
             return Vec::new();
         };
@@ -346,37 +404,120 @@ impl WorkspaceCtrl {
                 _ => true,
             }
         };
-        let filtered: Vec<naygo_core::listing::DirEvent> = events
+        use naygo_core::listing::DirEvent;
+        let filtered: Vec<DirEvent> = events
             .iter()
-            .filter(|ev| {
-                use naygo_core::listing::DirEvent::*;
+            .filter_map(|ev| {
+                use DirEvent::*;
                 match ev {
-                    Created(p) | Removed(p) | Modified(p) => belongs(p),
-                    Renamed { from, to } => belongs(from) || belongs(to),
+                    Created(p) | Removed(p) | Modified(p) if belongs(p) => Some(ev.clone()),
+                    Renamed { from, to } => match (belongs(from), belongs(to)) {
+                        (true, true) => Some(ev.clone()),
+                        (true, false) => Some(Removed(from.clone())),
+                        (false, true) => Some(Created(to.clone())),
+                        (false, false) => None,
+                    },
+                    _ => None,
                 }
             })
-            .cloned()
             .collect();
-        // `read_entry` produce el `Entry` de una ruta: con la metadata pre-resuelta por el
-        // hilo del watcher (producción) o leyendo el disco (versión síncrona / defensa).
-        let nuevas = naygo_core::listing::apply_dir_events(&mut f.entries, &filtered, read_entry);
-        let spec = f.sort;
-        naygo_core::sort::sort_entries(&mut f.entries, &spec);
-        f.entries_changed();
+        if filtered.is_empty() {
+            return Vec::new();
+        }
+        let in_flight =
+            self.listings.contains_key(&pane) || self.pending_file_listings.contains_key(&pane);
+        if in_flight {
+            self.dirty_listings.insert(pane);
+        }
+        // La selección anterior usa rutas: insertar/borrar/ordenar no debe cambiar su identidad.
+        f.preserve_context_for_listing();
+        let mut changes = naygo_core::listing::DirEventApply::default();
+        f.group_new_at_end = group_new_at_end;
+        let len_before = f.entries.len();
+        for event in &filtered {
+            match event {
+                DirEvent::Renamed { from, to } if f.rename_entry(from, to) => {
+                    // El worker del watcher ya resolvió los atributos del nombre nuevo.
+                    if let Some(updated) = read_entry(to) {
+                        if let Some(entry) = f.entries.iter_mut().find(|entry| &entry.path == to) {
+                            *entry = updated;
+                        }
+                    }
+                    continue;
+                }
+                DirEvent::Removed(path) => f.forget_display_path(path),
+                _ => {}
+            }
+            let delta = naygo_core::listing::apply_dir_events_with_row_deltas(
+                &mut f.entries,
+                std::slice::from_ref(event),
+                read_entry,
+            );
+            f.record_arrivals(&delta.new_paths);
+            changes.new_paths.extend(delta.new_paths);
+            changes.row_only_modified.extend(delta.row_only_modified);
+        }
+        let can_refresh_rows_only = filtered.len() == changes.row_only_modified.len()
+            && filtered
+                .iter()
+                .all(|event| matches!(event, DirEvent::Modified(_)))
+            && f.table.filters.is_empty()
+            && matches!(f.sort.key, SortKey::Name | SortKey::Extension);
+        // Un lote solo de altas agrega al final de `entries` (`apply_dir_events_*` hace `push`):
+        // avisarlo como append deja que la vista intercale las nuevas sin reordenar todo el
+        // listado y que la UI reconcilie solo esas filas.
+        let only_appended = filtered
+            .iter()
+            .all(|event| matches!(event, DirEvent::Created(_)))
+            && f.entries.len() > len_before;
+        if can_refresh_rows_only {
+            let mut paths = changes.row_only_modified;
+            paths.sort();
+            paths.dedup();
+            f.entries_rows_changed(paths);
+        } else if only_appended {
+            f.entries_appended(len_before);
+        } else {
+            f.entries_changed();
+        }
+        // Resaltar creaciones propias sin desplazar la selección elegida explícitamente.
+        // Marcar antes de restaurar preserva la identidad también con "nuevos al final".
+        if let Some(state) = protected {
+            for path in &changes.new_paths {
+                if state.protects(path) {
+                    f.highlighted.insert(path.clone());
+                }
+            }
+        }
+        if !in_flight || self.automatic_listings.contains_key(&pane) {
+            f.apply_pending_nav_context();
+        }
         // Empujar el flag ANTES de calcular posiciones: si está activo, la vista pone los nuevos al
         // final y la selección debe apuntar a esas posiciones finales.
-        f.group_new_at_end = group_new_at_end;
         // Resaltar + seleccionar los recién llegados (MEJORA 1). Los que estén ocultos por
         // filtro/visibilidad se resaltan pero no se seleccionan (no están en la vista).
-        f.select_arrivals(&nuevas);
-        nuevas
+        if let Some(state) = protected {
+            let other_arrivals: Vec<_> = changes
+                .new_paths
+                .iter()
+                .filter(|path| !state.protects(path))
+                .cloned()
+                .collect();
+            f.select_arrivals(&other_arrivals);
+        } else {
+            f.select_arrivals(&changes.new_paths);
+        }
+        if filtered.iter().any(|e| !matches!(e, DirEvent::Modified(_))) {
+            if let Some(dir) = current_dir {
+                self.refresh_tree_directory(&dir);
+            }
+        }
+        changes.new_paths
     }
 
     /// Sincroniza el conjunto `highlighted` de cada panel Files con el set autoritativo de rutas
     /// "frescas" del watcher (las que siguen vigentes según `highlight_secs`). Lo llama el tick
-    /// tras `prune`: cuando a una ruta se le vence el resaltado, se quita de `highlighted` y, si
-    /// estaba "agrupada al final", vuelve a su posición ordenada en la próxima vista. Mantiene una
-    /// única fuente de verdad (el watcher) entre el resaltado ámbar y el agrupar-al-final.
+    /// tras `prune`. Vencer el resaltado ámbar no mueve filas.
     pub fn sync_highlighted_from_watchers(&mut self, highlight_secs: u64, now: std::time::Instant) {
         let WorkspaceCtrl { ws, watchers, .. } = self;
         for pane in ws.panes_mut() {
@@ -398,6 +539,40 @@ impl WorkspaceCtrl {
     }
 }
 
+/// Representación reversible usada solo para detectar cambios de sesión. No se muestra al usuario.
+fn native_path_fingerprint(path: &std::path::Path) -> String {
+    use std::fmt::Write;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let bytes = path.as_os_str().as_bytes();
+        let mut result = String::with_capacity(5 + bytes.len() * 2);
+        result.push_str("unix:");
+        for byte in bytes {
+            let _ = write!(result, "{byte:02x}");
+        }
+        result
+    }
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        let units: Vec<u16> = path.as_os_str().encode_wide().collect();
+        let mut result = String::with_capacity(8 + units.len() * 4);
+        result.push_str("windows:");
+        for unit in units {
+            let _ = write!(result, "{unit:04x}");
+        }
+        result
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    {
+        path.to_string_lossy().into_owned()
+    }
+}
+
 /// ¿`a` y `b` son la MISMA ruta en un FS case-insensitive (Windows)? Compara componente a
 /// componente plegando a minúscula ASCII, así no da falsos negativos por capitalización ni por
 /// el separador. (Equivalente a `core::ops::plan::paths_eq_ci`, que es privado de ese módulo;
@@ -411,4 +586,24 @@ fn paths_eq_ci(a: &std::path::Path, b: &std::path::Path) -> bool {
                 .to_string_lossy()
                 .eq_ignore_ascii_case(&y.as_os_str().to_string_lossy())
         })
+}
+
+#[cfg(test)]
+mod session_path_fingerprint_tests {
+    #[cfg(unix)]
+    #[test]
+    fn invalid_posix_bytes_do_not_collapse_to_the_same_session_fingerprint() {
+        use super::native_path_fingerprint;
+        use std::os::unix::ffi::OsStrExt;
+        use std::path::Path;
+
+        let left = Path::new(std::ffi::OsStr::from_bytes(b"/tmp/folder-\xfe"));
+        let right = Path::new(std::ffi::OsStr::from_bytes(b"/tmp/folder-\xff"));
+
+        assert_ne!(
+            native_path_fingerprint(left),
+            native_path_fingerprint(right)
+        );
+        assert!(native_path_fingerprint(left).starts_with("unix:"));
+    }
 }

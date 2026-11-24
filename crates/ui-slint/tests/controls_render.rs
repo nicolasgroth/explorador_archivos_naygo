@@ -11,10 +11,10 @@ use slint::{
 use std::rc::Rc;
 
 slint::slint! {
-    import { OpButton } from "../ui/ops-panel.slint";
-    import { DriveBtn } from "../ui/drive-button.slint";
-    import { FontChoice } from "../ui/font-choice.slint";
-    export { Tr } from "../ui/i18n.slint";
+    import { OpButton } from "../../ui-gen/ui/ops-panel.slint";
+    import { DriveBtn } from "../../ui-gen/ui/drive-button.slint";
+    import { FontChoice } from "../../ui-gen/ui/font-choice.slint";
+    export { Tr } from "../../ui-gen/ui/i18n.slint";
     export component ControlsProbe inherits Window {
         width: 700px; height: 220px; background: #0e1622;
         in property <image> drive-icon;

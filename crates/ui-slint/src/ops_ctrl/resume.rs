@@ -10,6 +10,9 @@ use super::*;
 impl OpsCtrl {
     /// Al arrancar la app: si hay journals pendientes, abre el modal de retomar.
     pub fn scan_resume(&mut self) {
+        if !self.journal_resume_enabled {
+            return;
+        }
         let pend = journal::scan(&self.config_dir);
         if !pend.is_empty() {
             self.pending_dialog = Some(OpDialog::Resume { items: pend });
@@ -19,6 +22,9 @@ impl OpsCtrl {
     /// Retoma la operación journaleada `id`: replanifica los pasos pendientes y la lanza
     /// con un journal nuevo que reusa el id. Devuelve true si arrancó algo.
     pub fn resume(&mut self, id: &str) -> bool {
+        if !self.journal_resume_enabled {
+            return false;
+        }
         // Tomar el journal del modal (si está ahí) o del disco.
         let journal = match &self.pending_dialog {
             Some(OpDialog::Resume { items }) => items.iter().find(|j| j.id == id).cloned(),
@@ -54,13 +60,15 @@ impl OpsCtrl {
             ),
         );
         let size_map = size_map_of(&resume.plan);
-        let (rx, _h) = engine::spawn(
+        let directory_sources = directory_sources_of(&resume.plan);
+        let (rx, _h) = engine::spawn_with_no_replace_rename(
             resume.plan,
             journal.kind.clone(),
             journal.conflict,
             token.clone(),
             conflict_rx,
             Some(writer),
+            std::sync::Arc::new(naygo_platform::move_rename::PlatformNoReplaceRename),
         );
         let op_id = self.alloc_op_id();
         self.active_ops.push(ActiveOp {
@@ -91,6 +99,9 @@ impl OpsCtrl {
             trash_receipts_rx: None,
             finished_epoch_secs: None,
             size_map,
+            directory_sources,
+            type_count_cursor: 0,
+            type_counts: (0, 0, 0),
             staging_guards: Vec::new(),
         });
         self.drop_resume_item(id);

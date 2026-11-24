@@ -23,7 +23,14 @@ impl WorkspaceCtrl {
     pub fn columns_of(&self, id: PaneId) -> Vec<crate::bridge::ColumnInfo> {
         let label_of = |kind| self.column_label(kind);
         match self.ws.pane(id).and_then(|p| p.files.as_ref()) {
-            Some(f) => crate::bridge::columns_info(f, &label_of),
+            Some(f) => {
+                let sort = self
+                    .deep_job
+                    .as_ref()
+                    .filter(|job| job.pane == id)
+                    .map_or(Some(f.sort), |job| job.deep_sort);
+                crate::bridge::columns_info(f, sort, &label_of)
+            }
             None => Vec::new(),
         }
     }
@@ -182,12 +189,7 @@ impl WorkspaceCtrl {
             return;
         };
         let key = naygo_core::columns::sort_key_of(st.kind);
-        if let Some(f) = self.ws.pane_mut(st.pane).and_then(|p| p.files.as_mut()) {
-            f.sort.key = key;
-            f.sort.ascending = ascending;
-            let spec = f.sort;
-            naygo_core::sort::sort_entries(&mut f.entries, &spec);
-        }
+        self.set_column_sort(st.pane, key, Some(ascending));
         self.column_menu = None;
     }
 
@@ -273,6 +275,20 @@ impl WorkspaceCtrl {
         let Some(st) = self.column_menu.as_ref() else {
             return Vec::new();
         };
+        if let Some(job) = self.deep_job.as_ref().filter(|job| job.pane == st.pane) {
+            let visibility = self.visibility_flags();
+            let mut counts = std::collections::BTreeMap::new();
+            for (entry, _) in job
+                .items
+                .iter()
+                .filter(|(entry, _)| visibility.allows(entry))
+            {
+                *counts
+                    .entry(naygo_core::filter::entry_extension(entry))
+                    .or_insert(0) += 1;
+            }
+            return counts.into_iter().collect();
+        }
         match self.ws.pane(st.pane).and_then(|p| p.files.as_ref()) {
             Some(f) => naygo_core::filter::extension_counts(&f.entries)
                 .into_iter()
@@ -342,6 +358,14 @@ impl WorkspaceCtrl {
     /// coincidencias"). Distingue "carpeta vacía" (sin entries) de "filtro la vació".
     pub fn no_matches(&self, id: PaneId) -> bool {
         match self.ws.pane(id).and_then(|p| p.files.as_ref()) {
+            Some(f) if self.is_deep_active(id) => {
+                !f.table.filters.is_empty()
+                    && self
+                        .deep_job
+                        .as_ref()
+                        .is_some_and(|job| !job.items.is_empty())
+                    && self.deep_visible_count(id) == 0
+            }
             Some(f) => !f.table.filters.is_empty() && !f.entries.is_empty() && f.view_len() == 0,
             None => false,
         }
@@ -353,16 +377,7 @@ impl WorkspaceCtrl {
     /// lista que estaba activa. Alterna ascendente/descendente si ya usaba esa clave.
     pub fn sort_by_kind(&mut self, id: PaneId, kind_int: i32) {
         let key = naygo_core::columns::sort_key_of(crate::bridge::column_kind_from_int(kind_int));
-        if let Some(f) = self.ws.pane_mut(id).and_then(|p| p.files.as_mut()) {
-            if f.sort.key == key {
-                f.sort.ascending = !f.sort.ascending;
-            } else {
-                f.sort.key = key;
-                f.sort.ascending = true;
-            }
-            let spec = f.sort;
-            naygo_core::sort::sort_entries(&mut f.entries, &spec);
-        }
+        self.set_column_sort(id, key, None);
     }
 
     /// Variante legado del callback de orden: igual que el header dinámico, recibe el panel de
@@ -375,15 +390,29 @@ impl WorkspaceCtrl {
             "modified" => SortKey::Modified,
             _ => return,
         };
-        if let Some(f) = self.ws.pane_mut(id).and_then(|p| p.files.as_mut()) {
-            if f.sort.key == key {
-                f.sort.ascending = !f.sort.ascending;
-            } else {
-                f.sort.key = key;
-                f.sort.ascending = true;
-            }
-            let spec = f.sort;
-            naygo_core::sort::sort_entries(&mut f.entries, &spec);
+        self.set_column_sort(id, key, None);
+    }
+
+    fn set_column_sort(&mut self, id: PaneId, key: SortKey, ascending: Option<bool>) {
+        let Some(files) = self.ws.pane_mut(id).and_then(|p| p.files.as_mut()) else {
+            return;
+        };
+        if let Some(job) = self.deep_job.as_mut().filter(|job| job.pane == id) {
+            let spec = naygo_core::fs_model::SortSpec {
+                key,
+                ascending: ascending.unwrap_or_else(|| {
+                    job.deep_sort
+                        .is_none_or(|sort| sort.key != key || !sort.ascending)
+                }),
+                dirs_first: files.sort.dirs_first,
+            };
+            super::deep_view::sort_siblings(&mut job.items, &job.root, spec);
+            job.deep_sort = Some(spec);
+        } else {
+            files.reorder_by(
+                key,
+                ascending.unwrap_or(files.sort.key != key || !files.sort.ascending),
+            );
         }
     }
 }

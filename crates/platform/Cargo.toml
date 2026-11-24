@@ -32,12 +32,17 @@ windows = { workspace = true, features = [
     # AttachThreadInput / GetCurrentThreadId, para activar de verdad la ventana tras el drag
     # (saltar la regla anti-robo de foco del SO en `bring_to_front`).
     "Win32_System_Threading",
+    "Win32_System_JobObjects",
+    "Win32_System_Diagnostics_Debug",
 ] }
 # El macro `#[implement]` genera rutas absolutas `::windows_core::...`; necesitamos el
 # crate disponible por ese nombre como dependencia directa.
 windows-core = "0.62"
 # Hotkey global del sistema (RegisterHotKey). MIT, mismos autores que tray-icon.
 global-hotkey = "0.6"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
 
 [dependencies]
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
