@@ -1276,5 +1276,6 @@
   "ops.failed.link_not_copied": "Verknüpfung nicht kopiert (Verknüpfungen werden am Ziel nicht neu erstellt): {path}",
   "ops.failed.link_not_moved": "Die Verknüpfung konnte nicht verschoben werden; sie ist an der Quelle geblieben: {path} ({reason})",
   "ops.failed.publish": "Die Kopie konnte nicht am Ziel gespeichert werden: {reason}",
-  "ops.failed.identity_unknown": "Es konnte nicht geprüft werden, ob Quelle und Ziel dieselbe Datei sind; es wurde nichts geändert: {reason}"
+  "ops.failed.identity_unknown": "Es konnte nicht geprüft werden, ob Quelle und Ziel dieselbe Datei sind; es wurde nichts geändert: {reason}",
+  "ops.failed.replace_incomplete": "Der Ordner wurde nicht ersetzt: Er enthält Elemente, die nicht kopiert werden können (Verknüpfungen oder Ordner ohne Zugriff), zum Beispiel {path}. Weder Quelle noch Ziel wurden geändert."
 }

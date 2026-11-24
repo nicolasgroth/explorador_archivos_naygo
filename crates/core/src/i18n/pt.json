@@ -1276,5 +1276,6 @@
   "ops.failed.link_not_copied": "Link não copiado (os links não são recriados no destino): {path}",
   "ops.failed.link_not_moved": "Não foi possível mover o link; ele ficou na origem: {path} ({reason})",
   "ops.failed.publish": "Não foi possível salvar a cópia no destino: {reason}",
-  "ops.failed.identity_unknown": "Não foi possível verificar se a origem e o destino são o mesmo arquivo; nada foi alterado: {reason}"
+  "ops.failed.identity_unknown": "Não foi possível verificar se a origem e o destino são o mesmo arquivo; nada foi alterado: {reason}",
+  "ops.failed.replace_incomplete": "A pasta não foi substituída: ela contém itens que não podem ser copiados (links ou pastas sem acesso), por exemplo {path}. A origem e o destino não foram alterados."
 }

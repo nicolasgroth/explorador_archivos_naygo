@@ -115,6 +115,11 @@ pub const PUBLISH_FAILED_FAILURE: &str = "naygo:publish-failed";
 /// alias de ruta): el paso falla sin sobrescribir ni mover. Campo: error del sistema.
 pub const IDENTITY_UNKNOWN_FAILURE: &str = "naygo:identity-unknown";
 
+/// Replace de carpeta rechazado antes de empezar: el árbol de origen tiene algo que no se puede
+/// copiar (un enlace o una carpeta ilegible), así que nunca se podría publicar completo. Campo:
+/// ruta del primer elemento que lo impide.
+pub const REPLACE_INCOMPLETE_FAILURE: &str = "naygo:replace-incomplete";
+
 /// Prefijos de los textos previos (journals y resúmenes 0.5.x sin código), que se siguen
 /// reconociendo como fallos de enlace para excluirlos de "Reintentar".
 const LEGACY_LINK_NOT_COPIED: &str = "enlace no copiado: ";
@@ -129,6 +134,7 @@ pub enum OpFailure<'a> {
     LinkNotMoved { path: &'a str, reason: &'a str },
     PublishFailed { reason: &'a str },
     IdentityUnknown { reason: &'a str },
+    ReplaceIncomplete { path: &'a str },
 }
 
 impl OpFailure<'_> {
@@ -159,6 +165,11 @@ pub fn link_not_moved_failure(path: &Path, reason: &str) -> String {
         LINK_NOT_MOVED_FAILURE,
         &[&path.display().to_string(), reason],
     )
+}
+
+/// Fallo estructurado de un Replace rechazado por adelantado por `path`.
+pub fn replace_incomplete_failure(path: &Path) -> String {
+    coded_failure(REPLACE_INCOMPLETE_FAILURE, &[&path.display().to_string()])
 }
 
 /// Fallo estructurado de una comprobación de mismo archivo que no se pudo hacer.
@@ -249,6 +260,7 @@ pub fn parse_failure(detail: &str) -> Option<OpFailure<'_>> {
         }
         PUBLISH_FAILED_FAILURE => Some(OpFailure::PublishFailed { reason: rest }),
         IDENTITY_UNKNOWN_FAILURE => Some(OpFailure::IdentityUnknown { reason: rest }),
+        REPLACE_INCOMPLETE_FAILURE => Some(OpFailure::ReplaceIncomplete { path: rest }),
         _ => None,
     }
 }
@@ -277,6 +289,9 @@ pub fn plain_failure_text(detail: &str) -> std::borrow::Cow<'_, str> {
         }
         Some(OpFailure::IdentityUnknown { reason }) => Cow::Owned(format!(
             "no se pudo comprobar si origen y destino son el mismo archivo: {reason}"
+        )),
+        Some(OpFailure::ReplaceIncomplete { path }) => Cow::Owned(format!(
+            "reemplazo rechazado: la carpeta contiene elementos que no se pueden copiar: {path}"
         )),
         None => Cow::Borrowed(detail),
     }

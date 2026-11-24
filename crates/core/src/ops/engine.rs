@@ -589,6 +589,24 @@ fn prepare_tree_replacements(
             return Err(());
         }
 
+        // Un árbol que no se puede copiar completo nunca se publica: rechazarlo ya, en vez de
+        // copiar todo a staging para descartarlo al final. Los pasos bajo un Replace se copian
+        // (también en Move), así que un enlace que no sea a archivo fallaría con seguridad.
+        if let Some(blocker) = plan.steps.iter().find(|step| {
+            (super::plan::paths_eq_ci(&step.to, target)
+                || super::plan::path_starts_with_ci(&step.to, target))
+                && (step.planned_failure.is_some()
+                    || (!step.is_dir && step.from.as_deref().is_some_and(link_copy_fails)))
+        }) {
+            let blocker_path = blocker.from.as_deref().unwrap_or(&blocker.to);
+            summary.items.push(OpItem {
+                dest: target.clone(),
+                outcome: OpOutcome::Failed(super::replace_incomplete_failure(blocker_path)),
+                src: blocker.from.clone(),
+            });
+            return Err(());
+        }
+
         let Some(parent) = target.parent() else {
             summary.items.push(OpItem {
                 dest: target.clone(),
@@ -747,6 +765,15 @@ fn prepare_tree_replacements(
         });
     }
     Ok(replacements)
+}
+
+/// ¿Copiar `from` fallaría por ser un enlace? Es la misma regla de `exec_copy_step` para un Copy:
+/// un symlink/junction no se recrea, salvo un enlace a ARCHIVO, que se copia por contenido.
+fn link_copy_fails(from: &Path) -> bool {
+    std::fs::symlink_metadata(from).is_ok_and(|meta| {
+        super::plan::is_link_like(&meta)
+            && !std::fs::metadata(from).is_ok_and(|followed| followed.is_file())
+    })
 }
 
 /// Traduce una ruta descendiente a su equivalente bajo staging o bajo el destino publicado.
@@ -4100,6 +4127,142 @@ mod tests {
             assert_eq!(fs::read(root.join("a.txt")).unwrap(), b"a");
             assert_eq!(fs::read(root.join("mid").join("b.txt")).unwrap(), b"bb");
             assert_eq!(fs::read(secret.join("s.txt")).unwrap(), b"dato unico");
+        }
+    }
+
+    /// Copiador que cuenta las copias de archivo: un Replace rechazado por adelantado no copia
+    /// nada a staging.
+    struct CountingCopier(std::sync::atomic::AtomicUsize);
+    impl NoReplaceRename for CountingCopier {
+        fn rename_noreplace(&self, from: &Path, to: &Path) -> std::io::Result<()> {
+            NativeNoReplaceRename.rename_noreplace(from, to)
+        }
+        fn copy_and_publish(
+            &self,
+            from: &Path,
+            to: &Path,
+            overwrite: bool,
+            durable: bool,
+            token: &CancellationToken,
+            on_bytes: &mut dyn FnMut(u64),
+        ) -> std::io::Result<bool> {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            NativeNoReplaceRename.copy_and_publish(from, to, overwrite, durable, token, on_bytes)
+        }
+    }
+
+    fn assert_replace_refused(summary: &OpSummary) {
+        assert!(
+            summary.items.iter().any(|item| matches!(
+                &item.outcome,
+                OpOutcome::Failed(detail) if matches!(
+                    crate::ops::parse_failure(detail),
+                    Some(crate::ops::OpFailure::ReplaceIncomplete { .. })
+                )
+            )),
+            "{summary:?}"
+        );
+        assert!(
+            !summary
+                .items
+                .iter()
+                .any(|item| matches!(item.outcome, OpOutcome::Done)),
+            "{summary:?}"
+        );
+    }
+
+    /// M-8 / I-5: Move + Replace de una carpeta con un enlace anidado. El resultado se conoce en
+    /// la planificación (el enlace no se copia): se rechaza por adelantado, sin copiar nada a
+    /// staging, y quedan intactos el origen (con su enlace y el destino del enlace) y el destino
+    /// anterior.
+    #[test]
+    fn move_replace_con_enlace_anidado_se_rechaza_y_conserva_origen_y_destino() {
+        use crate::ops::{apply_folder_decision, folder_conflicts, FolderDecision};
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("proyecto");
+        fs::create_dir(&src).unwrap();
+        fs::write(src.join("nuevo.txt"), b"nuevo").unwrap();
+        let link_target = dir.path().join("objetivo");
+        fs::create_dir(&link_target).unwrap();
+        fs::write(link_target.join("unico.txt"), b"dato unico").unwrap();
+        if !crate::ops::make_junction(&src.join("enlace"), &link_target) {
+            return;
+        }
+        let dest_parent = dir.path().join("dest");
+        let previous = dest_parent.join("proyecto");
+        fs::create_dir_all(&previous).unwrap();
+        fs::write(previous.join("viejo.txt"), b"viejo").unwrap();
+        let req = super::super::transfer(true, vec![src.clone()], dest_parent.clone());
+        let conflict = folder_conflicts(&req).pop().unwrap();
+        let mut plan = plan(&req).unwrap();
+        apply_folder_decision(&mut plan, &conflict.dest_root, FolderDecision::Replace);
+        let copier = CountingCopier(std::sync::atomic::AtomicUsize::new(0));
+        let token = CancellationToken::new();
+        let (tx, _rx) = mpsc::channel::<OpMsg>();
+        let (_ctx, conflict_rx) = mpsc::channel::<ConflictDecision>();
+
+        let summary = run_plan_with_no_replace_rename(
+            &plan,
+            &req.kind,
+            req.conflict,
+            &token,
+            &tx,
+            &conflict_rx,
+            None,
+            &copier,
+        );
+
+        assert_replace_refused(&summary);
+        assert_eq!(
+            copier.0.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "nada se copia a staging"
+        );
+        assert_eq!(fs::read(previous.join("viejo.txt")).unwrap(), b"viejo");
+        assert!(!previous.join("nuevo.txt").exists());
+        assert_eq!(fs::read(src.join("nuevo.txt")).unwrap(), b"nuevo");
+        assert!(fs::symlink_metadata(src.join("enlace")).is_ok());
+        assert_eq!(
+            fs::read(link_target.join("unico.txt")).unwrap(),
+            b"dato unico"
+        );
+        let names: Vec<_> = fs::read_dir(&dest_parent)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(names, ["proyecto"], "sin staging ni respaldo sobrantes");
+    }
+
+    /// Un Replace cuyo árbol tiene un fallo planificado (subcarpeta ilegible) también se rechaza
+    /// antes de copiar nada.
+    #[test]
+    fn replace_con_fallo_planificado_se_rechaza_sin_copiar() {
+        for kind in [OpKind::Copy, OpKind::Move] {
+            let dir = tempfile::tempdir().unwrap();
+            let (root, secret) = unreadable_tree(dir.path());
+            let dest = dir.path().join("dest");
+            let previous = dest.join("raiz");
+            fs::create_dir_all(&previous).unwrap();
+            fs::write(previous.join("viejo.txt"), b"contenido anterior").unwrap();
+            let reader = super::super::plan::FakeDirReader {
+                unreadable: Some(secret.clone()),
+                ..Default::default()
+            };
+            let copier = CountingCopier(std::sync::atomic::AtomicUsize::new(0));
+            let summary = run_with_reader(
+                kind.clone(),
+                &root,
+                &dest,
+                &reader,
+                Some(&previous),
+                &copier,
+            );
+            assert_replace_refused(&summary);
+            assert_eq!(
+                copier.0.load(std::sync::atomic::Ordering::SeqCst),
+                0,
+                "{kind:?}"
+            );
         }
     }
 
