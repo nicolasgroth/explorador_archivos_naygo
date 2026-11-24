@@ -11,8 +11,11 @@ Solo lo vigente. El historial de entregas, gates y hashes anteriores está en el
 
 - **Publicada:** 0.5.6.
 - **En preparación:** 0.5.7, en la rama `fix/integridad-build-0.5.7`, sin publicar. El cambio de
-  versión y el encabezado `[0.5.7]` del CHANGELOG los crea Nicolás con `scripts/bump.ps1`; hasta
-  entonces las novedades están en `## [Sin publicar]`.
+  versión y el encabezado `[0.5.7]` del CHANGELOG los crea Nicolás con
+  `scripts\bump.ps1 -Level patch`; hasta entonces las novedades están en `## [Sin publicar]`.
+  Sin `-Level`, el script propone 0.6.0: el último tag local es `v0.3.0` y entre los commits
+  posteriores hay varios `feat`. La rama parte de `codex/naygo-0.5.6` (commit `82db92d5`) y no
+  tiene rama remota.
 - Plan del lote: [integridad, build y documentación](plans/2026-11-21-integridad-build-y-docs.md).
 
 ## Resumen del lote 0.5.7
@@ -73,7 +76,8 @@ los nueve idiomas distintos del español (`en`, `fr`, `de`, `it`, `pt`, `ja`, `k
 
 Distribución local de avance, generada el 2026-11-24 con `scripts/build-release-guarded.ps1` desde
 el commit `d68cee5e`. El binario se identifica como `0.5.6+build.202611240518`: la versión pasa a
-0.5.7 cuando el autor ejecute `scripts/bump.ps1`. Los artefactos no llevan firma Authenticode.
+0.5.7 cuando el autor ejecute `scripts\bump.ps1 -Level patch`. Los artefactos no llevan firma
+Authenticode.
 
 | Artefacto | Tamaño | SHA-256 |
 |---|---|---|
