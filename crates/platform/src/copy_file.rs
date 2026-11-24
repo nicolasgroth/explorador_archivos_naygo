@@ -425,6 +425,37 @@ mod tests {
         assert!(sin_temporales(&dir.path().join("dst")));
     }
 
+    /// Una entrega con el copiador de plataforma conserva la marca de la web (ADS), que la copia
+    /// por buffers de core perdía.
+    #[test]
+    fn entrega_con_copiador_de_plataforma_conserva_zone_identifier() {
+        use naygo_core::delivery::{execute, prepare, Output, Structure};
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("descarga.txt");
+        fs::write(&source, b"contenido").unwrap();
+        let zone = "[ZoneTransfer]\r\nZoneId=3\r\n";
+        fs::write(format!("{}:Zone.Identifier", source.display()), zone).unwrap();
+        let token = CancellationToken::new();
+        let plan = prepare(
+            std::slice::from_ref(&source),
+            &dir.path().join("entrega"),
+            &Structure::Flat,
+            Output::Folder,
+            &token,
+        )
+        .unwrap();
+        let (tx, _rx) = std::sync::mpsc::channel();
+
+        execute(&plan, &token, &tx, &PlatformNoReplaceRename).unwrap();
+
+        let delivered = plan.destination.join("descarga.txt");
+        assert_eq!(fs::read(&delivered).unwrap(), b"contenido");
+        assert_eq!(
+            fs::read_to_string(format!("{}:Zone.Identifier", delivered.display())).unwrap(),
+            zone
+        );
+    }
+
     #[test]
     fn copyfile2_cancelado_no_deja_temporal() {
         let dir = tempfile::tempdir().unwrap();

@@ -512,10 +512,15 @@ struct ManifestEntry<'a> {
 
 /// Publica solo si TODOS los pasos terminan bien. Una copia cancelada/fallida no produce
 /// una entrega parcial. El manifiesto no incluye rutas absolutas de los originales.
+///
+/// `copier` hace la copia de cada archivo: en producción es el de plataforma (el mismo que usan
+/// las demás operaciones; en Windows `CopyFile2` con ADS y offload SMB). core no conoce Windows,
+/// por eso se inyecta; `NativeNoReplaceRename` es la copia por buffers de core.
 pub fn execute(
     plan: &DeliveryPlan,
     token: &CancellationToken,
     tx: &Sender<OpMsg>,
+    copier: &dyn crate::ops::NoReplaceRename,
 ) -> Result<PathBuf, DeliveryError> {
     checkpoint(token)?;
     ensure_absent(&plan.destination)?;
@@ -545,7 +550,7 @@ pub fn execute(
         pre_delete: Vec::new(),
     };
     let (_conflict_tx, conflict_rx) = channel();
-    let summary = crate::ops::engine::run_plan(
+    let summary = crate::ops::engine::run_plan_with_no_replace_rename(
         &copy_plan,
         &OpKind::Copy,
         ConflictPolicy::Skip,
@@ -553,6 +558,7 @@ pub fn execute(
         tx,
         &conflict_rx,
         None,
+        copier,
     );
     checkpoint(token)?;
     if summary.count_failed() != 0
@@ -705,6 +711,50 @@ mod tests {
         );
     }
 
+    /// La copia de una entrega pasa por el copiador inyectado (en producción, el de plataforma:
+    /// CopyFile2 con ADS y offload SMB), no por la copia por buffers de core.
+    #[test]
+    fn entrega_copia_con_el_copiador_inyectado() {
+        struct Recording(std::sync::Mutex<Vec<PathBuf>>);
+        impl crate::ops::NoReplaceRename for Recording {
+            fn rename_noreplace(&self, from: &Path, to: &Path) -> std::io::Result<()> {
+                crate::ops::NativeNoReplaceRename.rename_noreplace(from, to)
+            }
+            fn copy_and_publish(
+                &self,
+                from: &Path,
+                to: &Path,
+                overwrite: bool,
+                durable: bool,
+                token: &CancellationToken,
+                on_bytes: &mut dyn FnMut(u64),
+            ) -> std::io::Result<bool> {
+                self.0.lock().unwrap().push(from.to_path_buf());
+                crate::ops::NativeNoReplaceRename
+                    .copy_and_publish(from, to, overwrite, durable, token, on_bytes)
+            }
+        }
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("a.txt");
+        fs::write(&source, b"abc").unwrap();
+        let token = CancellationToken::new();
+        let plan = prepare(
+            std::slice::from_ref(&source),
+            &temp.path().join("delivery"),
+            &Structure::Flat,
+            Output::Folder,
+            &token,
+        )
+        .unwrap();
+        let copier = Recording(std::sync::Mutex::new(Vec::new()));
+        let (tx, _) = channel();
+        execute(&plan, &token, &tx, &copier).unwrap();
+        let copied = copier.0.lock().unwrap().clone();
+        assert_eq!(copied.len(), 1, "{copied:?}");
+        assert_eq!(copied[0].file_name(), source.file_name());
+        assert_eq!(fs::read(plan.destination.join("a.txt")).unwrap(), b"abc");
+    }
+
     #[test]
     fn sha256_verifica_contenido_y_detecta_cambio_con_metadata_identica() {
         let temp = tempfile::tempdir().unwrap();
@@ -723,7 +773,7 @@ mod tests {
         let hash = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
         assert_eq!(plan.entries[0].sha256.as_deref(), Some(hash));
         let (tx, _) = channel();
-        execute(&plan, &token, &tx).unwrap();
+        execute(&plan, &token, &tx, &crate::ops::NativeNoReplaceRename).unwrap();
         let manifest: serde_json::Value =
             serde_json::from_slice(&fs::read(plan.destination.join(MANIFEST)).unwrap()).unwrap();
         assert_eq!(manifest["verification"], "SHA-256");
@@ -738,7 +788,7 @@ mod tests {
             .unwrap();
         plan.destination = temp.path().join("another-delivery");
         assert!(matches!(
-            execute(&plan, &token, &tx),
+            execute(&plan, &token, &tx, &crate::ops::NativeNoReplaceRename),
             Err(DeliveryError::Changed(_))
         ));
         assert!(!plan.destination.exists());
@@ -762,7 +812,7 @@ mod tests {
         .unwrap();
         assert!(!destination.exists());
         let (tx, _) = channel();
-        execute(&plan, &token, &tx).unwrap();
+        execute(&plan, &token, &tx, &crate::ops::NativeNoReplaceRename).unwrap();
         assert_eq!(
             fs::read(destination.join("sub/a.txt")).unwrap(),
             b"original"
@@ -793,7 +843,7 @@ mod tests {
         assert!(prepare(&sources, &dest, &Structure::Flat, Output::Zip, &token).is_err());
         let plan = prepare(&sources, &dest, &Structure::Grouped, Output::Zip, &token).unwrap();
         let (tx, _) = channel();
-        execute(&plan, &token, &tx).unwrap();
+        execute(&plan, &token, &tx, &crate::ops::NativeNoReplaceRename).unwrap();
         let mut zip = zip::ZipArchive::new(fs::File::open(&dest).unwrap()).unwrap();
         assert!(zip.by_name("01-info.txt").is_ok());
         assert!(zip.by_name("02-INFO.txt").is_ok());
@@ -820,7 +870,7 @@ mod tests {
         fs::write(&source, b"longer replacement").unwrap();
         let (tx, _) = channel();
         assert!(matches!(
-            execute(&plan, &token, &tx),
+            execute(&plan, &token, &tx, &crate::ops::NativeNoReplaceRename),
             Err(DeliveryError::Changed(_))
         ));
         assert!(!dest.exists());
@@ -837,7 +887,7 @@ mod tests {
         let plan = prepare(&[source], &dest, &Structure::Flat, Output::Zip, &token).unwrap();
         fs::write(&dest, b"another application created this").unwrap();
         let (tx, _) = channel();
-        assert!(execute(&plan, &token, &tx).is_err());
+        assert!(execute(&plan, &token, &tx, &crate::ops::NativeNoReplaceRename).is_err());
         assert_eq!(fs::read(dest).unwrap(), b"another application created this");
     }
 
@@ -875,7 +925,7 @@ mod tests {
         token.cancel();
         let (tx, _) = channel();
         assert!(matches!(
-            execute(&plan, &token, &tx),
+            execute(&plan, &token, &tx, &crate::ops::NativeNoReplaceRename),
             Err(DeliveryError::Cancelled)
         ));
         assert!(!plan.destination.exists());
@@ -953,7 +1003,7 @@ mod tests {
             fs::canonicalize(&sources[4]).unwrap()
         );
         let (tx, _) = channel();
-        execute(&plan, &token, &tx).unwrap();
+        execute(&plan, &token, &tx, &crate::ops::NativeNoReplaceRename).unwrap();
         assert_eq!(fs::read_to_string(dest.join("info (3).txt")).unwrap(), "c");
         assert!(sources.iter().all(|p| p.exists()));
     }

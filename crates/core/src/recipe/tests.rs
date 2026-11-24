@@ -109,13 +109,25 @@ fn query_plan_is_read_only_and_frozen_against_new_matches() {
     assert_eq!(prepared.sources.len(), 1);
     std::fs::write(dir.path().join("new.pdf"), b"later").unwrap();
     let (tx, _rx) = std::sync::mpsc::channel();
-    let out = delivery::execute(&prepared.plan, &CancellationToken::new(), &tx).unwrap();
+    let out = delivery::execute(
+        &prepared.plan,
+        &CancellationToken::new(),
+        &tx,
+        &crate::ops::NativeNoReplaceRename,
+    )
+    .unwrap();
     assert_eq!(std::fs::read(out.join("a.pdf")).unwrap(), b"first");
     assert!(!out.join("new.pdf").exists());
     assert!(out.join("naygo-manifest.json").exists());
     assert!(dir.path().join("a.pdf").exists());
     assert!(review(draft(), params(dir.path()), vec![]).is_err());
-    assert!(delivery::execute(&prepared.plan, &CancellationToken::new(), &tx).is_err());
+    assert!(delivery::execute(
+        &prepared.plan,
+        &CancellationToken::new(),
+        &tx,
+        &crate::ops::NativeNoReplaceRename,
+    )
+    .is_err());
 }
 #[test]
 fn changed_sources_fail_without_publishing() {
@@ -128,7 +140,12 @@ fn changed_sources_fail_without_publishing() {
     std::fs::write(&source, b"new and longer").unwrap();
     let (tx, _rx) = std::sync::mpsc::channel();
     assert!(matches!(
-        delivery::execute(&prepared.plan, &CancellationToken::new(), &tx),
+        delivery::execute(
+            &prepared.plan,
+            &CancellationToken::new(),
+            &tx,
+            &crate::ops::NativeNoReplaceRename,
+        ),
         Err(delivery::DeliveryError::Changed(_))
     ));
     assert!(!prepared.plan.destination.exists());
@@ -227,7 +244,12 @@ fn cancelled_preparation_and_execution_never_publish() {
     let prepared = review(draft(), params(dir.path()), vec![]).unwrap();
     let (tx, _rx) = std::sync::mpsc::channel();
     assert!(matches!(
-        delivery::execute(&prepared.plan, &token, &tx),
+        delivery::execute(
+            &prepared.plan,
+            &token,
+            &tx,
+            &crate::ops::NativeNoReplaceRename
+        ),
         Err(delivery::DeliveryError::Cancelled)
     ));
     assert!(!prepared.plan.destination.exists());
@@ -273,7 +295,13 @@ fn month_filter_zip_and_relative_layout_reuse_reviewed_inventory() {
     )
     .unwrap();
     let (tx, _rx) = std::sync::mpsc::channel();
-    let out = delivery::execute(&prepared.plan, &CancellationToken::new(), &tx).unwrap();
+    let out = delivery::execute(
+        &prepared.plan,
+        &CancellationToken::new(),
+        &tx,
+        &crate::ops::NativeNoReplaceRename,
+    )
+    .unwrap();
     let mut zip = zip::ZipArchive::new(std::fs::File::open(out).unwrap()).unwrap();
     assert!(zip.by_name("source/a.pdf").is_ok());
     let manifest: serde_json::Value =

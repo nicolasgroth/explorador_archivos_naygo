@@ -103,7 +103,10 @@ impl OpsCtrl {
         });
         std::thread::spawn(move || {
             let start = std::time::Instant::now();
-            let message = match naygo_core::delivery::execute(&plan, &token, &tx) {
+            // Mismo copiador de plataforma que el resto de las operaciones (CopyFile2: ADS,
+            // atributos y offload SMB), no la copia por buffers de core.
+            let copier = naygo_platform::move_rename::PlatformNoReplaceRename;
+            let message = match naygo_core::delivery::execute(&plan, &token, &tx, &copier) {
                 Ok(destination) => OpMsg::Done(OpSummary {
                     items: vec![naygo_core::ops::OpItem {
                         dest: destination,
