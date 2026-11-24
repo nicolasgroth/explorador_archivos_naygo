@@ -7,6 +7,77 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Sin publicar]
 
+### Operaciones de archivos
+- Copiar y mover ya no recorren enlaces (junctions y symlinks) dentro de las carpetas.
+  No hay bucles ni se borra nada a través de un enlace. Copiar un enlace a carpeta que el usuario
+  seleccionó copia su contenido una sola vez; un enlace a carpeta que está dentro de lo copiado se
+  informa como fallido. Mover traslada el enlace como enlace dentro del mismo volumen; entre
+  volúmenes, el enlace queda en el origen y el paso se informa como fallido.
+- Sobrescribir o mover sobre el mismo archivo escrito con otra ruta ya no puede perder el original.
+  Naygo compara la identidad real del archivo (hard links, rutas `\\?\`, mayúsculas y minúsculas
+  Unicode como las trata NTFS) y omite el paso.
+- En Windows las copias conservan fechas, atributos y flujos alternativos.
+  Se usa `CopyFile2`: se conservan oculto, sistema y solo lectura, y flujos como `Zone.Identifier`.
+  Cancelar no deja archivos temporales. Por eso, copiar dos veces con «Saltar idénticos» omite
+  todo en la segunda pasada.
+- Mover entre volúmenes escribe la copia en disco antes de borrar el origen.
+  Si la copia o la aplicación de atributos falla, el origen no se borra.
+- Copiar y mover funcionan con rutas de más de 260 caracteres.
+  Las operaciones propias usan rutas extendidas aunque la opción de rutas largas de Windows esté
+  apagada, y el ejecutable declara compatibilidad con rutas largas.
+- Una subcarpeta ilegible ya no detiene una copia o un movimiento.
+  Se informa como «No se pudo leer la carpeta» y el resto continúa. Al mover, esa subcarpeta y las
+  carpetas que la contienen se quedan en el origen. Si la carpeta seleccionada misma no se puede
+  leer, la operación no empieza, como antes. Reemplazar una carpeta que contiene una subcarpeta
+  ilegible no publica nada: el destino anterior y el origen quedan intactos.
+- Restaurar desde la Papelera ya no pisa un elemento que aparece en el destino durante la operación.
+  El elemento restaurado queda con otro nombre y el aviso indica dónde.
+
+### Usabilidad
+- Un junction a carpeta se lista como carpeta y se puede abrir con doble clic o Enter.
+  Conserva sus propios atributos: un junction oculto de sistema sigue oculto.
+- El tamaño de carpeta y la búsqueda entran en las carpetas de OneDrive.
+  Los archivos solo en línea no se descargan: la búsqueda por contenido los cuenta como omitidos y
+  el punto de comparación, como cobertura incompleta. Calcular el tamaño de un junction mide la
+  carpeta a la que apunta.
+- Abrir archivos, abrir con, ejecutar como administrador, terminal y Explorador ya no congelan la ventana.
+  Las órdenes al Shell corren en un hilo propio; si fallan, el aviso llega cuando el Shell
+  responde. Pedir dos veces lo mismo mientras espera no lo encola de nuevo.
+- Un recurso de red caído ya no deja sin turno a los listados de discos locales.
+  Las carpetas locales y las remotas tienen cupos separados (8 y 4).
+- La vista profunda avisa cuando el recorrido queda incompleto.
+  Pasa si la carpeta ya no existe o si una subcarpeta no se puede leer; antes no se notaba.
+- El menú «Más opciones de Windows…» muestra completos «Enviar a», «Abrir con» y los submenús de extensiones.
+  Aparecen con sus íconos y funcionan las letras de acceso por teclado. «Nuevo» todavía no
+  aparece en este menú.
+- Al renombrar en línea, el cursor ya no salta al final si aparece un archivo en la misma carpeta.
+- Se tradujeron a los 10 idiomas textos que faltaban.
+  Incluye el subtítulo de la pantalla de inicio, las etiquetas del selector de colores, los errores
+  al guardar o borrar un tema o crear un ZIP de packs, la Papelera no disponible, el elemento
+  restaurado con otro nombre y la carpeta ilegible.
+
+### Rendimiento
+- Un cambio en una carpeta abierta ya no repinta la ventana entera durante el resaltado.
+  Con la ventana en reposo, el CPU por cada 20 s pasó de 5,33 · 2,14 · 1,86 · 0 · 4,47 s a
+  0,66 · 0,72 · 0,02 · 0,02 · 0,64 s.
+- Un cambio dentro de una carpeta de 100.000 entradas ya no reconstruye todas las filas.
+  El CPU de los 12 s siguientes bajó de 8–12 s a 0,22 s y la memoria tras el evento, de
+  256/249 MiB a 176/157 MiB (working set / privada). Actualizar o agregar una fila con 100.000
+  cuesta 3,80 / 4,14 ms en lugar de 28,5 / 22,3 ms.
+- La detección de Windows Terminal y WSL se hace una vez, en segundo plano, al arrancar.
+- Memoria medida en release: bandeja 47/21 MiB, ventana en reposo 56–59 / 26–28 MiB y carpeta de 100.000 entradas ~185/167 MiB.
+  Son unos 1,4 KiB por fila. No crece en reposo.
+
+### Construcción
+- El código Slint generado vive en su propio crate (`naygo-ui-gen`).
+  Recompilar tras tocar un `.rs` de la UI baja de 1 min 01 s a 18,9 s en desarrollo y
+  `cargo check` de 41 s a 4,4 s. Tocar un `.slint` quedó más lento (1 min 02 s → 1 min 27 s).
+- El release usa `debug = "line-tables-only"`: el pico de RAM del build baja de 10,9 GiB a 6,7 GiB y el PDB de 473 MB a 177 MB.
+  El build release completo tardó ~10 min más que la línea base anterior, sin causa confirmada
+  (la línea base es de otro commit).
+- Las builds de desarrollo muestran la versión `X.Y.Z+build.dev`; solo el empaquetador fija el número de build.
+- `NAYGO_DEBUG_MULTI_INSTANCE=1` permite correr una instancia de prueba junto a otra abierta (solo desarrollo).
+
 ## [0.5.6] — 2026-11-20
 
 ### Usabilidad
