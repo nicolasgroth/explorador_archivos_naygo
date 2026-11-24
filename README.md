@@ -31,28 +31,66 @@ las rutas y nombres son ficticios. El procedimiento de captura está en
 > **Novedades por versión:** [`CHANGELOG.md`](CHANGELOG.md) (y la sección "Acerca de" muestra
 > las de la versión instalada).
 
-**Documentación del proyecto:** [índice](docs/README.md), [estado local validado](docs/ESTADO-ACTUAL.md)
+**Documentación del proyecto:** [índice](docs/README.md), [estado actual](docs/ESTADO-ACTUAL.md)
 y [arquitectura](docs/ARQUITECTURA.md). El [plan de rutas y preview](docs/plans/2026-09-09-rutas-preview-y-configuracion.md)
 separa avances locales por bloque de mejoras pendientes, sin anunciarlas como ya publicadas.
 [Code signing policy (política de firma de código)](docs/POLITICA-DE-FIRMA.md) describe el estado de
 la solicitud OSS y el procedimiento previsto para firmar las descargas.
 
-## Novedades de 0.5.6
+## Novedades de 0.5.7 (en preparación)
 
-- **Vista profunda** con filtros por columna, orden por carpetas, selección múltiple y
-  exportación a CSV o al portapapeles. El teclado y las operaciones siguen las rutas de las
-  filas visibles aunque cambie el orden.
-- **Navegación y foco** más estables. El árbol conserva el desplazamiento cuando se expanden
-  otras ramas. El panel recupera el teclado tras crear o borrar y al cerrar las confirmaciones
-  de Operaciones.
-- **Renombrado en el lugar.** F2 y el renombrado por lotes conservan posición, foco y selección.
-  Los elementos nuevos quedan al final por defecto. F5 o un nuevo orden por columna reordena el listado.
-- **Arrastre y selección múltiple.** Puedes mover archivos y carpetas a otra carpeta del mismo
-  panel y devolverlos con Ctrl+Z cuando el destino estaba libre y en el mismo volumen. El menú
-  de Windows conserva el lote al hacer clic derecho sobre una selección.
+Esta versión aún no está publicada; la última publicada es 0.5.6.
 
-Los cambios completos y el alcance de las pruebas están en el [changelog](CHANGELOG.md) y el
-[estado local](docs/ESTADO-ACTUAL.md).
+- **Copiar y mover sin riesgo a través de enlaces.** Naygo ya no recorre junctions ni symlinks
+  dentro de las carpetas que copia o mueve: no hay bucles ni se borra el contenido al que apunta
+  un enlace. Ver [enlaces, nube y rutas largas](#enlaces-nube-y-rutas-largas).
+- **Identidad real del archivo.** Antes de sobrescribir o mover se comprueba si origen y destino
+  son el mismo archivo por otra ruta (hard link, mayúsculas, `\\?\`): el original nunca se pierde.
+- **Copias más fieles.** En Windows se conservan fechas, atributos y flujos alternativos
+  (`Zone.Identifier`), y un mover entre volúmenes escribe la copia en disco antes de borrar el
+  origen. Funcionan las rutas de más de 260 caracteres.
+- **Carpetas problemáticas.** Una subcarpeta ilegible se informa como fallo sin detener la
+  operación ni borrar su origen. Un recurso de red caído ya no bloquea los listados locales.
+  Restaurar desde la Papelera no pisa un archivo que aparezca en el destino.
+- **OneDrive.** El tamaño de carpeta y la búsqueda entran en sus carpetas; la búsqueda por
+  contenido no descarga los archivos que están solo en línea.
+- **Interfaz que no se congela.** Abrir archivos, la terminal o el Explorador corre en segundo
+  plano. El menú «Más opciones de Windows…» muestra completos «Enviar a» y «Abrir con», con
+  íconos.
+- **Menos CPU y memoria.** Medido en el PC de desarrollo ([benchmarks](docs/BENCHMARKS.md)):
+
+  | Medida | 0.5.6 | 0.5.7 |
+  |---|---|---|
+  | CPU en reposo por cada 20 s, ventana abierta | 5,33 · 2,14 · 1,86 · 0 · 4,47 s | 0,66 · 0,72 · 0,02 · 0,02 · 0,64 s |
+  | CPU en 12 s tras un cambio en una carpeta de 100.000 entradas | 8–12 s | 0,22 s |
+  | Memoria tras ese cambio (working set / privada) | 256 / 249 MiB | 176 / 157 MiB |
+  | Actualizar / agregar una fila con 100.000 entradas | 28,5 / 22,3 ms | 3,80 / 4,14 ms |
+
+  En release, Naygo usa 47/21 MiB en la bandeja, 56–59 / 26–28 MiB con la ventana en reposo y
+  ~185/167 MiB con una carpeta de 100.000 entradas abierta (≈1,4 KiB por fila), sin crecer en
+  reposo.
+- **Compilar cuesta menos.** El pico de RAM del build release bajó de 10,9 GiB a 6,7 GiB y el PDB
+  de 473 MB a 177 MB. En desarrollo, recompilar tras tocar un `.rs` de la UI bajó de 1 min 01 s a
+  18,9 s y `cargo check` de 41 s a 4,4 s. Salvedades: tocar un `.slint` quedó más lento
+  (1 min 02 s → 1 min 27 s) y el build release completo tardó unos 10 minutos más que la línea
+  base anterior, sin causa confirmada (esa línea base es de otro commit).
+
+Los cambios completos están en el [changelog](CHANGELOG.md) y el estado de la rama en el
+[estado actual](docs/ESTADO-ACTUAL.md).
+
+## Enlaces, nube y rutas largas
+
+- **Enlaces (junctions y symlinks).** Un junction a carpeta se lista como carpeta y se abre con
+  doble clic o Enter. Al copiar, si seleccionas un enlace a carpeta, se copia su contenido una vez;
+  los enlaces a carpeta que hay *dentro* de lo copiado no se recorren y se informan como fallidos.
+  Al mover, el enlace se traslada como enlace dentro del mismo volumen; entre volúmenes queda en
+  el origen. Calcular el tamaño no entra en enlaces anidados.
+- **OneDrive y otros proveedores de nube.** Los archivos "solo en línea" no se tratan como enlaces:
+  sus carpetas se recorren normalmente. La búsqueda por contenido los omite para no descargarlos.
+- **Rutas largas.** Copiar y mover usan rutas extendidas, por lo que funcionan con más de 260
+  caracteres aunque la opción de rutas largas de Windows esté apagada.
+
+Detalle en la [guía de usuario](docs/GUIA-DE-USUARIO.md).
 
 ## Objetivos
 
@@ -121,7 +159,7 @@ Los cambios completos y el alcance de las pruebas están en el [changelog](CHANG
 - Cálculo de tamaño de carpetas bajo demanda.
 - Barra de unidades de disco con espacio libre/total y porcentaje usado; ícono propio para
   unidades USB y expulsión segura.
-- Integración con Windows: menú contextual del shell, "Abrir con", ejecutar `.exe` como
+- Integración con Windows: menú contextual del shell (con sus submenús, como «Enviar a»), "Abrir con", ejecutar `.exe` como
   administrador con Shift o clic derecho, detección de cambios y de dispositivos, y drag & drop
   interno o externo desde Explorer y gestores de archivos. La recepción admite carpetas y archivos
   virtuales de aplicaciones como 7-Zip/WinRAR, conserva el árbol temporal y confirma la ruta
@@ -185,12 +223,26 @@ Rust + [Slint](https://slint.dev) (UI con renderizador por software, sin GPU) + 
 oficial `windows` para la integración con el Shell de Windows. Open source, sin dependencias
 de pago.
 
+## Arquitectura
+
+El workspace tiene cuatro crates:
+
+| Crate | Paquete | Responsabilidad |
+|---|---|---|
+| `crates/core` | `naygo-core` | Lógica pura, sin UI ni Windows: listados, operaciones, búsqueda, configuración, i18n, temas. |
+| `crates/platform` | `naygo-platform` | Todo lo que toca el sistema operativo: Shell, COM/OLE, Papelera, unidades, copia nativa. |
+| `crates/ui-gen` | `naygo-ui-gen` | Los archivos `.slint` y el código Rust que Slint genera desde ellos. |
+| `crates/ui-slint` | `naygo-ui-slint` (binario `naygo`) | La interfaz: controladores y puente entre `core` y Slint. |
+
+El hilo de la interfaz nunca hace I/O de disco. Detalle en
+[arquitectura](docs/ARQUITECTURA.md).
+
 ## Descargar
 
 **[⬇ Descargar Naygo (portable)](https://github.com/nicolasgroth/explorador_archivos_naygo/releases/latest/download/Naygo-portable.zip)** — siempre apunta a la última versión publicada. También está el [instalador](https://github.com/nicolasgroth/explorador_archivos_naygo/releases/latest/download/Naygo-setup.exe).
 
-El código de esta rama está en la versión 0.5.6. Los enlaces de descarga corresponden a la
-última publicación de GitHub Releases.
+El código de esta rama está en la versión 0.5.6 y prepara 0.5.7, aún sin publicar. Los enlaces
+de descarga corresponden a la última publicación de GitHub Releases.
 
 ## Instalación
 
