@@ -92,6 +92,64 @@ Notas:
 - Los escenarios 2 y 3 dependen de cuándo otra app escribe en home: comparan la forma, no un valor
   exacto.
 
+### Cierre del lote — medición final, 2026-11-24
+
+Commit medido: `d68cee5e` (rama `fix/integridad-build-0.5.7`; el commit posterior `8c842f8f` solo cambió
+docs, así que el exe es el mismo). Versión que muestra el binario: `0.5.6+build.202611240518`. Release
+`target/release/naygo.exe` compilado el 2026-11-24 05:39, copiado a `target/bench-runtime/app-final/`
+(config portable aislada), lanzado con `NAYGO_DEBUG_MULTI_INSTANCE=1`, una instancia tras otra y sin
+compilaciones en paralelo. Mismo equipo y método que la línea base y T12/T13: configuración portable de
+disposición clásica, `scripts/capture-w07-process.ps1` con ventanas de 20 s y solo los campos del proceso
+raíz, fixture de 100 000 archivos vacíos + 20 carpetas (100 020 elementos). El Naygo instalado del autor
+corría en paralelo y no se tocó.
+
+| # | Escenario | WS (MiB) | Private (MiB) | CPU por ventana de 20 s | Muestras |
+|---|-----------|----------|---------------|-------------------------|----------|
+| 1 | Arranque `--tray`, sin ventana | 45,4 | 18,2–18,3 | 0 · 0,03 · 0 s | 3 ventanas, 25 s tras arrancar |
+| 2 | Ventana idle en home | 54,9–56,6 | 23,7–24,6 | 0,31 · 0,05 · 0 · 0 · 0,02 s | 5 ventanas, 30 s tras arrancar |
+| 3 | 100k recién listada y estable (el otro panel en home) | 172,6–172,7 | 150,7 | 0,02 · 0 · 0 · 0 s | 4 ventanas, 60 s tras arrancar |
+| 4 | La misma tras 10 min idle | 172,8 | 150,7 | 0,03 · 0,06 · 0,09 s | 3 ventanas, ~9 min tras las del escenario 3 |
+| 5 | Evento (crear un archivo) en la carpeta de 100k | 174,0–174,1 | 151,6 | 0,22 · 0,22 · 0,22 s en los 12 s siguientes | 3 eventos; 12 s en reposo antes: 0,05 s |
+| 5 de la línea base | Tras 20 previews | no medido | no medido | — | ver nota |
+| 6 de la línea base | Panel de operaciones con historial | no medido | no medido | — | ver nota |
+
+Handles 357–366 e hilos 18–24 en los escenarios con ventana; 343–348 handles y 19–23 hilos en `--tray`.
+
+### Comparación: línea base → tras T12/T13 → final
+
+| Escenario | Línea base (`aad0ac9f`) | Tras T12/T13 | Final (`d68cee5e`) |
+| :--- | :--- | :--- | :--- |
+| 1. `--tray`: WS / Private (MiB) | 46,5 / 20,9–21,0 | no se repitió | 45,4 / 18,2–18,3 |
+| 2. Home idle: WS / Private (MiB) | 56,2–59,2 / 25,8–28,0 | 58,5 / 27,4 | 54,9–56,6 / 23,7–24,6 |
+| 2. Home idle: CPU por ventana (s) | 5,33 · 2,14 · 1,86 · 0 · 4,47 | 0,14 · 0,11 · 0 · 0,05 · 0,05 (T13); 0,66 · 0,72 · 0,02 · 0,02 · 0,64 (T12) | 0,31 · 0,05 · 0 · 0 · 0,02 |
+| 3. 100k estable: WS / Private (MiB) | 183,6–185,1 / 166,1–167,1 | 174,2 / 155,3 | 172,6–172,7 / 150,7 |
+| 4. 100k tras 10 min: WS / Private (MiB) | 186,8 / 167,6 | no se repitió | 172,8 / 150,7 |
+| 5. Evento en 100k: CPU en 12 s (s) | ~12 (11,67 · 12,06 en T12) | 0,22 · 0,22 | 0,22 · 0,22 · 0,22 |
+| 5. Evento en 100k: WS / Private (MiB) | 252,7 / 245,4 | 176,1 / 156,6 | 174,1 / 151,6 |
+
+Lectura: las mejoras de T12 y T13 se mantienen en el binario final. El CPU en idle sigue en el rango
+de décimas de segundo por ventana (base: hasta 5,3 s), el evento en la carpeta de 100k sigue costando
+0,22 s por cada 12 s (base: ~12 s, un núcleo completo) y la memoria con 100k queda en 150,7 MiB
+privados (base: 166–167; T13: 155,3). No hay regresión frente a T12/T13 en ninguna cifra; la memoria
+es 1–5 MiB menor en todos los escenarios. En 10 min de reposo no crece (150,7 → 150,7 MiB privados).
+
+Salvedades de calidad de la medición:
+
+- Una sola corrida por escenario, sin repetir. Los escenarios 2 y 3 dependen de cuándo otra app escribe
+  en home: la sesión de Claude Code del autor reescribe `C:\Users\ngrot\.claude.json` cada 15–25 s, causa
+  conocida de las ráfagas de CPU en idle (aquí solo 0,31 s en la primera ventana). Es parte de la línea
+  base realista y no se intentó suprimir. Comparan la forma, no un valor exacto.
+- A los 60 s el listado de 100k ya había terminado, así que no se capturó su CPU ni su pico de memoria
+  (la línea base midió un pico de 239–252 MiB de WS y ~15 s de CPU). No hay cifra final de ese pico.
+- Handles algo mayores que en T13 (357–366 contra 333–342); no se investigó. Que el listado ya no siga
+  enlaces (el tipo de un enlace sale del propio enlace) no movió estas cifras de forma visible.
+- No medido: "tras 20 previews" y "panel de operaciones con historial". Siguen sin poder automatizarse:
+  Bitdefender bloquea el envío de teclas y no hay acción UIA equivalente para cargar el preview ni para
+  copiar entre paneles; no se reintentaron más allá de lo ya documentado en la línea base.
+- `NAYGO_DEBUG_MULTI_INSTANCE=1` omite la recuperación de Reemplazar y la reanudación del diario en
+  la instancia de prueba, así que esos costos de arranque no entran en estas cifras.
+- Crudos: `target/bench-runtime/raw-final/` (sin versionar); fixture borrada al terminar.
+
 ## T12 — después de modelos persistentes, 2026-11-21
 
 Causa de las ráfagas de CPU en idle de la línea base (abajo): cada archivo nuevo o modificado en una
