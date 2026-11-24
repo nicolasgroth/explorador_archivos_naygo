@@ -4,9 +4,10 @@ Copyright (c) 2026 Nicolás Groth <ngroth@gmail.com>. ISGroth.
 
 SPDX-License-Identifier: MIT
 
-Para identificar la instalación y la distribución local vigentes, sus hashes y límites de validación,
-consulta [estado actual](ESTADO-ACTUAL.md). Los hashes de distribución identifican los paquetes
-locales sin firma. La aceptación visual, la matriz de interoperabilidad OLE y los materiales 3MF avanzados
+Para la versión, la rama y la distribución local vigentes, sus hashes y límites de validación,
+consulta [estado actual](ESTADO-ACTUAL.md); los estados anteriores, con sus hashes, están en el
+[estado histórico](evidencia/estado-historico-2026.md). Los hashes de distribución identifican los
+paquetes locales sin firma. La aceptación visual, la matriz de interoperabilidad OLE y los materiales 3MF avanzados
 siguen pendientes; las pruebas concretas ya realizadas se detallan en el estado y el backlog.
 Para la siguiente secuencia de foco y aceptación, ver [plan de foco y validación](plans/2026-11-11-foco-teclado-y-validacion.md).
 
@@ -17,7 +18,7 @@ La actualización preservó los cuatro JSON de usuario y el PDB previo; sus hash
 y el ZIP de ese momento no tenían firma Authenticode. El 2026-11-01 se hizo una prueba
 interactiva de 7-Zip, en un binario experimental separado; su alcance consta en el backlog.
 La instalación que se comprobó el 2026-11-01 es 0.5.4 del build anterior, no la distribución
-recién generada; ver los hashes en [estado actual](ESTADO-ACTUAL.md).
+recién generada; ver los hashes en el [estado histórico](evidencia/estado-historico-2026.md).
 La comparación W-07 controlada del 20 de octubre dio medianas 100k de 261,7 ms para el binario
 previo y 295,7 ms para el actual (+13,0 %), bajo el umbral orientativo de 15 %. Los dos runs tuvieron
 CPU total muestreada de 12–31 % y más de 44 GiB libres; por ser builds distintos y con actividad de
@@ -27,12 +28,13 @@ UI Automation pasiva del build actual encontró 356 descendientes, 120/120 contr
 nombre, 69 acciones `Invoke` y cero botones sin ese patrón. Narrador y recorrido manual de diálogos
 siguen pendientes. La evidencia de instalación, preservación y UIA está en
 [`evidencia/VALIDACION-INSTALACION-W06B-2026-10-20.md`](evidencia/VALIDACION-INSTALACION-W06B-2026-10-20.md) y
-[`ESTADO-ACTUAL.md`](ESTADO-ACTUAL.md).
+el [estado histórico](evidencia/estado-historico-2026.md).
 
 ## Orden de lectura para desarrollar
 
-1. [Estado local vigente](ESTADO-ACTUAL.md): base, comprobaciones y límites.
-2. [Backlog](BACKLOG.md): pendientes aprobados y cronología de cierres.
+1. [Estado actual](ESTADO-ACTUAL.md): versión, resumen del último lote, cifras, gate y distribución.
+2. [Backlog](BACKLOG.md): pendientes, corto y priorizado. La cronología de cierres anterior al
+   2026-11-24 está en el [backlog histórico](evidencia/backlog-historico-2026.md).
 3. [Arquitectura](ARQUITECTURA.md): responsabilidades, contratos y puntos de extensión.
 4. [Plan de rutas, preview y configuración](plans/2026-09-09-rutas-preview-y-configuracion.md):
    avances por bloque y mejoras pendientes; no sustituye las capacidades existentes.
@@ -168,6 +170,16 @@ siguen pendientes. La evidencia de instalación, preservación y UIA está en
 - [Validaciones previas de 0.5.1](evidencia/VALIDACION-0.5.1.md)
 - [Protección de main](PROTEGER-RAMA-MAIN.md)
 
+## Evidencia e históricos
+
+- [`evidencia/`](evidencia/): los registros de validación `VALIDACION-*` (gates, builds,
+  instalaciones, UIA), fechados.
+- [Backlog histórico](evidencia/backlog-historico-2026.md) y
+  [estado histórico](evidencia/estado-historico-2026.md): las bitácoras completas hasta el
+  2026-11-24, congeladas. Lo vigente está en [BACKLOG.md](BACKLOG.md) y
+  [ESTADO-ACTUAL.md](ESTADO-ACTUAL.md).
+- [Plan 0.5.7: integridad, build y documentación](plans/2026-11-21-integridad-build-y-docs.md).
+
 ## Cómo interpretar y mantener estos documentos
 
 Las guías describen prestaciones disponibles; los planes describen trabajo futuro y sus
@@ -180,6 +192,6 @@ El [plan de septiembre anterior](plans/2026-09-04-usabilidad-y-flujos-de-trabajo
 sus pendientes de aceptación; no quedó anulado por el nuevo plan.
 
 Después de una funcionalidad: comentar decisiones y límites en el módulo afectado, actualizar
-su guía, marcar el bloque en el backlog y registrar la validación. Actualizar `CHANGELOG.md`
+su guía, quitar el ítem del backlog y registrar la validación en `evidencia/`. Actualizar `CHANGELOG.md`
 cuando cambie el producto (se incorpora en Acerca de); no anunciar futuras prestaciones como
 entregadas. Una actualización sólo documental no exige alterar la versión o reconstruir el EXE.

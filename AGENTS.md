@@ -50,12 +50,15 @@ gente le saque provecho dando a conocer el nombre de Nicolás Groth y de ISGroth
   Contiene `fs_model`, `listing` / `deep_listing` (streaming incremental), `ops`
   (copiar/mover/borrar), `archive_ops` / `archive_tree`, `search`, `metadata`,
   `preview`, `batch_rename`, `i18n`, `theme`, `config`, `keymap`, `workspace`
-  (layout de paneles), entre otros.
+  (layout de paneles), `path_locality` (clasificar rutas locales/remotas para los
+  cupos de listado), entre otros.
 - **`platform`** (`naygo-platform`): TODO lo que toca Windows, aislado. `drives` /
   `drive_space` / `eject` (discos), `dnd` + `drop_target` + `clipboard` (drag&drop
   y portapapeles COM/OLE), `context_menu` (menú del Shell), `trash` (papelera),
-  `open` (ShellExecute), `device_watch` / `dir_watch` (vigilancia), `global_hotkey`,
-  `window` / `window_geometry`, `autostart`, `single_instance`, `exe_meta`.
+  `open` (ShellExecute y `ShellJob`), `copy_file` (copia con `CopyFile2`),
+  `long_path` (rutas `\\?\`), `device_watch` / `dir_watch` (vigilancia),
+  `global_hotkey`, `window` / `window_geometry`, `autostart`, `single_instance`,
+  `exe_meta`.
 - **`ui-gen`** (`naygo-ui-gen`): solo los `.slint` (`ui/`) y el código Rust que
   Slint genera desde ellos (`AppWindow`, structs, globals). Crate aparte para que
   tocar un `.rs` no recompile ese código (~32 MiB); `ui-slint` lo re-exporta con
@@ -65,7 +68,9 @@ gente le saque provecho dando a conocer el nombre de Nicolás Groth y de ISGroth
   sin lógica de negocio. `main` (arranque + modelos estables), `bridge` (puente
   core↔Slint), `workspace_ctrl` / `listing` / `ops_ctrl` / `config_ctrl`
   (controladores), `packs`, `preview`, `devices`, `keys` (atajos), `icons`,
-  `theme_apply`, `tray`, `watch`, `i18n_keys`, `logging`.
+  `theme_apply`, `tray`, `watch`, `i18n_keys`, `logging`, `persistent_models`
+  (modelos de ventana que no se recrean por tick), `rows_model` (`RowsModel`, filas
+  por tramos y claves), `shell_exec` (hilo único STA para las acciones del Shell).
 
 **Regla de oro:** el hilo de UI **nunca** hace I/O de disco. Todo lo pesado corre
 en workers que se comunican por canales. `core` no conoce Slint ni Windows.
@@ -117,11 +122,14 @@ acotada para imágenes animadas del preview no cambia la prioridad de bajo consu
 
 ## Cómo trabajar conmigo (el usuario)
 
-- **Lee primero `docs/BACKLOG.md`**: ahí está todo lo pendiente acordado (mejoras
-  técnicas, funcionalidades aprobadas, bugs conocidos y notas de operación).
-  Actualízalo al cerrar cada ítem.
-- Después consulta `docs/ESTADO-ACTUAL.md` y `docs/README.md`: distinguen la base
-  disponible, planes pendientes y evidencia histórica. El plan vigente de rutas/preview
+- **Lee primero `docs/BACKLOG.md`**: la lista corta y priorizada de lo pendiente
+  (validaciones manuales, pendientes del último lote, propuesta visual, deuda
+  estructural). Al cerrar un ítem, bórralo de ahí y deja el detalle en el CHANGELOG o en
+  `docs/evidencia/`. La bitácora anterior está congelada en
+  `docs/evidencia/backlog-historico-2026.md`.
+- Después consulta `docs/ESTADO-ACTUAL.md` (solo lo vigente; el historial está en
+  `docs/evidencia/estado-historico-2026.md`) y `docs/README.md`. Los registros
+  `VALIDACION-*` viven en `docs/evidencia/`. El plan vigente de rutas/preview
   es `docs/plans/2026-09-09-rutas-preview-y-configuracion.md`; no aplicar fuentes
   experimentales ni ejecutar antiguos planes sin contrastarlos con el estado local.
 - Documentar cada cambio de producto en su guía, backlog y CHANGELOG, con comentarios
