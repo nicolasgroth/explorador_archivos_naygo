@@ -151,14 +151,23 @@ Técnico (sin efecto visible):
 
 ## 3. Fase 5 — propuesta visual (requiere visto bueno de Nicolás)
 
-Solo maqueta y propuesta; no se implementa hasta su aprobación:
+La propuesta está escrita, con maquetas y una decisión pendiente por punto, en
+[`propuestas/propuesta-visual-0.5.7.html`](propuestas/propuesta-visual-0.5.7.html) (2026-11-24).
+Nada se implementa hasta que Nicolás responda cada punto:
 
 - toolbar agrupada, con íconos de un solo tono y tooltips con el atajo;
-- un grip en lugar del texto "mover" en los headers de panel;
-- una sola barra de ruta;
+- un asa de arrastre en lugar del texto "mover" en los headers de panel;
+- una sola barra de ruta (tres caminos posibles; es el único punto que cambia un hábito);
 - breadcrumb sin huecos;
-- contraste AA en los temas oscuros;
+- contraste: el texto ya cumple AA en los 15 temas; fallan cuatro usos concretos (secundario
+  sobre selección y sobre fila reciente, "mover" sobre el header activo en los temas claros, y
+  los bordes de controles);
 - Propiedades sin truncar por defecto.
+
+Salieron de paso, sin confirmar: los packs "Dark Teal" y "Light" apuntan a temas que no existen
+entre los de fábrica (`crates/core/src/theme/packs/`); los ajustes `toolbar_icon_style` y
+`bar_position` se guardan pero la interfaz no los lee; `path-bar.slint` se importa y no se usa;
+los colores por defecto de `theme.slint` ya no coinciden con `dark-blue.json`.
 
 ## 4. Deuda estructural (lotes propios, después de 0.5.7)
 

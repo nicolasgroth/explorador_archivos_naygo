@@ -1,0 +1,537 @@
+<title>Propuesta visual Naygo</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<style>
+/* Layout: una columna de lectura (máx. 880px); cada punto es "Hoy" arriba y "Propuesta" abajo,
+   con las maquetas en contenedores con scroll horizontal propio. Colores: los temas de Naygo
+   (isgroth-nieve en claro, dark-blue en oscuro). */
+:root {
+  --bg: #f1f3f5; --surface: #f8fafc; --ink: #202b3b; --ink-dim: #4c5b6c;
+  --accent: #275d99; --line: #c9d2dc; --ok: #2c6a47; --warn: #7a5200; --bad: #a3322a;
+  --ok-bg: #dcefe3; --warn-bg: #f6e7c4; --bad-bg: #f6dcd8;
+  --sans: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", Consolas, "Cascadia Mono", monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #101720; --surface: #151e28; --ink: #e3e9f0; --ink-dim: #adb9c6;
+  --accent: #79b0f2; --line: #273748; --ok: #7fd3a2; --warn: #e0b866; --bad: #f29488;
+  --ok-bg: #173526; --warn-bg: #3a2f12; --bad-bg: #3d1d1a; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #101720; --surface: #151e28; --ink: #e3e9f0; --ink-dim: #adb9c6;
+  --accent: #79b0f2; --line: #273748; --ok: #7fd3a2; --warn: #e0b866; --bad: #f29488;
+  --ok-bg: #173526; --warn-bg: #3a2f12; --bad-bg: #3d1d1a; color-scheme: dark }
+
+body { background: var(--bg); color: var(--ink); font-family: var(--sans); font-size: 16px; line-height: 1.55;
+  padding-block: 2.5rem 4rem; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+.page { max-width: 880px; margin-inline: auto; display: flex; flex-direction: column; gap: 3rem; }
+h1 { font-size: 2rem; line-height: 1.15; margin: 0; font-weight: 700; letter-spacing: -0.01em; text-wrap: balance; }
+h2 { font-size: 1.35rem; line-height: 1.25; margin: 0; font-weight: 600; text-wrap: balance; }
+h3 { font-size: .78rem; margin: 0; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-dim); }
+p { margin: 0; max-width: 68ch; }
+a { color: var(--accent); }
+code { font-family: var(--mono); font-size: .86em; }
+.lede { color: var(--ink-dim); font-size: 1.05rem; }
+.stack { display: flex; flex-direction: column; gap: 1rem; }
+.stack-s { display: flex; flex-direction: column; gap: .5rem; }
+ul { margin: 0; padding-left: 1.2rem; display: flex; flex-direction: column; gap: .35rem; max-width: 68ch; }
+.num { font-family: var(--mono); font-weight: 500; color: var(--accent); margin-right: .5rem; }
+.scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 6px; }
+.cap { font-size: .82rem; color: var(--ink-dim); }
+table { border-collapse: collapse; width: 100%; font-size: .9rem; }
+th, td { text-align: left; padding: .5rem .7rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-size: .74rem; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-dim); font-weight: 600; }
+td.n { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+th.n { text-align: right; min-width: 6.5rem; }
+.fail { background: var(--bad-bg); color: var(--bad); font-weight: 500; }
+.edge { background: var(--warn-bg); color: var(--warn); font-weight: 500; }
+.pill { display: inline-block; font-size: .74rem; font-weight: 600; padding: .1rem .5rem; border-radius: 999px; white-space: nowrap; }
+.pill.yes { background: var(--ok-bg); color: var(--ok); }
+.pill.opt { background: var(--warn-bg); color: var(--warn); }
+.decide { border-left: 3px solid var(--accent); padding: .2rem 0 .2rem 1rem; }
+.decide p { max-width: 64ch; }
+.shot { display: block; max-width: 100%; height: auto; border: 1px solid var(--line); border-radius: 6px; }
+
+/* ---- Maquetas: usan los colores reales del tema dark-blue de Naygo, fijos en ambos temas ---- */
+.mock { --m-tool: #0e141c; --m-panel: #101720; --m-row: #151e28; --m-alt: #192430; --m-hdr: #141c26;
+  --m-text: #e3e9f0; --m-dim: #adb9c6; --m-accent: #4f91e8; --m-border: #273748; --m-sel: #244b72;
+  --m-act: #20334d; --m-hover: #1e3856; --m-ctl: #5d748c;
+  background: var(--m-panel); color: var(--m-text); font-family: "Segoe UI", system-ui, sans-serif; font-size: 12px; line-height: 1.2; }
+.mock svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+.mock svg.f { fill: currentColor; stroke: none; }
+.tb { display: flex; align-items: center; gap: 1px; height: 34px; padding: 2px 6px; background: var(--m-tool); border-bottom: 1px solid var(--m-border); white-space: nowrap; }
+.b { display: flex; align-items: center; justify-content: center; gap: 5px; height: 30px; min-width: 30px; padding: 0 7px; border-radius: 5px; color: var(--m-text); position: relative; flex: none; }
+.b.car { min-width: 14px; padding: 0; color: var(--m-dim); }
+.b.car svg { width: 10px; height: 10px; }
+.b.menu::after { content: ""; position: absolute; right: 3px; bottom: 4px; border: 3px solid transparent; border-top-color: var(--m-dim); border-bottom: 0; }
+.b.txt { padding: 0 10px; }
+.sep { width: 9px; height: 18px; flex: none; background: linear-gradient(var(--m-border), var(--m-border)) center / 1px 100% no-repeat; }
+.pathfield { flex: 1 1 220px; min-width: 200px; height: 26px; display: flex; align-items: center; gap: 2px; padding-left: 8px; background: var(--m-hdr); border: 1px solid var(--m-border); border-radius: 5px; color: var(--m-dim); font-size: 11px; }
+.pathfield span { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.pathfield .b { height: 24px; min-width: 26px; padding: 0; color: var(--m-dim); }
+.grp { display: flex; flex-direction: column; align-items: stretch; flex: none; }
+.grp > div { display: flex; align-items: center; gap: 1px; height: 30px; }
+.lbl { font-size: 9px; letter-spacing: .08em; text-transform: uppercase; color: #8ea2b7; text-align: center; padding-top: 3px; border-top: 1px dashed #3a5068; margin-top: 4px; }
+.annot { background: #0b1016; padding: 6px 6px 8px; }
+.tip { position: absolute; top: 34px; left: 0; z-index: 2; background: #1c2836; border: 1px solid var(--m-ctl); border-radius: 4px; padding: 4px 8px; font-size: 11px; white-space: nowrap; color: var(--m-text); }
+.tip kbd { font-family: inherit; color: var(--m-dim); margin-left: 8px; }
+.panes { display: flex; gap: 4px; padding: 4px; background: #0b1016; }
+.pane { flex: 1 1 0; min-width: 0; background: var(--m-panel); border: 1px solid var(--m-border); }
+.ph { display: flex; align-items: center; gap: 6px; height: 26px; padding: 0 6px 0 8px; background: var(--m-hdr); border-bottom: 1px solid var(--m-border); }
+.ph.act { background: var(--m-act); border-bottom: 2px solid var(--m-accent); }
+.ph b { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.ph .dimt { color: var(--m-dim); font-weight: 500; }
+.ph .mv { font-size: 10px; color: var(--m-dim); }
+.ph .box { width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; background: var(--m-hdr); font-size: 13px; }
+.ph .ic { width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; border-radius: 4px; color: var(--m-text); }
+.ph .ic svg { width: 12px; height: 12px; }
+.ph .grip { color: var(--m-dim); cursor: grab; display: flex; }
+.ph .grip svg { width: 14px; height: 14px; }
+.pb { display: flex; align-items: center; height: 28px; padding-left: 4px; background: var(--m-hdr); border-bottom: 1px solid var(--m-border); white-space: nowrap; overflow: hidden; }
+.pb.act { background: var(--m-act); }
+.pb .nv { width: 20px; height: 22px; display: flex; align-items: center; justify-content: center; font-size: 15px; color: var(--m-dim); flex: none; }
+.pb .chip { width: 28px; height: 22px; flex: none; display: flex; align-items: center; justify-content: center; background: #223043; border: 1px solid var(--m-ctl); border-radius: 3px; margin-right: 2px; }
+.pb .seg { padding: 0 4px; height: 22px; display: flex; align-items: center; flex: none; }
+.pb .crumbs { display: flex; align-items: center; flex: 1; min-width: 0; overflow: hidden; }
+.pb .act2 { display: flex; flex: none; margin-left: auto; }
+.pb .act2 span { width: 26px; height: 22px; display: flex; align-items: center; justify-content: center; color: var(--m-dim); }
+.pb .act2 svg { width: 14px; height: 14px; }
+.pb .s2 { padding: 0 6px; height: 22px; display: flex; align-items: center; border-radius: 4px; flex: none; }
+.pb .s2.cur { font-weight: 600; }
+.pb .s2.drv { gap: 5px; background: #1c2836; border: 1px solid var(--m-border); }
+.pb .s2.drv svg { width: 13px; height: 13px; color: var(--m-dim); }
+.pb .gt { width: 14px; text-align: center; color: var(--m-dim); flex: none; }
+.rows { font-size: 12px; }
+.rows div { display: grid; grid-template-columns: 1fr 70px 60px 118px; gap: 8px; padding: 0 8px; height: 22px; align-items: center; }
+.rows div:nth-child(even) { background: var(--m-alt); }
+.rows div:nth-child(odd) { background: var(--m-row); }
+.rows .h { background: var(--m-hdr) !important; font-weight: 600; color: var(--m-dim); border-bottom: 1px solid var(--m-border); }
+.rows .selrow { background: var(--m-sel) !important; }
+.rows .newrow { background: #424036 !important; }
+.rows span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rows .d { color: var(--m-dim); }
+.rows .r { text-align: right; }
+.props { padding: 8px; display: flex; flex-direction: column; gap: 2px; width: 196px; background: var(--m-panel); }
+.props > div { display: flex; gap: 8px; padding: 2px; align-items: baseline; }
+.props .k { width: 84px; flex: none; text-align: right; font-weight: 700; color: var(--m-dim); }
+.props .v { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.props.new .k { width: 72px; }
+.props.new .v { white-space: normal; overflow-wrap: anywhere; }
+.props .btn { background: #1a2532; border: 1px solid var(--m-border); border-radius: 5px; padding: 3px 18px; }
+.props .cp { color: var(--m-dim); flex: none; align-self: flex-start; display: flex; }
+.props .cp svg { width: 12px; height: 12px; }
+.duo { display: flex; flex-wrap: wrap; gap: 1rem; align-items: flex-start; }
+.duo > div { display: flex; flex-direction: column; gap: .4rem; }
+.w980 { min-width: 980px; }
+.w640 { min-width: 640px; }
+</style>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-left" viewBox="0 0 24 24"><path d="M19 12H5M11 6l-6 6 6 6"/></symbol>
+  <symbol id="i-right" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
+  <symbol id="i-chev" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></symbol>
+  <symbol id="i-home" viewBox="0 0 24 24"><path d="M4 11l8-7 8 7M6 10v10h12V10"/></symbol>
+  <symbol id="i-up" viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></symbol>
+  <symbol id="i-pencil" viewBox="0 0 24 24"><path d="M4 20l4-1 11-11-3-3L5 16z"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></symbol>
+  <symbol id="i-star" viewBox="0 0 24 24"><path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.2-4.2"/></symbol>
+  <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+  <symbol id="i-split" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 4v16"/></symbol>
+  <symbol id="i-panel" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></symbol>
+  <symbol id="i-swap" viewBox="0 0 24 24"><path d="M7 7h13M16 3l4 4-4 4M17 17H4M8 13l-4 4 4 4"/></symbol>
+  <symbol id="i-tabs" viewBox="0 0 24 24"><rect x="3" y="8" width="18" height="12" rx="2"/><path d="M3 9V6a2 2 0 0 1 2-2h5l2 4"/></symbol>
+  <symbol id="i-layouts" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></symbol>
+  <symbol id="i-layers" viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5zM3 13l9 5 9-5"/></symbol>
+  <symbol id="i-folderplus" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM12 11v5M9.5 13.5h5"/></symbol>
+  <symbol id="i-term" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 6.3M20 5v6h-6"/></symbol>
+  <symbol id="i-drive" viewBox="0 0 24 24"><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M5 13l2-8h10l2 8M7 16.5h.01"/></symbol>
+  <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></symbol>
+  <symbol id="i-grip" viewBox="0 0 24 24"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+  <symbol id="i-max" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="1"/></symbol>
+  <symbol id="i-clip" viewBox="0 0 24 24"><rect x="6" y="5" width="12" height="16" rx="2"/><path d="M9 5V3h6v2"/></symbol>
+  <symbol id="i-deep" viewBox="0 0 24 24"><path d="M4 6h16M8 12h12M12 18h8"/></symbol>
+</svg>
+
+<div class="page">
+
+<header class="stack">
+  <h3>Naygo · lote 0.5.7 · fase 5 · 24 de noviembre de 2026</h3>
+  <h1>Propuesta visual: seis cambios para aprobar, ajustar o descartar</h1>
+  <p class="lede">Nada de esto está implementado. Cada punto muestra cómo es hoy la interfaz según el código, cómo quedaría, qué cuesta y qué decisión necesito de ti. Las maquetas usan los colores reales del tema <code>dark-blue</code>.</p>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>#</th><th>Cambio</th><th>Mi recomendación</th><th>Tamaño</th><th>Qué toca</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>Toolbar agrupada, de un solo tono, con el atajo en cada tooltip</td><td><span class="pill yes">Hacer</span></td><td>Mediano</td><td><code>app-window.slint</code>, claves de texto en 10 idiomas, un ícono nuevo</td></tr>
+      <tr><td>2</td><td>Un asa de arrastre en vez del texto «mover»</td><td><span class="pill yes">Hacer</span></td><td>Chico</td><td><code>app-window.slint</code>, 2 claves de texto</td></tr>
+      <tr><td>3</td><td>Una sola barra de ruta</td><td><span class="pill opt">Hacer, con una decisión tuya</span></td><td>Mediano</td><td>Toolbar y barra de cada panel; cambia un hábito</td></tr>
+      <tr><td>4</td><td>Breadcrumb sin huecos</td><td><span class="pill yes">Hacer</span></td><td>Chico</td><td><code>breadcrumb-bar.slint</code>, <code>path_segments.rs</code></td></tr>
+      <tr><td>5</td><td>Contraste: el problema es más acotado de lo que decía el plan</td><td><span class="pill yes">Hacer la versión acotada</span></td><td>Chico</td><td>2 usos de color, 1 color derivado nuevo, 1 test</td></tr>
+      <tr><td>6</td><td>Propiedades sin valores cortados</td><td><span class="pill yes">Hacer</span></td><td>Chico</td><td><code>inspector-panel.slint</code></td></tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="stack-s">
+    <p class="cap">Referencia: captura real de Naygo 0.5.4 a 1020 px de ancho, con la toolbar en modo compacto. Los puntos 2, 3, 4 y 6 se ven en ella.</p>
+    <img class="shot" src="../../assets/screenshots/naygo-multipanel.png" alt="Captura de Naygo con tema dark-blue: toolbar con campo de ruta, dos paneles de archivos con su propia barra de ruta y el texto «mover» en cada encabezado, y el panel Propiedades con fechas y ruta cortadas." width="1020" height="780">
+  </div>
+</header>
+
+<!-- ============ 1 ============ -->
+<section class="stack">
+  <h2><span class="num">1</span>Toolbar agrupada, de un solo tono, con el atajo en cada tooltip</h2>
+  <div class="stack-s">
+    <h3>Hoy</h3>
+    <ul>
+      <li>En modo ancho hay 21 controles, sin contar las unidades, repartidos en 9 tramos. Los separadores existen, pero no forman grupos reconocibles: Disposiciones, Espacios y Configuración quedan cada uno en un tramo de un solo botón.</li>
+      <li>En modo compacto (bajo 1060 px) se oculta un separador y Favoritos, Disposiciones y Espacios quedan pegados. «Más opciones» es un botón de 96 px solo con texto.</li>
+      <li>Espacios usa el mismo ícono que Clonar.</li>
+      <li>El tooltip agrega el atajo cuando la acción tiene uno. No lo muestran diez controles: los dos historiales desplegables, Historial de carpetas, Favoritos, Panel, Intercambiar, Clonar, Apilar, Refrescar y Espacios. Favoritos no tiene atajo de fábrica; en los demás no comprobé si la acción tiene uno.</li>
+      <li>Los íconos se tiñen con el color de texto del tema solo si el set es monocromo (el de fábrica, lucide, lo es). Con los sets fluent, flat-color, vivid y pastel la toolbar queda multicolor.</li>
+    </ul>
+    <div class="scroll"><div class="mock w980">
+      <div class="tb">
+        <span class="b"><svg><use href="#i-left"/></svg></span><span class="b car"><svg><use href="#i-chev"/></svg></span>
+        <span class="b"><svg><use href="#i-right"/></svg></span><span class="b car"><svg><use href="#i-chev"/></svg></span>
+        <span class="b"><svg><use href="#i-home"/></svg></span><span class="b"><svg><use href="#i-up"/></svg></span>
+        <span class="sep"></span>
+        <span class="pathfield"><span>D:\NaygoDemo\Home\Proyecto Aurora\Documentos</span><i class="b"><svg><use href="#i-pencil"/></svg></i><i class="b"><svg><use href="#i-copy"/></svg></i><i class="b"><svg><use href="#i-star"/></svg></i></span>
+        <span class="sep"></span>
+        <span class="b"><svg><use href="#i-search"/></svg></span><span class="b menu"><svg><use href="#i-eye"/></svg></span><span class="b menu"><svg><use href="#i-clock"/></svg></span><span class="b menu"><svg><use href="#i-star"/></svg></span>
+        <span class="sep"></span>
+        <span class="b menu"><svg><use href="#i-split"/></svg></span><span class="b menu"><svg><use href="#i-panel"/></svg></span><span class="b"><svg><use href="#i-swap"/></svg></span><span class="b"><svg><use href="#i-copy"/></svg></span><span class="b"><svg><use href="#i-tabs"/></svg></span>
+        <span class="sep"></span>
+        <span class="b menu"><svg><use href="#i-layouts"/></svg></span>
+        <span class="sep"></span>
+        <span class="b"><svg><use href="#i-copy"/></svg></span>
+        <span class="sep"></span>
+        <span class="b"><svg><use href="#i-folderplus"/></svg></span><span class="b menu"><svg><use href="#i-term"/></svg></span>
+        <span class="sep"></span>
+        <span class="b"><svg><use href="#i-refresh"/></svg></span><span class="b txt">C:</span><span class="b txt">D:</span>
+        <span class="sep"></span>
+        <span class="b"><svg><use href="#i-sliders"/></svg></span>
+      </div>
+    </div></div>
+    <p class="cap">Maqueta del estado actual en modo ancho, con el orden y los tamaños del código (barra de 34 px, botones de 30 px, íconos de 16 px).</p>
+  </div>
+  <div class="stack-s">
+    <h3>Propuesta</h3>
+    <ul>
+      <li>Cinco grupos fijos, con los mismos separadores en modo ancho y compacto: navegar, buscar y ver, paneles, crear, sistema.</li>
+      <li>Ícono propio para Espacios (capas) y un ícono de tres puntos para «Más opciones», que pasa de 96 px a 30 px.</li>
+      <li>Tooltip con el formato «Nombre · atajo» en todos los controles cuya acción tenga atajo. A las que no tienen no se les inventa uno: muestran solo el nombre.</li>
+      <li>La toolbar siempre se tiñe con el color de texto del tema. Los sets multicolor siguen aplicándose a los íconos de archivos y carpetas.</li>
+    </ul>
+    <div class="scroll"><div class="mock w980 annot">
+      <div class="tb" style="height:auto;border-bottom:0;align-items:flex-start;padding-bottom:6px">
+        <div class="grp"><div><span class="b"><svg><use href="#i-left"/></svg></span><span class="b car"><svg><use href="#i-chev"/></svg></span><span class="b"><svg><use href="#i-right"/></svg></span><span class="b car"><svg><use href="#i-chev"/></svg></span><span class="b"><svg><use href="#i-home"/></svg></span><span class="b"><svg><use href="#i-up"/></svg></span></div><span class="lbl">Navegar</span></div>
+        <span class="sep" style="margin-top:6px"></span>
+        <div class="grp"><div><span class="b" style="background:var(--m-hover)"><svg><use href="#i-search"/></svg><span class="tip">Buscar archivos<kbd>F3</kbd></span></span><span class="b menu"><svg><use href="#i-eye"/></svg></span><span class="b menu"><svg><use href="#i-clock"/></svg></span><span class="b menu"><svg><use href="#i-star"/></svg></span></div><span class="lbl">Buscar y ver</span></div>
+        <span class="sep" style="margin-top:6px"></span>
+        <div class="grp"><div><span class="b menu"><svg><use href="#i-split"/></svg></span><span class="b menu"><svg><use href="#i-panel"/></svg></span><span class="b"><svg><use href="#i-swap"/></svg></span><span class="b"><svg><use href="#i-copy"/></svg></span><span class="b"><svg><use href="#i-tabs"/></svg></span><span class="b menu"><svg><use href="#i-layouts"/></svg></span><span class="b"><svg><use href="#i-layers"/></svg></span></div><span class="lbl">Paneles</span></div>
+        <span class="sep" style="margin-top:6px"></span>
+        <div class="grp"><div><span class="b"><svg><use href="#i-folderplus"/></svg></span><span class="b menu"><svg><use href="#i-term"/></svg></span></div><span class="lbl">Crear</span></div>
+        <span class="sep" style="margin-top:6px"></span>
+        <div class="grp"><div><span class="b"><svg><use href="#i-refresh"/></svg></span><span class="b txt">C:</span><span class="b txt">D:</span><span class="b"><svg><use href="#i-sliders"/></svg></span></div><span class="lbl">Sistema</span></div>
+      </div>
+    </div></div>
+    <p class="cap">Las etiquetas punteadas son anotaciones de esta página: en la app solo se ven los separadores. La maqueta ya no incluye el campo de ruta, que es el punto 3; si descartas el punto 3, el campo queda entre Navegar y Buscar.</p>
+  </div>
+  <div class="stack-s">
+    <h3>Costo y riesgo</h3>
+    <ul>
+      <li>El ícono de Espacios tiene que existir en los 10 sets de íconos. En los que no lo traigan se usa el de lucide como respaldo.</li>
+      <li>El orden de los botones no cambia, así que no se pierde la memoria de posición. Solo cambian los separadores: desaparecen los que aislaban a Disposiciones, Espacios y Configuración.</li>
+    </ul>
+  </div>
+  <div class="decide stack-s">
+    <h3>Decisión que necesito</h3>
+    <p>¿Apruebas los cinco grupos? Y aparte: con un set de íconos multicolor, ¿la toolbar debe quedar de un solo tono (mi recomendación) o conservar el color del set?</p>
+  </div>
+</section>
+
+<!-- ============ 2 ============ -->
+<section class="stack">
+  <h2><span class="num">2</span>Un asa de arrastre en vez del texto «mover»</h2>
+  <div class="stack-s">
+    <h3>Hoy</h3>
+    <ul>
+      <li>«mover» es un texto de 10 px en color secundario, sin tooltip. No es un botón: todo el encabezado se puede arrastrar, y el texto solo lo insinúa.</li>
+      <li>El botón de maximizar tiene siempre el fondo del encabezado inactivo, así que sobre un panel activo dibuja una caja visible. Su tooltip no menciona Ctrl+Shift+M.</li>
+      <li>Cerrar no tiene tooltip, y el clic derecho en el encabezado cierra el panel sin que nada lo anuncie.</li>
+    </ul>
+  </div>
+  <div class="duo">
+    <div style="flex:1 1 300px;min-width:0">
+      <h3>Hoy</h3>
+      <div class="scroll"><div class="mock">
+        <div class="ph act"><b>Documentos</b><span class="mv">mover</span><span class="box">□</span><span class="ic"><svg><use href="#i-x"/></svg></span></div>
+        <div class="ph"><b class="dimt">Entregas</b><span class="mv">mover</span><span class="box">□</span><span class="ic"><svg><use href="#i-x"/></svg></span></div>
+      </div></div>
+    </div>
+    <div style="flex:1 1 300px;min-width:0">
+      <h3>Propuesta</h3>
+      <div class="scroll"><div class="mock">
+        <div class="ph act"><span class="grip"><svg class="f"><use href="#i-grip"/></svg></span><b>Documentos</b><span class="ic"><svg><use href="#i-max"/></svg></span><span class="ic"><svg><use href="#i-x"/></svg></span></div>
+        <div class="ph"><span class="grip"><svg class="f"><use href="#i-grip"/></svg></span><b class="dimt">Entregas</b><span class="ic"><svg><use href="#i-max"/></svg></span><span class="ic"><svg><use href="#i-x"/></svg></span></div>
+      </div></div>
+    </div>
+  </div>
+  <ul>
+    <li>El asa va a la izquierda del título y muestra el cursor de mover. El encabezado completo sigue siendo arrastrable, como hoy.</li>
+    <li>Tooltip del asa: «Arrastra para mover el panel». Maximizar: «Maximizar o restaurar · Ctrl+Shift+M». Cerrar: «Cerrar panel».</li>
+    <li>Maximizar pasa a fondo transparente y a un ícono dibujado, igual que Cerrar.</li>
+    <li>Se gana el ancho del texto «mover»: en un panel angosto el título se corta un poco más tarde.</li>
+  </ul>
+  <div class="decide stack-s">
+    <h3>Decisión que necesito</h3>
+    <p>¿Apruebas el asa a la izquierda? La alternativa es dejarla a la derecha, donde hoy está el texto.</p>
+  </div>
+</section>
+
+<!-- ============ 3 ============ -->
+<section class="stack">
+  <h2><span class="num">3</span>Una sola barra de ruta</h2>
+  <div class="stack-s">
+    <h3>Hoy</h3>
+    <ul>
+      <li>La ruta del panel activo aparece dos veces: como texto de 11 px en la toolbar y como breadcrumb en la barra del panel. Con un solo panel quedan una justo encima de la otra.</li>
+      <li>También están duplicados: atrás, adelante y subir (toolbar y cada panel), editar la ruta, copiarla y marcar favorito.</li>
+      <li>Ninguna de las dos barras se puede ocultar: no existe una opción para eso.</li>
+    </ul>
+    <div class="scroll"><div class="mock w640">
+      <div class="tb">
+        <span class="b"><svg><use href="#i-left"/></svg></span><span class="b car"><svg><use href="#i-chev"/></svg></span><span class="b"><svg><use href="#i-right"/></svg></span><span class="b car"><svg><use href="#i-chev"/></svg></span><span class="b"><svg><use href="#i-home"/></svg></span><span class="b"><svg><use href="#i-up"/></svg></span>
+        <span class="sep"></span>
+        <span class="pathfield"><span>D:\NaygoDemo\Home\Proyecto Aurora\Documentos</span><i class="b"><svg><use href="#i-pencil"/></svg></i><i class="b"><svg><use href="#i-copy"/></svg></i><i class="b"><svg><use href="#i-star"/></svg></i></span>
+        <span class="sep"></span>
+        <span class="b"><svg><use href="#i-search"/></svg></span><span class="b menu"><svg><use href="#i-eye"/></svg></span><span class="b txt menu">Más opciones</span>
+      </div>
+      <div class="ph act"><b>Documentos</b><span class="mv">mover</span><span class="box">□</span></div>
+      <div class="pb act">
+        <span class="nv">‹</span><span class="nv">⌄</span><span class="nv">›</span><span class="nv">⌄</span><span class="nv" style="color:var(--m-text)">↑</span>
+        <span class="chip">…</span>
+        <span class="crumbs"><span class="seg">› D:\</span><span class="seg">› NaygoDemo</span><span class="seg">› Home</span><span class="seg">› Proyecto Aurora</span><span class="seg">› Documentos</span></span>
+        <span class="act2"><span>✎</span><span>⟳</span><span><svg><use href="#i-star"/></svg></span><span><svg><use href="#i-clip"/></svg></span><span><svg><use href="#i-deep"/></svg></span></span>
+      </div>
+    </div></div>
+  </div>
+  <div class="stack-s">
+    <h3>Propuesta</h3>
+    <ul>
+      <li>La ruta vive solo en la barra de cada panel. El campo de la toolbar desaparece, y con el espacio que libera la toolbar tarda más en pasar a modo compacto.</li>
+      <li>Ctrl+L y el clic en la zona vacía del breadcrumb editan la ruta ahí mismo, en el panel activo.</li>
+      <li>La barra del panel queda con: breadcrumb, favorito, vista recursiva y un menú «más» con Copiar ruta, Editar ruta y Refrescar este panel.</li>
+      <li>Atrás, adelante y subir quedan solo en la toolbar y actúan sobre el panel activo. Los atajos Alt+←, Alt+→ y Backspace no cambian.</li>
+    </ul>
+    <div class="scroll"><div class="mock w640">
+      <div class="tb">
+        <span class="b"><svg><use href="#i-left"/></svg></span><span class="b car"><svg><use href="#i-chev"/></svg></span><span class="b"><svg><use href="#i-right"/></svg></span><span class="b car"><svg><use href="#i-chev"/></svg></span><span class="b"><svg><use href="#i-home"/></svg></span><span class="b"><svg><use href="#i-up"/></svg></span>
+        <span class="sep"></span>
+        <span class="b"><svg><use href="#i-search"/></svg></span><span class="b menu"><svg><use href="#i-eye"/></svg></span><span class="b menu"><svg><use href="#i-clock"/></svg></span><span class="b menu"><svg><use href="#i-star"/></svg></span>
+        <span class="sep"></span>
+        <span class="b menu"><svg><use href="#i-split"/></svg></span><span class="b menu"><svg><use href="#i-panel"/></svg></span><span class="b menu"><svg><use href="#i-layouts"/></svg></span><span class="b"><svg><use href="#i-layers"/></svg></span>
+        <span class="sep"></span>
+        <span class="b"><svg class="f"><use href="#i-more"/></svg></span>
+      </div>
+      <div class="ph act"><span class="grip"><svg class="f"><use href="#i-grip"/></svg></span><b>Documentos</b><span class="ic"><svg><use href="#i-max"/></svg></span></div>
+      <div class="pb act" style="padding-left:6px">
+        <span class="crumbs"><span class="s2 drv"><svg><use href="#i-drive"/></svg>D:</span><span class="gt">›</span><span class="s2">NaygoDemo</span><span class="gt">›</span><span class="s2">Home</span><span class="gt">›</span><span class="s2">Proyecto Aurora</span><span class="gt">›</span><span class="s2 cur">Documentos</span></span>
+        <span class="act2"><span><svg><use href="#i-star"/></svg></span><span><svg><use href="#i-deep"/></svg></span><span><svg class="f"><use href="#i-more"/></svg></span></span>
+      </div>
+    </div></div>
+    <p class="cap">La maqueta combina los puntos 1, 2, 3 y 4 a 640 px de ancho. Hoy, a ese ancho, la toolbar ya está en modo compacto.</p>
+  </div>
+  <div class="stack-s">
+    <h3>Costo y riesgo</h3>
+    <ul>
+      <li>Es el único punto que cambia un hábito. Quien copia la ruta o marca favoritos desde la toolbar tendrá que hacerlo en el panel.</li>
+      <li>Para ir atrás en un panel que no es el activo hoy basta un clic en su flecha. Con la propuesta son dos: activar el panel y usar la toolbar o el atajo.</li>
+      <li>El menú de historial por clic derecho en las flechas del panel se pierde; queda el de la toolbar.</li>
+    </ul>
+  </div>
+  <div class="decide stack-s">
+    <h3>Decisión que necesito</h3>
+    <p>Tres caminos. <strong>A</strong>, el que recomiendo: lo descrito arriba. <strong>B</strong>: quitar el campo de la toolbar pero conservar las flechas en cada panel. <strong>C</strong>: dejar las dos barras y agregar una opción en Configuración para ocultar el campo de la toolbar, apagada de fábrica.</p>
+  </div>
+</section>
+
+<!-- ============ 4 ============ -->
+<section class="stack">
+  <h2><span class="num">4</span>Breadcrumb sin huecos</h2>
+  <div class="stack-s">
+    <h3>Hoy</h3>
+    <ul>
+      <li>El separador «›» es parte del texto de cada segmento, incluido el primero. Por eso la barra empieza con un «›» que no separa nada.</li>
+      <li>La raíz se muestra como «D:\», con la barra invertida, y el hueco que sigue se ve más ancho que los demás.</li>
+      <li>El botón «…» está siempre, aunque la ruta quepa entera, y es un botón con borde de estilo nativo junto a segmentos planos.</li>
+      <li>Cuando la ruta no cabe, se alinea a la derecha y el primer segmento visible queda cortado a mitad de letra. En la captura de arriba se lee «… :\ › NaygoDemo».</li>
+    </ul>
+  </div>
+  <div class="duo">
+    <div style="flex:1 1 100%;min-width:0">
+      <h3>Hoy, con espacio de sobra y sin espacio</h3>
+      <div class="scroll"><div class="mock" style="min-width:520px">
+        <div class="pb"><span class="chip">…</span><span class="crumbs"><span class="seg">› D:\</span><span class="seg">› NaygoDemo</span><span class="seg">› Home</span><span class="seg">› Proyecto Aurora</span><span class="seg">› Documentos</span></span></div>
+        <div class="pb" style="width:300px;border-right:1px solid var(--m-border)"><span class="chip">…</span><span class="crumbs" style="justify-content:flex-end"><span class="seg" style="margin-left:-58px">› D:\</span><span class="seg">› NaygoDemo</span><span class="seg">› Home</span><span class="seg">› Proyecto Aurora</span><span class="seg">› Documentos</span></span></div>
+      </div></div>
+    </div>
+    <div style="flex:1 1 100%;min-width:0">
+      <h3>Propuesta, con espacio de sobra y sin espacio</h3>
+      <div class="scroll"><div class="mock" style="min-width:520px">
+        <div class="pb" style="padding-left:6px"><span class="crumbs"><span class="s2 drv"><svg><use href="#i-drive"/></svg>D:</span><span class="gt">›</span><span class="s2">NaygoDemo</span><span class="gt">›</span><span class="s2">Home</span><span class="gt">›</span><span class="s2">Proyecto Aurora</span><span class="gt">›</span><span class="s2 cur">Documentos</span></span></div>
+        <div class="pb" style="width:300px;border-right:1px solid var(--m-border);padding-left:6px"><span class="crumbs"><span class="s2 drv"><svg><use href="#i-drive"/></svg>D:</span><span class="gt">›</span><span class="s2" style="background:#1c2836">…</span><span class="gt">›</span><span class="s2">Proyecto Aurora</span><span class="gt">›</span><span class="s2 cur">Documentos</span></span></div>
+      </div></div>
+    </div>
+  </div>
+  <ul>
+    <li>El separador pasa a ser un elemento propio de ancho fijo entre segmentos. Todos los huecos miden lo mismo y no hay separador antes del primero.</li>
+    <li>La raíz es una ficha «D:» con ícono de disco. Para rutas de red, la ficha muestra el servidor y el recurso.</li>
+    <li>«…» aparece solo cuando la ruta no cabe, ocupa el lugar de los segmentos ocultos y abre el mismo menú de carpetas superiores que hoy. La raíz y la carpeta actual siempre quedan visibles.</li>
+    <li>La carpeta actual va en seminegrita.</li>
+  </ul>
+  <div class="decide stack-s">
+    <h3>Decisión que necesito</h3>
+    <p>¿Apruebas ocultar los segmentos del medio y dejar siempre visible la raíz? Hoy se ocultan los del principio.</p>
+  </div>
+</section>
+
+<!-- ============ 5 ============ -->
+<section class="stack">
+  <h2><span class="num">5</span>Contraste: el problema es más acotado de lo que decía el plan</h2>
+  <p>El plan pedía «contraste AA en los temas oscuros». Calculé el contraste de los 15 temas de fábrica y el texto normal cumple en todos, también el secundario: va de 6,2:1 a 11,2:1 sobre el fondo de las filas, y la norma pide 4,5:1. Lo que falla son cuatro usos concretos, y dos de ellos afectan a los temas claros.</p>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>Tema</th><th class="n">Secundario sobre fila</th><th class="n">Secundario sobre selección</th><th class="n">Secundario sobre fila reciente</th><th class="n">Secundario sobre encabezado activo</th><th class="n">Borde de control</th></tr></thead>
+    <tbody>
+      <tr><td>dark-blue</td><td class="n">8,4</td><td class="n edge">4,53</td><td class="n">5,23</td><td class="n">6,38</td><td class="n fail">1,29</td></tr>
+      <tr><td>commander</td><td class="n">10,5</td><td class="n">5,69</td><td class="n">7,17</td><td class="n">8,15</td><td class="n fail">1,31</td></tr>
+      <tr><td>solarized-dark</td><td class="n">7,5</td><td class="n">4,84</td><td class="n">5,36</td><td class="n">5,90</td><td class="n fail">1,34</td></tr>
+      <tr><td>dracula</td><td class="n">7,8</td><td class="n edge">4,52</td><td class="n fail">4,32</td><td class="n">5,51</td><td class="n fail">1,42</td></tr>
+      <tr><td>green-on-blue</td><td class="n">9,2</td><td class="n edge">4,51</td><td class="n">5,04</td><td class="n">6,39</td><td class="n fail">1,35</td></tr>
+      <tr><td>high-contrast</td><td class="n">11,2</td><td class="n">8,42</td><td class="n">8,22</td><td class="n">8,04</td><td class="n fail">1,42</td></tr>
+      <tr><td>neon-retro</td><td class="n">6,2</td><td class="n edge">4,51</td><td class="n fail">3,78</td><td class="n">4,87</td><td class="n fail">1,29</td></tr>
+      <tr><td>paper</td><td class="n">6,4</td><td class="n">4,81</td><td class="n">4,56</td><td class="n fail">4,34</td><td class="n fail">1,25</td></tr>
+      <tr><td>winxp</td><td class="n">8,1</td><td class="n">6,85</td><td class="n">8,10</td><td class="n">5,48</td><td class="n fail">1,60</td></tr>
+      <tr><td>isgroth-nieve</td><td class="n">6,6</td><td class="n">5,61</td><td class="n">6,44</td><td class="n fail">4,41</td><td class="n fail">1,69</td></tr>
+      <tr><td>isgroth-perla</td><td class="n">6,3</td><td class="n">5,38</td><td class="n">6,18</td><td class="n fail">4,27</td><td class="n fail">1,68</td></tr>
+      <tr><td>isgroth-arena</td><td class="n">6,5</td><td class="n">5,34</td><td class="n">6,35</td><td class="n fail">4,41</td><td class="n fail">1,70</td></tr>
+      <tr><td>isgroth-salvia</td><td class="n">6,5</td><td class="n">5,43</td><td class="n">6,33</td><td class="n fail">4,36</td><td class="n fail">1,73</td></tr>
+      <tr><td>isgroth-bruma</td><td class="n">6,3</td><td class="n">5,30</td><td class="n">6,14</td><td class="n fail">4,23</td><td class="n fail">1,69</td></tr>
+      <tr><td>isgroth-grafito-claro</td><td class="n">6,6</td><td class="n">5,46</td><td class="n">6,44</td><td class="n fail">4,46</td><td class="n fail">1,74</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="cap">Razón de contraste WCAG 2.1 entre el color de texto secundario del tema y cada fondo. Rojo: bajo el mínimo (4,5:1 para texto, 3:1 para el borde de un control). Amarillo: cumple por menos de 0,05. Los fondos compuestos (encabezado activo, fila reciente) los calculé mezclando los colores como lo hace <code>theme.slint</code>; el oscurecido de Slint está aproximado, así que las cifras pueden variar en la segunda decimal.</p>
+  <div class="stack-s">
+    <h3>Propuesta</h3>
+    <ul>
+      <li><strong>Filas seleccionadas y filas recientes:</strong> las columnas que hoy usan el color secundario pasan al color de texto principal en esas dos situaciones. Con eso el mínimo sube a 5,9:1 en todos los temas, sin tocar ningún archivo de tema.</li>
+      <li><strong>Encabezado del panel activo:</strong> el único texto secundario que encontré ahí es «mover», que desaparece con el punto 2.</li>
+      <li><strong>Bordes de controles:</strong> el campo de ruta, el botón Calcular y los botones con borde usan hoy el color de los separadores, que ronda 1,3:1 a 1,7:1. Propongo un color nuevo solo para bordes de controles: el texto secundario mezclado con el fondo en la proporción que cada tema necesite para llegar a 3:1. Los separadores decorativos no cambian.</li>
+      <li><strong>Tamaños:</strong> ningún texto bajo 11 px. La ruta del campo de la toolbar, si sobrevive al punto 3, pasa al color principal.</li>
+      <li><strong>Un test nuevo en <code>core</code></strong> que calcula estas razones para cada tema de fábrica y falla si alguna baja del mínimo. Así un tema nuevo no puede reintroducir el problema.</li>
+    </ul>
+  </div>
+  <div class="duo">
+    <div style="flex:1 1 300px;min-width:0">
+      <h3>Hoy</h3>
+      <div class="scroll"><div class="mock rows" style="min-width:360px">
+        <div class="h"><span>Nombre</span><span>Extensión</span><span class="r">Tamaño</span><span>Modificado</span></div>
+        <div class="selrow"><span>Guia.txt</span><span class="d">txt</span><span class="d r">71 B</span><span class="d">2026-11-08 14:11</span></div>
+        <div class="newrow"><span>Informe.docx</span><span class="d">docx</span><span class="d r">48 KB</span><span class="d">2026-11-24 05:40</span></div>
+        <div><span>Tareas.csv</span><span class="d">csv</span><span class="d r">51 B</span><span class="d">2026-11-08 14:11</span></div>
+      </div></div>
+    </div>
+    <div style="flex:1 1 300px;min-width:0">
+      <h3>Propuesta</h3>
+      <div class="scroll"><div class="mock rows" style="min-width:360px">
+        <div class="h"><span>Nombre</span><span>Extensión</span><span class="r">Tamaño</span><span>Modificado</span></div>
+        <div class="selrow"><span>Guia.txt</span><span>txt</span><span class="r">71 B</span><span>2026-11-08 14:11</span></div>
+        <div class="newrow"><span>Informe.docx</span><span>docx</span><span class="r">48 KB</span><span>2026-11-24 05:40</span></div>
+        <div><span>Tareas.csv</span><span class="d">csv</span><span class="d r">51 B</span><span class="d">2026-11-08 14:11</span></div>
+      </div></div>
+    </div>
+  </div>
+  <div class="decide stack-s">
+    <h3>Decisión que necesito</h3>
+    <p>¿Apruebas la versión acotada? El cambio de bordes es el único que se nota a simple vista en todos los temas; si prefieres verlo antes en la app, lo dejo detrás de una opción experimental.</p>
+  </div>
+</section>
+
+<!-- ============ 6 ============ -->
+<section class="stack">
+  <h2><span class="num">6</span>Propiedades sin valores cortados</h2>
+  <div class="stack-s">
+    <h3>Hoy</h3>
+    <ul>
+      <li>Cada valor ocupa una sola línea y se corta con puntos suspensivos. No hay tooltip, ni ajuste de línea, ni forma de copiarlo.</li>
+      <li>Con el panel en su ancho habitual se cortan las fechas («2026-11-08 1…») y la ruta («D:\NaygoDe…»), que son justo los datos que uno va a mirar ahí.</li>
+      <li>La columna de etiquetas mide 84 px fijos.</li>
+    </ul>
+  </div>
+  <div class="duo">
+    <div>
+      <h3>Hoy</h3>
+      <div class="scroll"><div class="mock props">
+        <div><span class="k">Nombre</span><span class="v">Recursos</span></div>
+        <div><span class="k">Tipo</span><span class="v">Carpeta</span></div>
+        <div><span class="k">Tamaño</span><span class="v"><span class="btn">Calcular</span></span></div>
+        <div><span class="k">Modificado</span><span class="v">2026-11-08 14:11</span></div>
+        <div><span class="k">Creado</span><span class="v">2026-11-08 14:10</span></div>
+        <div><span class="k">Ruta</span><span class="v">D:\NaygoDemo\Home\Proyecto Aurora\Documentos\Recursos</span></div>
+      </div></div>
+    </div>
+    <div>
+      <h3>Propuesta</h3>
+      <div class="scroll"><div class="mock props new">
+        <div><span class="k">Nombre</span><span class="v">Recursos</span></div>
+        <div><span class="k">Tipo</span><span class="v">Carpeta</span></div>
+        <div><span class="k">Tamaño</span><span class="v"><span class="btn">Calcular</span></span></div>
+        <div><span class="k">Modificado</span><span class="v">2026-11-08 14:11</span></div>
+        <div><span class="k">Creado</span><span class="v">2026-11-08 14:10</span></div>
+        <div><span class="k">Ruta</span><span class="v">D:\NaygoDemo\Home\Proyecto Aurora\Documentos\Recursos</span><span class="cp"><svg><use href="#i-copy"/></svg></span></div>
+      </div></div>
+    </div>
+  </div>
+  <ul>
+    <li>Los valores se ajustan a varias líneas. Una ruta se parte en cualquier carácter, con un máximo de 6 líneas; pasado eso se corta y el tooltip muestra el valor completo.</li>
+    <li>La columna de etiquetas baja de 84 a 72 px, que alcanza para «Modificado» en español. No medí las etiquetas en los otros 9 idiomas: si alguna no cabe, se ajusta a dos líneas.</li>
+    <li>Un clic en un valor lo copia y muestra el aviso «Copiado», como ya hace el botón de copiar ruta. Al pasar el mouse aparece un ícono de copiar.</li>
+  </ul>
+  <div class="stack-s">
+    <h3>Costo y riesgo</h3>
+    <ul>
+      <li>El panel queda más alto con rutas largas. Con 190 px útiles, una ruta de 200 caracteres ocupa las 6 líneas.</li>
+      <li>La columna de etiquetas más angosta puede partir en dos líneas alguna etiqueta en otro idioma.</li>
+    </ul>
+  </div>
+  <div class="decide stack-s">
+    <h3>Decisión que necesito</h3>
+    <p>¿Apruebas el ajuste de línea como comportamiento de fábrica? La alternativa más conservadora es dejar una línea y agregar solo el tooltip y el clic para copiar.</p>
+  </div>
+</section>
+
+<!-- ============ extras ============ -->
+<section class="stack">
+  <h2>Lo que encontré de paso</h2>
+  <p>No son parte de la propuesta. Los dejo anotados porque salieron al levantar el estado actual, y cada uno necesita confirmación antes de tocarlo.</p>
+  <ul>
+    <li>Dos de los cuatro paquetes de tema e íconos, «Dark Teal» y «Light», apuntan a temas que no existen entre los 15 de fábrica (<code>dark-teal</code> y <code>light</code>). Según el código, en ese caso se aplica <code>dark-blue</code>. No verifiqué si esos paquetes se ofrecen en la interfaz.</li>
+    <li>Hay dos ajustes guardados que la interfaz no lee: el estilo de íconos de la toolbar y la posición de la barra (arriba o al costado).</li>
+    <li><code>path-bar.slint</code>, una barra de ruta antigua, se importa pero no se usa en ninguna parte.</li>
+    <li>Los colores por defecto escritos en <code>theme.slint</code> ya no coinciden con <code>dark-blue.json</code>. No se ven porque el arranque los reemplaza.</li>
+    <li>No existe un color propio para el texto de una fila seleccionada; por eso el punto 5 lo resuelve cambiando qué color se usa y no agregando uno.</li>
+  </ul>
+</section>
+
+<section class="stack">
+  <h2>Cómo responder</h2>
+  <p>Basta con el número y una palabra: «1 sí», «3 B», «5 con la opción experimental», «6 no». Lo que apruebes se implementa en un lote propio, punto por punto, con una captura real del antes y del después de cada uno.</p>
+</section>
+
+</div>
