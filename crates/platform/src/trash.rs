@@ -613,18 +613,51 @@ fn find_original_alias(
 /// Empareja un elemento enumerado de la Papelera con un recibo reconstruido. El Shell puede
 /// devolver la carpeta original con otra capitalización o separadores equivalentes; comparar
 /// `Path` directamente es sensible a caja y puede dejar un recibo válido sin restaurar.
+///
+/// Con "ocultar extensiones" el nombre para mostrar llega sin extensión (y a veces como ruta
+/// completa): `...\informe` en vez de `informe.txt`. La extensión real sí está en la ruta
+/// física del elemento (`$R….txt`, `item_fs_path`), así que se acepta también
+/// `nombre_mostrado + "." + extensión_real`. Sin I/O extra: todo sale de cadenas ya leídas.
 #[cfg(windows)]
 fn recycle_bin_entry_matches(
     deleted_from: Option<&str>,
     display_name: Option<&str>,
+    item_fs_path: Option<&str>,
     original_parent: &std::path::Path,
     original_name: &std::ffi::OsStr,
 ) -> bool {
-    deleted_from.is_some_and(|folder| {
+    let folder_matches = deleted_from.is_some_and(|folder| {
         windows_paths_equal_text(std::path::Path::new(folder), original_parent)
-    }) && display_name
+    });
+    if !folder_matches {
+        return false;
+    }
+    let Some(shown) = display_name
         .and_then(|name| std::path::Path::new(name).file_name())
-        .is_some_and(|name| name == original_name)
+        .map(|name| name.to_os_string())
+    else {
+        return false;
+    };
+    let same_name = |candidate: &std::ffi::OsStr| {
+        windows_paths_equal_text(
+            std::path::Path::new(candidate),
+            std::path::Path::new(original_name),
+        )
+    };
+    if same_name(&shown) {
+        return true;
+    }
+    // Extensión oculta: reconstruir el nombre con la extensión de la ruta física.
+    let Some(extension) = item_fs_path
+        .and_then(|path| std::path::Path::new(path).extension())
+        .filter(|extension| !extension.is_empty())
+    else {
+        return false;
+    };
+    let mut rebuilt = shown;
+    rebuilt.push(".");
+    rebuilt.push(extension);
+    same_name(&rebuilt)
 }
 
 /// El Shell necesita la forma de parsing habitual, no el prefijo extendido `\\?\\`; en UNC se
@@ -841,84 +874,6 @@ fn long_form_of_original(original: &std::path::Path) -> PathBuf {
     }
 }
 
-/// DIAGNÓSTICO TEMPORAL (solo para tests en CI; se elimina al cerrar el caso): describe las
-/// entradas de la Papelera cuyo nombre se parece al del archivo original y lo que el código de
-/// restauración compara contra ellas. Usa la misma enumeración que `restore_from_trash`.
-#[cfg(windows)]
-#[doc(hidden)]
-pub fn debug_dump_recycle_entries(original: &std::path::Path) -> String {
-    use std::fmt::Write as _;
-    use windows::core::{Interface, GUID};
-    use windows::Win32::Foundation::PROPERTYKEY;
-    use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
-    use windows::Win32::UI::Shell::{IShellItem2, SIGDN_FILESYSPATH, SIGDN_NORMALDISPLAY};
-
-    const DELETED_FROM: PROPERTYKEY = PROPERTYKEY {
-        fmtid: GUID::from_u128(0x9b174b33_40ff_11d2_a27e_00c04fc30871),
-        pid: 2,
-    };
-    let normalized = long_form_of_original(original);
-    let normalized_parent = normalized.parent().map(|parent| parent.to_path_buf());
-    let normalized_name = normalized.file_name().map(|name| name.to_os_string());
-    let needle = original
-        .file_stem()
-        .map(|stem| stem.to_string_lossy().to_lowercase())
-        .unwrap_or_default();
-    let mut out = String::new();
-    let _ = writeln!(
-        out,
-        "[DIAG] original={original:?} normalizado={normalized:?} parent={normalized_parent:?} name={normalized_name:?}"
-    );
-    // SAFETY: COM se inicializa y libera dentro de esta función, en el mismo hilo.
-    unsafe {
-        let hr = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-        let needs_uninit = hr.is_ok();
-        match enumerate_recycle_bin_items() {
-            Ok(items) => {
-                let _ = writeln!(out, "[DIAG] entradas en la Papelera: {}", items.len());
-                for item in &items {
-                    let display = shell_display_name(item, SIGDN_NORMALDISPLAY)
-                        .map(|value| value.to_string_lossy().into_owned());
-                    let matches_name = display
-                        .as_deref()
-                        .is_some_and(|value| value.to_lowercase().contains(&needle));
-                    if !matches_name {
-                        continue;
-                    }
-                    let deleted_from = item
-                        .cast::<IShellItem2>()
-                        .ok()
-                        .and_then(|item2| item2.GetString(&DELETED_FROM).ok())
-                        .and_then(take_shell_string)
-                        .map(|value| value.to_string_lossy().into_owned());
-                    let fs_path = shell_display_name(item, SIGDN_FILESYSPATH)
-                        .map(|value| value.to_string_lossy().into_owned());
-                    let verdict = match (&normalized_parent, &normalized_name) {
-                        (Some(parent), Some(name)) => recycle_bin_entry_matches(
-                            deleted_from.as_deref(),
-                            display.as_deref(),
-                            parent,
-                            name,
-                        ),
-                        _ => false,
-                    };
-                    let _ = writeln!(
-                        out,
-                        "[DIAG] entrada: deleted_from={deleted_from:?} display={display:?} fs_path={fs_path:?} coincide={verdict}"
-                    );
-                }
-            }
-            Err(error) => {
-                let _ = writeln!(out, "[DIAG] no se pudo enumerar: {error}");
-            }
-        }
-        if needs_uninit {
-            CoUninitialize();
-        }
-    }
-    out
-}
-
 /// Restaura ítems identificados durante `move_to_trash_with_progress` a sus ubicaciones
 /// originales. Prioriza el `IShellItem` reportado por la operación y usa enumeración como
 /// respaldo para recibos reconstruidos. Corre en un worker de Naygo; no toca el hilo UI.
@@ -941,7 +896,8 @@ fn restore_from_trash_with_enumerator(
     use windows::Win32::UI::Shell::{
         BHID_SFUIObject, FileOperation, IContextMenu, IFileOperation, IFileOperationProgressSink,
         IShellItem, IShellItem2, SHCreateItemFromParsingName, CMF_NORMAL, CMINVOKECOMMANDINFO,
-        FOF_NOCONFIRMATION, FOF_NOERRORUI, FOF_RENAMEONCOLLISION, FOF_SILENT, SIGDN_NORMALDISPLAY,
+        FOF_NOCONFIRMATION, FOF_NOERRORUI, FOF_RENAMEONCOLLISION, FOF_SILENT, SIGDN_FILESYSPATH,
+        SIGDN_NORMALDISPLAY,
     };
     use windows::Win32::UI::WindowsAndMessaging::{CreatePopupMenu, DestroyMenu};
 
@@ -1022,9 +978,12 @@ fn restore_from_trash_with_enumerator(
                                 .and_then(|value| value.into_string().ok());
                             let name = shell_display_name(item, SIGDN_NORMALDISPLAY)
                                 .and_then(|value| value.into_string().ok());
+                            let fs_path = shell_display_name(item, SIGDN_FILESYSPATH)
+                                .and_then(|value| value.into_string().ok());
                             recycle_bin_entry_matches(
                                 deleted_from.as_deref(),
                                 name.as_deref(),
+                                fs_path.as_deref(),
                                 original_parent,
                                 original_name,
                             )
@@ -1846,20 +1805,13 @@ mod tests {
             original: short_folder.join(file.file_name().unwrap()),
             trashed_path: None,
         };
-        let receipts_debug = format!("{receipts:?}");
         drop(receipts);
         // Fuerza el camino de enumeración (recibo reconstruido, sin identidad cacheada).
         recycle_item_names()
             .lock()
             .unwrap()
             .remove(&long_form_of_original(&file));
-        let restored = restore_from_trash(std::slice::from_ref(&short_receipt));
-        if restored.is_err() {
-            eprintln!("[DIAG] recibos de move_to_trash: {receipts_debug}");
-            eprintln!("[DIAG] recibo corto: {short_receipt:?}");
-            eprintln!("{}", debug_dump_recycle_entries(&short_receipt.original));
-        }
-        restored.expect("restaurar con recibo en forma corta");
+        restore_from_trash(&[short_receipt]).expect("restaurar con recibo en forma corta");
         assert_eq!(std::fs::read(&file).unwrap(), b"recibo corto");
     }
 
@@ -1956,19 +1908,70 @@ mod tests {
         assert!(recycle_bin_entry_matches(
             Some("c:/users/nicolas/documentos"),
             Some("informe.txt"),
+            None,
             std::path::Path::new(r"C:\Users\Nicolas\Documentos"),
             std::ffi::OsStr::new("informe.txt"),
         ));
         assert!(!recycle_bin_entry_matches(
             Some(r"C:\Users\Nicolas\Otra carpeta"),
             Some("informe.txt"),
+            None,
             std::path::Path::new(r"C:\Users\Nicolas\Documentos"),
             std::ffi::OsStr::new("informe.txt"),
         ));
         assert!(!recycle_bin_entry_matches(
             Some(r"C:\Users\Nicolas\Documentos"),
             Some("otro.txt"),
+            None,
             std::path::Path::new(r"C:\Users\Nicolas\Documentos"),
+            std::ffi::OsStr::new("informe.txt"),
+        ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn entrada_de_papelera_con_extension_oculta_se_empareja_por_la_ruta_fisica() {
+        let parent = std::path::Path::new(r"C:\Users\Nicolas\Documentos");
+        let folder = Some(r"C:\Users\Nicolas\Documentos");
+        let matches = |display: &str, fs_path: Option<&str>, name: &str| {
+            recycle_bin_entry_matches(
+                folder,
+                Some(display),
+                fs_path,
+                parent,
+                std::ffi::OsStr::new(name),
+            )
+        };
+        // Nombre para mostrar como ruta completa y sin extensión (extensiones ocultas).
+        let hidden = r"C:\Users\Nicolas\Documentos\informe";
+        let physical = Some(r"C:\$Recycle.Bin\S-1-5-21-1\$RABCDEF.txt");
+        assert!(matches(hidden, physical, "informe.txt"));
+        assert!(matches(
+            hidden,
+            Some(r"C:\$Recycle.Bin\S-1-5-21-1\$RABCDEF.TXT"),
+            "Informe.txt"
+        ));
+        // Nombre con extensión visible: sigue funcionando sin ruta física.
+        assert!(matches("informe.txt", None, "informe.txt"));
+        // Entrada `a` con otra extensión real: no es `a.txt`.
+        assert!(!matches(
+            r"C:\Users\Nicolas\Documentos\a",
+            Some(r"C:\$Recycle.Bin\S-1-5-21-1\$R000001.dat"),
+            "a.txt"
+        ));
+        // Entrada cuyo nombre real no tiene extensión: no es `a.txt`.
+        assert!(!matches(
+            r"C:\Users\Nicolas\Documentos\a",
+            Some(r"C:\$Recycle.Bin\S-1-5-21-1\$R000002"),
+            "a.txt"
+        ));
+        assert!(!matches(r"C:\Users\Nicolas\Documentos\a", None, "a.txt"));
+        // Carpeta distinta: nunca coincide aunque el nombre reconstruido sea igual.
+        assert!(!recycle_bin_entry_matches(
+            Some(r"C:\Otra"),
+            Some(hidden),
+            physical,
+            parent,
             std::ffi::OsStr::new("informe.txt"),
         ));
     }
