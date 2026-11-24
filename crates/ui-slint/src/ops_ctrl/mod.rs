@@ -2745,11 +2745,19 @@ mod tests {
         if was_recycled {
             // La prueba usa la Papelera real. Restaurar sólo su fixture al directorio temporal
             // único permite que TempDir la limpie y evita acumular entradas con cada ejecución.
-            naygo_platform::trash::restore_from_trash(&[naygo_platform::trash::TrashReceipt {
+            let receipt = naygo_platform::trash::TrashReceipt {
                 original: file.clone(),
                 trashed_path: None,
-            }])
-            .unwrap();
+            };
+            let restored =
+                naygo_platform::trash::restore_from_trash(std::slice::from_ref(&receipt));
+            if restored.is_err() {
+                eprintln!(
+                    "{}",
+                    naygo_platform::trash::debug_dump_recycle_entries(&receipt.original)
+                );
+            }
+            restored.unwrap();
         }
         assert!(was_recycled, "IFileOperation recibió la ruta original");
         assert_eq!(std::fs::read(&file).unwrap(), b"descartar");

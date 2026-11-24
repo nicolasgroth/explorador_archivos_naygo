@@ -841,6 +841,84 @@ fn long_form_of_original(original: &std::path::Path) -> PathBuf {
     }
 }
 
+/// DIAGNÓSTICO TEMPORAL (solo para tests en CI; se elimina al cerrar el caso): describe las
+/// entradas de la Papelera cuyo nombre se parece al del archivo original y lo que el código de
+/// restauración compara contra ellas. Usa la misma enumeración que `restore_from_trash`.
+#[cfg(windows)]
+#[doc(hidden)]
+pub fn debug_dump_recycle_entries(original: &std::path::Path) -> String {
+    use std::fmt::Write as _;
+    use windows::core::{Interface, GUID};
+    use windows::Win32::Foundation::PROPERTYKEY;
+    use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
+    use windows::Win32::UI::Shell::{IShellItem2, SIGDN_FILESYSPATH, SIGDN_NORMALDISPLAY};
+
+    const DELETED_FROM: PROPERTYKEY = PROPERTYKEY {
+        fmtid: GUID::from_u128(0x9b174b33_40ff_11d2_a27e_00c04fc30871),
+        pid: 2,
+    };
+    let normalized = long_form_of_original(original);
+    let normalized_parent = normalized.parent().map(|parent| parent.to_path_buf());
+    let normalized_name = normalized.file_name().map(|name| name.to_os_string());
+    let needle = original
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "[DIAG] original={original:?} normalizado={normalized:?} parent={normalized_parent:?} name={normalized_name:?}"
+    );
+    // SAFETY: COM se inicializa y libera dentro de esta función, en el mismo hilo.
+    unsafe {
+        let hr = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        let needs_uninit = hr.is_ok();
+        match enumerate_recycle_bin_items() {
+            Ok(items) => {
+                let _ = writeln!(out, "[DIAG] entradas en la Papelera: {}", items.len());
+                for item in &items {
+                    let display = shell_display_name(item, SIGDN_NORMALDISPLAY)
+                        .map(|value| value.to_string_lossy().into_owned());
+                    let matches_name = display
+                        .as_deref()
+                        .is_some_and(|value| value.to_lowercase().contains(&needle));
+                    if !matches_name {
+                        continue;
+                    }
+                    let deleted_from = item
+                        .cast::<IShellItem2>()
+                        .ok()
+                        .and_then(|item2| item2.GetString(&DELETED_FROM).ok())
+                        .and_then(take_shell_string)
+                        .map(|value| value.to_string_lossy().into_owned());
+                    let fs_path = shell_display_name(item, SIGDN_FILESYSPATH)
+                        .map(|value| value.to_string_lossy().into_owned());
+                    let verdict = match (&normalized_parent, &normalized_name) {
+                        (Some(parent), Some(name)) => recycle_bin_entry_matches(
+                            deleted_from.as_deref(),
+                            display.as_deref(),
+                            parent,
+                            name,
+                        ),
+                        _ => false,
+                    };
+                    let _ = writeln!(
+                        out,
+                        "[DIAG] entrada: deleted_from={deleted_from:?} display={display:?} fs_path={fs_path:?} coincide={verdict}"
+                    );
+                }
+            }
+            Err(error) => {
+                let _ = writeln!(out, "[DIAG] no se pudo enumerar: {error}");
+            }
+        }
+        if needs_uninit {
+            CoUninitialize();
+        }
+    }
+    out
+}
+
 /// Restaura ítems identificados durante `move_to_trash_with_progress` a sus ubicaciones
 /// originales. Prioriza el `IShellItem` reportado por la operación y usa enumeración como
 /// respaldo para recibos reconstruidos. Corre en un worker de Naygo; no toca el hilo UI.
@@ -1768,13 +1846,20 @@ mod tests {
             original: short_folder.join(file.file_name().unwrap()),
             trashed_path: None,
         };
+        let receipts_debug = format!("{receipts:?}");
         drop(receipts);
         // Fuerza el camino de enumeración (recibo reconstruido, sin identidad cacheada).
         recycle_item_names()
             .lock()
             .unwrap()
             .remove(&long_form_of_original(&file));
-        restore_from_trash(&[short_receipt]).expect("restaurar con recibo en forma corta");
+        let restored = restore_from_trash(std::slice::from_ref(&short_receipt));
+        if restored.is_err() {
+            eprintln!("[DIAG] recibos de move_to_trash: {receipts_debug}");
+            eprintln!("[DIAG] recibo corto: {short_receipt:?}");
+            eprintln!("{}", debug_dump_recycle_entries(&short_receipt.original));
+        }
+        restored.expect("restaurar con recibo en forma corta");
         assert_eq!(std::fs::read(&file).unwrap(), b"recibo corto");
     }
 
