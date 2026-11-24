@@ -127,8 +127,9 @@ Contratos del motor de copiar/mover (`core/ops/plan.rs`, `core/ops/engine.rs`):
   es `Failed` (`naygo:link-not-moved`); en Copiar, un enlace a carpeta es `Failed`
   (`naygo:link-not-copied`) y uno a archivo se copia por contenido. "Reintentar" excluye los
   fallos de enlace (`ops::is_link_failure`, que también reconoce los textos previos sin código).
-  Un Replace cuyo árbol tiene un enlace que no se copiaría o un `planned_failure` se rechaza en
-  `prepare_tree_replacements` antes de crear staging (`naygo:replace-incomplete`).
+  Un Replace cuyo árbol tiene un enlace que no se copiaría o un `planned_failure` copia a staging
+  y no publica nada: origen y destino anterior quedan intactos (rechazarlo antes de copiar está
+  en `BACKLOG.md`).
   Nunca se borra nada a través de un enlace ni se recorre uno anidado; la única lectura a través
   de un enlace es la copia por contenido de un enlace a archivo.
 - **Identidad.** Antes de resolver conflictos, `ops::same_identity(from, to)` (sobre

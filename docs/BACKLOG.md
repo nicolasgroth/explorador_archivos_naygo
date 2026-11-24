@@ -69,9 +69,33 @@ Primero lo que nota el usuario:
 - **Textos sin clave i18n:** unos 20 errores de importar/exportar packs, los detalles técnicos de
   `TrashError::Failed`, "worker de listado desconectado" (`listing.rs`), el aviso "La plantilla …
   no existe" y el diálogo de `--theme`. Los demás `Failed` del motor siguen en español (deuda
-  previa); los de enlace, publicación, identidad y Replace incompleto ya tienen código y clave.
+  previa); los de enlace, publicación e identidad ya tienen código y clave. En una entrega
+  fallida esos motivos todavía salen en español aunque la interfaz esté en otro idioma.
 - **Progreso de una operación con un fallo planificado de archivo:** el total de archivos lo
   cuenta pero el contador de hechos nunca lo suma, así que la barra no llega al total.
+- **Reemplazar una carpeta que contiene un enlace o una subcarpeta ilegible** copia todo el árbol
+  a la carpeta temporal y después lo descarta (no publica nada, no se pierde nada). Rechazarlo
+  antes de copiar se implementó y se revirtió, porque el primer intento tenía tres defectos que
+  el rediseño debe evitar: «Reintentar» ofrecía el enlace y nunca se podía confirmar (el fallo
+  debe registrarse sobre la carpeta raíz, no sobre el enlace); el rechazo abortaba toda la
+  operación y los demás elementos seleccionados no aparecían ni como fallidos ni como omitidos
+  (debe rechazarse solo ese destino); y la revisión previa hacía un `stat` por archivo sin
+  atender Cancelar. Falta además un test de Mover + Reemplazar con un enlace anidado que
+  compruebe que el origen y el destino anterior sobreviven.
+- **Mismo archivo, cuando no se puede comprobar.** Si el destino existe y no se puede abrir para
+  leer (otro programa lo tiene en exclusiva, por ejemplo un `.pst`), el paso falla con cualquier
+  política de conflicto, sin preguntar; antes «Saltar» lo omitía y «Conservar ambos» copiaba con
+  otro nombre. Si es un elemento seleccionado, además no se ofrece en «Reintentar». Afinar:
+  comprobar la identidad solo cuando la acción resuelta sea sobrescribir o renombrar el
+  existente, y tratar el caso raíz como un paso fallido normal.
+- **Enlaces a archivo en el listado:** como el listado ya no sigue enlaces, un enlace a archivo
+  aparece sin tamaño, se ordena como 0, queda fuera de un filtro por rango de tamaño y la
+  comparación de paneles lo marca distinto de un archivo igual. Su fecha es la del enlace.
+- **Entrar a un junction cuyo destino es un recurso de red caído** todavía ocupa un cupo local
+  mientras dura el intento: la ruta se clasifica por su letra de unidad.
+- **Sobrescribir un destino de solo lectura que tiene otro hard link:** quitar el atributo afecta
+  a todos los nombres del archivo, así que el otro nombre queda con el contenido antiguo y sin
+  solo lectura. Si el reintento falla y tampoco se puede restaurar el atributo, no se informa.
 - **Propuestas de rendimiento (decide Nicolás).**
   - Filas perezosas: guardar solo las claves y armar la fila al pedirla; ~100 MiB menos por cada
     100.000 filas.
@@ -82,6 +106,13 @@ Primero lo que nota el usuario:
 - **Instalador.** 69 MB contra 15 MB del portable: revisar qué lo infla.
 
 Técnico (sin efecto visible):
+- **Restos de la ola de arreglos del review final:** `copy_with_junction`
+  (`ui-slint/src/ops_ctrl/mod.rs`, helper de tests) no tiene `cfg(windows)` y rompe el clippy
+  opcional de Linux por `dead_code`; el test `shell_execute_ex_pide_noasync_y_sin_ui` compara una
+  constante consigo misma; el comentario "Las cuatro claves" de `vm_builders.rs` quedó corto;
+  mover con «Sobrescribir» sobre un destino de solo lectura en el mismo volumen funciona como
+  copia + borrado y no tiene test propio; en modo multi-instancia los journals comparten nombre
+  (`op-N.json`) con la instancia normal si usan la misma carpeta de configuración.
 
 - Medir un Mover durable de 5.000 archivos pequeños a un USB (`FlushFileBuffers` +
   `MOVEFILE_WRITE_THROUGH` por archivo) y dejar la cifra en BENCHMARKS.

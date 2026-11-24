@@ -39,9 +39,6 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
   Antes, una carpeta con un junction hacía que la revisión de reintento rechazara todo, incluso los
   archivos que sí se podían reintentar; ahora los enlaces quedan fuera y el resto se ofrece.
 - Los avisos de enlace no copiado, enlace no movido y copia que no se pudo guardar se muestran en el idioma de la interfaz.
-- Reemplazar una carpeta que contiene enlaces o subcarpetas ilegibles se rechaza al empezar.
-  Antes se copiaba todo a una carpeta temporal para descartarlo al final; ahora el aviso es
-  inmediato y el destino y el origen quedan intactos.
 - Si no se puede comprobar si el origen y el destino son el mismo archivo, el paso falla sin tocar nada.
 - Restaurar desde la Papelera ya no pisa un elemento que aparece en el destino durante la operación.
   El elemento restaurado queda con otro nombre y el aviso indica dónde.

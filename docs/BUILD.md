@@ -189,7 +189,12 @@ $env:NAYGO_DEBUG_MULTI_INSTANCE = "1"
 
 Con la variable activa, esa instancia no usa el mutex, el evento ni el spool de la instancia
 única, y lo deja escrito en el log. `--shutdown` no apaga la instancia de otro proceso: se
-registra y sale. Cualquier otro valor (`0`, `true`, vacío) se ignora. Si el atajo global ya lo
+registra y sale. Tampoco recupera reemplazos de carpeta interrumpidos ni ofrece retomar
+operaciones pendientes, para no interferir con una operación en curso de la otra instancia; un
+reemplazo que una instancia de prueba deje a medias lo recupera después una instancia normal.
+Los journals siguen compartiendo carpeta y nombres (`op-1.json`, …) con la instancia normal si
+ambas usan la misma carpeta de configuración: lanza siempre las pruebas desde una copia del exe
+en su propia carpeta. Cualquier otro valor (`0`, `true`, vacío) se ignora. Si el atajo global ya lo
 tiene la otra instancia, la de prueba solo lo registra en el log y sigue. Lo usan
 `scripts/repro-scroll.ps1` y `scripts/repro-rename.ps1`. No es una opción para usuarios.
 
