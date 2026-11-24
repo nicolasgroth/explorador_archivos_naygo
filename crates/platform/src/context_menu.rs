@@ -246,13 +246,13 @@ impl Comctl32Subclass {
     }
 
     fn resolve() -> Option<Self> {
-        use windows::core::{w, PCSTR};
-        use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
+        use windows::core::PCSTR;
+        use windows::Win32::System::LibraryLoader::GetProcAddress;
+        let module = load_system_comctl32()?;
         // SAFETY: comctl32 es un DLL del sistema; no se libera nunca, así que los
         // punteros a función siguen válidos durante toda la vida del proceso. Cada
         // ordinal se transmuta a la firma documentada de su función (commctrl.h).
         unsafe {
-            let module = LoadLibraryW(w!("comctl32.dll")).ok()?;
             let by_ordinal = |ordinal: usize| GetProcAddress(module, PCSTR(ordinal as *const u8));
             let set = by_ordinal(410)?;
             #[cfg(test)]
@@ -268,6 +268,16 @@ impl Comctl32Subclass {
             })
         }
     }
+}
+
+/// Carga `comctl32.dll` buscando SOLO en System32 (`LOAD_LIBRARY_SEARCH_SYSTEM32`): un DLL con ese
+/// nombre junto a un `naygo.exe` portable (carpeta de descargas, USB) nunca se carga.
+#[cfg(windows)]
+fn load_system_comctl32() -> Option<windows::Win32::Foundation::HMODULE> {
+    use windows::core::w;
+    use windows::Win32::System::LibraryLoader::{LoadLibraryExW, LOAD_LIBRARY_SEARCH_SYSTEM32};
+    // SAFETY: nombre UTF-16 estático terminado en NUL; sin handle de archivo (reservado).
+    unsafe { LoadLibraryExW(w!("comctl32.dll"), None, LOAD_LIBRARY_SEARCH_SYSTEM32) }.ok()
 }
 
 /// Procedimiento de la subclase temporal. `dwrefdata` es un `*const MenuMsgHandler`
@@ -621,6 +631,32 @@ pub fn show_native_context_menu(
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    /// comctl32 se carga SOLO del sistema: un `comctl32.dll` junto a un `naygo.exe` portable
+    /// nunca se usa.
+    #[cfg(windows)]
+    #[test]
+    fn comctl32_se_carga_desde_system32() {
+        use windows::Win32::System::LibraryLoader::GetModuleFileNameW;
+        let module = load_system_comctl32().expect("comctl32 del sistema");
+        let mut buffer = [0u16; 1024];
+        // SAFETY: `module` es un HMODULE válido (nunca se libera) y el búfer es nuestro.
+        let len = unsafe { GetModuleFileNameW(Some(module), &mut buffer) } as usize;
+        let loaded = PathBuf::from(String::from_utf16_lossy(&buffer[..len]));
+        // Windows puede redirigir la carga de System32 a su copia de WinSxS: ambas viven bajo
+        // %SystemRoot%; lo que nunca debe pasar es cargarla desde la carpeta del ejecutable.
+        let system_root = PathBuf::from(std::env::var("SystemRoot").unwrap());
+        let lower = |path: &std::path::Path| path.to_string_lossy().to_lowercase();
+        let loaded_lower = lower(&loaded);
+        assert!(
+            loaded_lower.starts_with(&lower(&system_root.join("System32")))
+                || loaded_lower.starts_with(&lower(&system_root.join("WinSxS"))),
+            "{}",
+            loaded.display()
+        );
+        let exe_dir = std::env::current_exe().unwrap();
+        assert_ne!(loaded.parent(), exe_dir.parent());
+    }
 
     #[test]
     fn route_menu_msg_reenvia_solo_mensajes_de_menu() {
