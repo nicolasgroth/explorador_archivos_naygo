@@ -511,28 +511,6 @@ fn classify_delete_results(
     (receipts, failures)
 }
 
-/// Compara identidad de ruta Windows según reglas ordinales sin perder unidades UTF-16 inválidas.
-/// Esto se usa para asociar callbacks del Shell, recibos y fallos con su origen; una conversión
-/// lossy podría fusionar dos nombres distintos. También normaliza `/` y conserva comparación
-/// insensible a caja como en el comportamiento previo.
-#[cfg(windows)]
-fn windows_paths_equal(left: &std::path::Path, right: &std::path::Path) -> bool {
-    if windows_paths_equal_text(left, right) {
-        return true;
-    }
-    // Una forma corta (8.3) y su forma larga son la misma ruta aunque el texto difiera. Solo se
-    // consulta el sistema de archivos si algún lado contiene `~` (condición necesaria de un
-    // alias 8.3), de modo que el camino común no hace I/O. Si algún lado no se puede resolver
-    // (p. ej. ya no existe) se conserva el resultado textual: distinto.
-    if !path_may_have_short_alias(left) && !path_may_have_short_alias(right) {
-        return false;
-    }
-    match (long_path_name(left), long_path_name(right)) {
-        (Ok(left_long), Ok(right_long)) => windows_paths_equal_text(&left_long, &right_long),
-        _ => false,
-    }
-}
-
 #[cfg(windows)]
 fn path_may_have_short_alias(path: &std::path::Path) -> bool {
     use std::os::windows::ffi::OsStrExt;
@@ -541,9 +519,17 @@ fn path_may_have_short_alias(path: &std::path::Path) -> bool {
         .any(|unit| unit == b'~' as u16)
 }
 
-/// Comparación puramente textual (sin I/O) de rutas Windows; ver [`windows_paths_equal`].
+/// Compara identidad de ruta Windows según reglas ordinales sin perder unidades UTF-16 inválidas.
+/// Esto se usa para asociar callbacks del Shell, recibos y fallos con su origen; una conversión
+/// lossy podría fusionar dos nombres distintos. También normaliza `/` y conserva comparación
+/// insensible a caja como en el comportamiento previo.
+///
+/// Es PURAMENTE textual: no hace I/O. Se usa en bucles por pares (clasificación de resultados,
+/// recibos), donde resolver nombres 8.3 con `GetLongPathNameW` sería O(N²). Para equiparar una
+/// forma corta con su larga, normalizar cada ruta UNA vez con `long_form_of_original` antes de
+/// comparar.
 #[cfg(windows)]
-fn windows_paths_equal_text(left: &std::path::Path, right: &std::path::Path) -> bool {
+fn windows_paths_equal(left: &std::path::Path, right: &std::path::Path) -> bool {
     use std::os::windows::ffi::OsStrExt;
     use windows::Win32::Globalization::{CompareStringOrdinal, CSTR_EQUAL};
 
@@ -603,7 +589,7 @@ fn find_original_alias(
     aliases.get(shell_path).cloned().or_else(|| {
         let mut matches = aliases
             .iter()
-            .filter(|(alias, _)| windows_paths_equal_text(alias, shell_path));
+            .filter(|(alias, _)| windows_paths_equal(alias, shell_path));
         let (_, original) = matches.next()?;
         // Si el directorio distingue mayúsculas, una coincidencia ambigua no es identidad.
         matches.next().is_none().then(|| original.clone())
@@ -626,9 +612,8 @@ fn recycle_bin_entry_matches(
     original_parent: &std::path::Path,
     original_name: &std::ffi::OsStr,
 ) -> bool {
-    let folder_matches = deleted_from.is_some_and(|folder| {
-        windows_paths_equal_text(std::path::Path::new(folder), original_parent)
-    });
+    let folder_matches = deleted_from
+        .is_some_and(|folder| windows_paths_equal(std::path::Path::new(folder), original_parent));
     if !folder_matches {
         return false;
     }
@@ -639,7 +624,7 @@ fn recycle_bin_entry_matches(
         return false;
     };
     let same_name = |candidate: &std::ffi::OsStr| {
-        windows_paths_equal_text(
+        windows_paths_equal(
             std::path::Path::new(candidate),
             std::path::Path::new(original_name),
         )
@@ -1668,10 +1653,10 @@ mod tests {
         // %TEMP% puede traer componentes 8.3 (RUNNER~1) y el Shell informa la forma larga:
         // se compara por identidad de ruta, no por texto.
         assert!(
-            windows_paths_equal(std::path::Path::new(reported_original), &original),
+            same_path_normalizing(std::path::Path::new(reported_original), &original),
             "original informado: {reported_original}"
         );
-        assert!(!windows_paths_equal(
+        assert!(!same_path_normalizing(
             std::path::Path::new(reported_landed),
             &original
         ));
@@ -1688,6 +1673,42 @@ mod tests {
         );
         assert_eq!(std::fs::read(&copies[0]).unwrap(), b"contenido original");
         std::fs::remove_file(&copies[0]).unwrap();
+    }
+
+    /// Equivalencia de rutas para tests: normaliza cada lado UNA vez (forma larga) y compara
+    /// por texto, igual que hace el código de producción.
+    #[cfg(windows)]
+    fn same_path_normalizing(left: &std::path::Path, right: &std::path::Path) -> bool {
+        let normalize = |path: &std::path::Path| {
+            long_path_name(path).unwrap_or_else(|_| long_form_of_original(path))
+        };
+        windows_paths_equal(&normalize(left), &normalize(right))
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn clasificar_miles_de_rutas_con_tilde_es_textual_y_correcto() {
+        // Carpeta inexistente con `~`: si la comparación resolviera nombres 8.3 haría I/O por
+        // cada par (O(N²)). Aquí todo debe resolverse por texto y clasificar bien.
+        let paths: Vec<PathBuf> = (0..2000)
+            .map(|index| PathBuf::from(format!(r"C:\no_existe~1\Proyecto~v2\archivo-{index}.txt")))
+            .collect();
+        let callbacks: Vec<DeleteCallbackResult> = paths
+            .iter()
+            .map(|path| DeleteCallbackResult {
+                original: Some(path.clone()),
+                parsing_name: Some("recycle-bin:item".into()),
+                failure: None,
+                newly_created_present: true,
+                original_present: false,
+                hr_code: 0,
+            })
+            .collect();
+        let (receipts, failures) =
+            classify_delete_results(&paths, &callbacks, &[], &HashMap::new(), None);
+        assert!(failures.is_empty());
+        assert_eq!(receipts.len(), paths.len());
+        assert_eq!(receipts[1999].original, paths[1999]);
     }
 
     #[cfg(windows)]
@@ -1760,15 +1781,17 @@ mod tests {
         let written = unsafe { GetShortPathNameW(PCWSTR(wide.as_ptr()), Some(&mut output)) };
         assert!(written > 0 && (written as usize) < output.len());
         let short = PathBuf::from(std::ffi::OsString::from_wide(&output[..written as usize]));
-        if windows_paths_equal_text(&short, &file) {
+        if windows_paths_equal(&short, &file) {
             eprintln!("OMITIDO: el volumen no genera nombres 8.3 (fsutil 8dot3name); no hay alias que comparar");
             return;
         }
-        assert!(windows_paths_equal(&short, &file));
-        assert!(windows_paths_equal(&file, &short));
+        // La comparación es textual; la equivalencia corta/larga se logra normalizando UNA vez.
+        assert!(!windows_paths_equal(&short, &file));
+        assert!(same_path_normalizing(&short, &file));
+        assert!(same_path_normalizing(&file, &short));
         // Un hermano inexistente no se resuelve: se conserva el resultado textual (distinto).
         let missing_short = short.with_file_name("NOEXIS~1.TXT");
-        assert!(!windows_paths_equal(&missing_short, &file));
+        assert!(!same_path_normalizing(&missing_short, &file));
     }
 
     #[cfg(windows)]
@@ -1794,7 +1817,7 @@ mod tests {
         assert!(written > 0 && (written as usize) < output.len());
         let short_folder =
             PathBuf::from(std::ffi::OsString::from_wide(&output[..written as usize]));
-        if windows_paths_equal_text(&short_folder, &folder) {
+        if windows_paths_equal(&short_folder, &folder) {
             eprintln!("OMITIDO: el volumen no genera nombres 8.3; no hay recibo en forma corta que probar");
             return;
         }
