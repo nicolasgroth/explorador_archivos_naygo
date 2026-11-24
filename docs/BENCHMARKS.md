@@ -136,7 +136,7 @@ es 1–5 MiB menor en todos los escenarios. En 10 min de reposo no crece (150,7 
 Salvedades de calidad de la medición:
 
 - Una sola corrida por escenario, sin repetir. Los escenarios 2 y 3 dependen de cuándo otra app escribe
-  en home: la sesión de Claude Code del autor reescribe `C:\Users\ngrot\.claude.json` cada 15–25 s, causa
+  en home: la sesión de Claude Code del autor reescribe `%USERPROFILE%\.claude.json` cada 15–25 s, causa
   conocida de las ráfagas de CPU en idle (aquí solo 0,31 s en la primera ventana). Es parte de la línea
   base realista y no se intentó suprimir. Comparan la forma, no un valor exacto.
 - A los 60 s el listado de 100k ya había terminado, así que no se capturó su CPU ni su pico de memoria
