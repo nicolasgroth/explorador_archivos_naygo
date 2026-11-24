@@ -825,6 +825,22 @@ impl windows::Win32::UI::Shell::IFileOperationProgressSink_Impl for ProgressSink
     }
 }
 
+/// Forma larga de la ruta original de un recibo. El ítem ya no existe (está en la Papelera), así
+/// que se resuelve la carpeta padre y se conserva el nombre. Si no hay alias posible (sin `~`) o
+/// la carpeta no se puede resolver, se devuelve la ruta tal cual.
+#[cfg(windows)]
+fn long_form_of_original(original: &std::path::Path) -> PathBuf {
+    if !path_may_have_short_alias(original) {
+        return original.to_path_buf();
+    }
+    match (original.parent(), original.file_name()) {
+        (Some(parent), Some(name)) => long_path_name(parent)
+            .map(|long_parent| long_parent.join(name))
+            .unwrap_or_else(|_| original.to_path_buf()),
+        _ => original.to_path_buf(),
+    }
+}
+
 /// Restaura ítems identificados durante `move_to_trash_with_progress` a sus ubicaciones
 /// originales. Prioriza el `IShellItem` reportado por la operación y usa enumeración como
 /// respaldo para recibos reconstruidos. Corre en un worker de Naygo; no toca el hilo UI.
@@ -854,6 +870,17 @@ fn restore_from_trash_with_enumerator(
     if receipts.is_empty() {
         return Ok(());
     }
+    // Un recibo reconstruido puede traer un componente 8.3 (RUNNER~1) mientras la Papelera y la
+    // caché de identidades guardan la forma larga. Se normaliza UNA vez aquí; las comparaciones
+    // por entrada siguen siendo textuales (sin I/O por elemento de la Papelera).
+    let normalized: Vec<TrashReceipt> = receipts
+        .iter()
+        .map(|receipt| TrashReceipt {
+            original: long_form_of_original(&receipt.original),
+            trashed_path: receipt.trashed_path.clone(),
+        })
+        .collect();
+    let receipts = &normalized[..];
     unsafe {
         let hr = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
         let needs_uninit = hr.is_ok();
@@ -1705,6 +1732,50 @@ mod tests {
         // Un hermano inexistente no se resuelve: se conserva el resultado textual (distinto).
         let missing_short = short.with_file_name("NOEXIS~1.TXT");
         assert!(!windows_paths_equal(&missing_short, &file));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn restore_con_recibo_en_forma_corta_y_sin_ruta_en_papelera_encuentra_el_item() {
+        use std::os::windows::ffi::{OsStrExt, OsStringExt};
+        use windows::core::PCWSTR;
+        use windows::Win32::Storage::FileSystem::GetShortPathNameW;
+
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("Carpeta larga para recibo corto");
+        std::fs::create_dir(&folder).unwrap();
+        let file = folder.join("archivo largo de recibo.txt");
+        std::fs::write(&file, b"recibo corto").unwrap();
+        let wide: Vec<u16> = folder.as_os_str().encode_wide().chain(Some(0)).collect();
+        let required = unsafe { GetShortPathNameW(PCWSTR(wide.as_ptr()), None) };
+        assert!(
+            required > 0,
+            "GetShortPathNameW falló para fixture existente"
+        );
+        let mut output = vec![0u16; required as usize];
+        let written = unsafe { GetShortPathNameW(PCWSTR(wide.as_ptr()), Some(&mut output)) };
+        assert!(written > 0 && (written as usize) < output.len());
+        let short_folder =
+            PathBuf::from(std::ffi::OsString::from_wide(&output[..written as usize]));
+        if windows_paths_equal_text(&short_folder, &folder) {
+            eprintln!("OMITIDO: el volumen no genera nombres 8.3; no hay recibo en forma corta que probar");
+            return;
+        }
+        let receipts = move_to_trash(std::slice::from_ref(&file)).expect("reciclar el fixture");
+        assert!(!file.exists());
+        // Recibo reconstruido: carpeta en forma corta y sin identidad cacheada.
+        let short_receipt = TrashReceipt {
+            original: short_folder.join(file.file_name().unwrap()),
+            trashed_path: None,
+        };
+        drop(receipts);
+        // Fuerza el camino de enumeración (recibo reconstruido, sin identidad cacheada).
+        recycle_item_names()
+            .lock()
+            .unwrap()
+            .remove(&long_form_of_original(&file));
+        restore_from_trash(&[short_receipt]).expect("restaurar con recibo en forma corta");
+        assert_eq!(std::fs::read(&file).unwrap(), b"recibo corto");
     }
 
     #[cfg(windows)]
