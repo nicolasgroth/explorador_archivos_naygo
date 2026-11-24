@@ -1275,5 +1275,6 @@
   "ops.failed.unreadable_folder": "Impossibile leggere la cartella: {reason}",
   "ops.failed.link_not_copied": "Collegamento non copiato (i collegamenti non vengono ricreati nella destinazione): {path}",
   "ops.failed.link_not_moved": "Impossibile spostare il collegamento; è rimasto nell'origine: {path} ({reason})",
-  "ops.failed.publish": "Impossibile salvare la copia nella destinazione: {reason}"
+  "ops.failed.publish": "Impossibile salvare la copia nella destinazione: {reason}",
+  "ops.failed.identity_unknown": "Impossibile verificare se l'origine e la destinazione sono lo stesso file; non è stato modificato nulla: {reason}"
 }

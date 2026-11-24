@@ -111,6 +111,10 @@ pub const LINK_NOT_MOVED_FAILURE: &str = "naygo:link-not-moved";
 /// La copia de un archivo terminó pero no se pudo publicar en su destino. Campo: error del sistema.
 pub const PUBLISH_FAILED_FAILURE: &str = "naygo:publish-failed";
 
+/// El destino existe pero no se pudo comprobar si es el mismo archivo que el origen (hard link,
+/// alias de ruta): el paso falla sin sobrescribir ni mover. Campo: error del sistema.
+pub const IDENTITY_UNKNOWN_FAILURE: &str = "naygo:identity-unknown";
+
 /// Prefijos de los textos previos (journals y resúmenes 0.5.x sin código), que se siguen
 /// reconociendo como fallos de enlace para excluirlos de "Reintentar".
 const LEGACY_LINK_NOT_COPIED: &str = "enlace no copiado: ";
@@ -124,6 +128,7 @@ pub enum OpFailure<'a> {
     LinkNotCopied { path: &'a str },
     LinkNotMoved { path: &'a str, reason: &'a str },
     PublishFailed { reason: &'a str },
+    IdentityUnknown { reason: &'a str },
 }
 
 impl OpFailure<'_> {
@@ -156,9 +161,43 @@ pub fn link_not_moved_failure(path: &Path, reason: &str) -> String {
     )
 }
 
+/// Fallo estructurado de una comprobación de mismo archivo que no se pudo hacer.
+pub fn identity_unknown_failure(reason: &str) -> String {
+    coded_failure(IDENTITY_UNKNOWN_FAILURE, &[reason])
+}
+
 /// Fallo estructurado de la publicación de una copia (el temporal se descarta).
 pub fn publish_failed_failure(reason: &str) -> String {
     coded_failure(PUBLISH_FAILED_FAILURE, &[reason])
+}
+
+/// ¿`a` y `b` son el mismo archivo (hard link, `\\?\`, unidad mapeada vs UNC, nombre 8.3)?
+/// Un `Err` significa "no se pudo determinar": quien llama decide fail-closed.
+pub(crate) fn same_identity(a: &Path, b: &Path) -> std::io::Result<bool> {
+    #[cfg(test)]
+    if FORCE_IDENTITY_ERROR.with(std::cell::Cell::get) {
+        return Err(std::io::Error::other("identidad forzada a fallar (test)"));
+    }
+    same_file::is_same_file(a, b)
+}
+
+#[cfg(test)]
+thread_local! {
+    static FORCE_IDENTITY_ERROR: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Tests: mientras viva el guard, `same_identity` falla en ESTE hilo (el motor y el plan
+/// síncronos corren en el hilo del test).
+#[cfg(test)]
+pub(crate) fn force_identity_error_for_tests() -> impl Drop {
+    struct Guard;
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            FORCE_IDENTITY_ERROR.with(|forced| forced.set(false));
+        }
+    }
+    FORCE_IDENTITY_ERROR.with(|forced| forced.set(true));
+    Guard
 }
 
 /// Reintento de una publicación con sobrescritura autorizada que falló (`error`, acceso
@@ -209,6 +248,7 @@ pub fn parse_failure(detail: &str) -> Option<OpFailure<'_>> {
             Some(OpFailure::LinkNotMoved { path, reason })
         }
         PUBLISH_FAILED_FAILURE => Some(OpFailure::PublishFailed { reason: rest }),
+        IDENTITY_UNKNOWN_FAILURE => Some(OpFailure::IdentityUnknown { reason: rest }),
         _ => None,
     }
 }
@@ -235,6 +275,9 @@ pub fn plain_failure_text(detail: &str) -> std::borrow::Cow<'_, str> {
         Some(OpFailure::PublishFailed { reason }) => {
             Cow::Owned(format!("no se pudo publicar la copia: {reason}"))
         }
+        Some(OpFailure::IdentityUnknown { reason }) => Cow::Owned(format!(
+            "no se pudo comprobar si origen y destino son el mismo archivo: {reason}"
+        )),
         None => Cow::Borrowed(detail),
     }
 }

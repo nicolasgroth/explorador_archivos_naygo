@@ -1809,8 +1809,21 @@ fn exec_copy_step(
     let mut overwrite_destination = false;
     // Identidad real: si destino y origen son el mismo archivo (hard link, `\?\`, unidad
     // mapeada vs UNC, nombre 8.3), publicar y luego borrar el origen destruiría el único contenido.
-    if step.to.exists() && same_file::is_same_file(&from, &step.to).unwrap_or(false) {
-        return (step.to.clone(), OpOutcome::Skipped, 0, true);
+    // Fail-closed: si el destino existe y no se puede saber si es el mismo archivo, el paso falla
+    // en vez de arriesgarse a sobrescribirlo o a borrar el origen.
+    if step.to.exists() {
+        match super::same_identity(&from, &step.to) {
+            Ok(true) => return (step.to.clone(), OpOutcome::Skipped, 0, true),
+            Ok(false) => {}
+            Err(error) => {
+                return (
+                    step.to.clone(),
+                    OpOutcome::Failed(super::identity_unknown_failure(&error.to_string())),
+                    0,
+                    true,
+                )
+            }
+        }
     }
     let to = if step.to.exists() {
         let effective: ConflictAction = resolve_action(
@@ -4962,6 +4975,62 @@ mod tests {
             copied_readonly,
             "la copia conserva el atributo solo lectura"
         );
+    }
+
+    /// Comprobación de mismo archivo fail-closed: si el destino existe y su identidad no se puede
+    /// determinar, el paso falla (código estructurado) y no se sobrescribe ni se mueve nada.
+    #[test]
+    fn identidad_indeterminable_con_destino_existente_falla_sin_tocar_nada() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("a.txt");
+        fs::write(&source, b"nuevo").unwrap();
+        let dest = dir.path().join("dst");
+        fs::create_dir(&dest).unwrap();
+        fs::write(dest.join("a.txt"), b"viejo").unwrap();
+        let mut request = super::super::transfer(true, vec![source.clone()], dest.clone());
+        request.conflict = ConflictPolicy::Overwrite;
+        let p = plan(&request).unwrap();
+
+        let _forced = crate::ops::force_identity_error_for_tests();
+        let token = CancellationToken::new();
+        let (tx, _rx) = mpsc::channel();
+        let (_ctx, crx) = mpsc::channel::<ConflictDecision>();
+        let summary = run_plan(&p, &request.kind, request.conflict, &token, &tx, &crx, None);
+
+        assert_eq!(summary.count_failed(), 1, "{summary:?}");
+        let OpOutcome::Failed(detail) = &summary.items[0].outcome else {
+            unreachable!()
+        };
+        assert!(
+            matches!(
+                crate::ops::parse_failure(detail),
+                Some(crate::ops::OpFailure::IdentityUnknown { .. })
+            ),
+            "{detail}"
+        );
+        assert_eq!(fs::read(dest.join("a.txt")).unwrap(), b"viejo");
+        assert_eq!(fs::read(&source).unwrap(), b"nuevo");
+    }
+
+    /// Si el destino no existe no hace falta la identidad: la copia sigue como siempre.
+    #[test]
+    fn identidad_indeterminable_sin_destino_copia_igual() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("a.txt");
+        fs::write(&source, b"nuevo").unwrap();
+        let dest = dir.path().join("dst");
+        fs::create_dir(&dest).unwrap();
+        let request = super::super::transfer(false, vec![source.clone()], dest.clone());
+        let p = plan(&request).unwrap();
+
+        let _forced = crate::ops::force_identity_error_for_tests();
+        let token = CancellationToken::new();
+        let (tx, _rx) = mpsc::channel();
+        let (_ctx, crx) = mpsc::channel::<ConflictDecision>();
+        let summary = run_plan(&p, &request.kind, request.conflict, &token, &tx, &crx, None);
+
+        assert_eq!(summary.count_done(), 1, "{summary:?}");
+        assert_eq!(fs::read(dest.join("a.txt")).unwrap(), b"nuevo");
     }
 
     fn set_readonly(path: &Path, readonly: bool) {

@@ -307,8 +307,17 @@ pub(super) fn plan_transfer_with_reader(
         }
         // Misma identidad real con otra ortografía (hard link, prefijo `\?\`, unidad mapeada,
         // nombre 8.3): sobrescribir o mover borraría el único contenido. No-op.
-        if base_to.exists() && same_file::is_same_file(&base_to, src).unwrap_or(false) {
-            continue;
+        // Si no se puede determinar con el destino presente, la raíz queda como paso fallido
+        // (fail-closed): no se expande para sobrescribir ni mover.
+        if base_to.exists() {
+            match super::same_identity(&base_to, src) {
+                Ok(true) => continue,
+                Ok(false) => {}
+                Err(error) => {
+                    expansion.push_identity_failure(src, &base_to, &error);
+                    continue;
+                }
+            }
         }
         expansion.expand_root(src, &base_to, !is_move)?;
     }
@@ -612,6 +621,25 @@ impl<'a> Expansion<'a> {
         });
     }
 
+    /// Raíz cuyo destino existe y cuya identidad frente al origen no se pudo comprobar: un solo
+    /// paso fallido planificado (sin hijos), con el código estructurado de identidad.
+    fn push_identity_failure(&mut self, src: &Path, to: &Path, error: &std::io::Error) {
+        let is_dir = std::fs::symlink_metadata(src)
+            .map(|m| m.is_dir() && !is_link_like(&m))
+            .unwrap_or(false);
+        self.steps.push(OpStep {
+            from: Some(src.to_path_buf()),
+            to: to.to_path_buf(),
+            bytes: 0,
+            is_dir,
+            planned_failure: Some(super::identity_unknown_failure(&error.to_string())),
+        });
+        if !is_dir {
+            self.total_files += 1;
+        }
+        (self.sink)(self.total_files, self.total_bytes);
+    }
+
     /// Registra un paso que el motor reportará como fallido sin ejecutarlo. El motivo es el
     /// texto del error del sistema; para una carpeta va con el prefijo estructurado
     /// `UNREADABLE_FOLDER_FAILURE` (la UI lo traduce).
@@ -746,6 +774,33 @@ mod tests {
     use super::super::{ConflictPolicy, OpKind, OpRequest};
     use super::*;
     use std::fs;
+
+    /// Raíz cuyo destino existe pero cuya identidad no se puede determinar: el plan la registra
+    /// como paso fallido (sin hijos) en vez de expandirla para sobrescribir o mover.
+    #[test]
+    fn raiz_con_identidad_indeterminable_queda_como_fallo_planificado() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("carpeta");
+        fs::create_dir(&src).unwrap();
+        fs::write(src.join("a.txt"), b"a").unwrap();
+        let dest = dir.path().join("dst");
+        fs::create_dir_all(dest.join("carpeta")).unwrap();
+        let req = super::super::transfer(true, vec![src.clone()], dest.clone());
+
+        let _forced = crate::ops::force_identity_error_for_tests();
+        let plan = plan(&req).unwrap();
+
+        assert_eq!(plan.steps.len(), 1, "{plan:?}");
+        let step = &plan.steps[0];
+        assert_eq!(step.from.as_deref(), Some(src.as_path()));
+        assert!(step.is_dir);
+        assert!(matches!(
+            step.planned_failure
+                .as_deref()
+                .and_then(crate::ops::parse_failure),
+            Some(crate::ops::OpFailure::IdentityUnknown { .. })
+        ));
+    }
 
     fn plan_with(
         kind: OpKind,

@@ -614,6 +614,8 @@ pub(crate) struct OpDetailTexts {
     pub link_not_moved: String,
     /// Plantilla con `{reason}`.
     pub publish_failed: String,
+    /// Plantilla con `{reason}`.
+    pub identity_unknown: String,
 }
 
 impl OpDetailTexts {
@@ -626,6 +628,7 @@ impl OpDetailTexts {
             link_not_copied: config.t("ops.failed.link_not_copied"),
             link_not_moved: config.t("ops.failed.link_not_moved"),
             publish_failed: config.t("ops.failed.publish"),
+            identity_unknown: config.t("ops.failed.identity_unknown"),
         }
     }
 
@@ -659,6 +662,9 @@ impl OpDetailTexts {
                 .replace("{reason}", reason),
             Some(OpFailure::PublishFailed { reason }) => {
                 self.publish_failed.replace("{reason}", reason)
+            }
+            Some(OpFailure::IdentityUnknown { reason }) => {
+                self.identity_unknown.replace("{reason}", reason)
             }
             None => detail.to_string(),
         }
@@ -876,6 +882,7 @@ mod tests {
             link_not_copied: "T-LINK {path}".into(),
             link_not_moved: "T-LINKMOVE {path} {reason}".into(),
             publish_failed: "T-PUBLISH {reason}".into(),
+            identity_unknown: "T-IDENTITY {reason}".into(),
         }
     }
 
@@ -935,6 +942,10 @@ mod tests {
             detail_of(&naygo_core::ops::publish_failed_failure("denied")),
             "T-PUBLISH denied"
         );
+        assert_eq!(
+            detail_of(&naygo_core::ops::identity_unknown_failure("io")),
+            "T-IDENTITY io"
+        );
         // Un texto previo sin código (journal viejo) se muestra sin cambios.
         assert_eq!(
             detail_of("enlace no copiado: C:\\l"),
@@ -961,6 +972,7 @@ mod tests {
             ("ops.failed.link_not_copied", &texts.link_not_copied),
             ("ops.failed.link_not_moved", &texts.link_not_moved),
             ("ops.failed.publish", &texts.publish_failed),
+            ("ops.failed.identity_unknown", &texts.identity_unknown),
         ] {
             assert_ne!(text, key, "falta la clave {key}");
         }
