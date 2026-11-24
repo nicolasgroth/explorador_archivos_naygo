@@ -20,7 +20,7 @@ Fecha: 2026-10-20. Segundo subpaso puro de core; todavía no integra el portapap
 La serialización GNOME concuerda con la implementación actual de Nautilus, que serializa el verbo
 `cut`/`copy`, luego LF y las URIs, sin añadir terminador: [fuente de Nautilus](https://github.com/GNOME/nautilus/blob/main/src/nautilus-clipboard.c#L890-L918).
 La convención KDE se registró previamente en la auditoría de portabilidad del proyecto
-([auditoría Linux](auditoria/2026-07-01-portabilidad-linux.md)); falta probarla contra Dolphin real.
+([auditoría Linux](../auditoria/2026-07-01-portabilidad-linux.md)); falta probarla contra Dolphin real.
 
 ## Validación
 

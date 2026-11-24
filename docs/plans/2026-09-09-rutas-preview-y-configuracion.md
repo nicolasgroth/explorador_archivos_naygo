@@ -67,7 +67,7 @@ Paletas aprobadas e integradas selectivamente en RP-3: Nieve (`isgroth-nieve`), 
 (`isgroth-perla`), Arena (`isgroth-arena`), Salvia (`isgroth-salvia`), Bruma
 (`isgroth-bruma`) y Grafito claro (`isgroth-grafito-claro`). JSON originales recuperados,
 sin recolorear la paleta; sólo se añadió `icon_accent` desde su `accent` original.
-[Procedencia y validación RP-3](../VALIDACION-RP3-2026-09-09.md).
+[Procedencia y validación RP-3](../evidencia/VALIDACION-RP3-2026-09-09.md).
 
 Conservar los nueve temas existentes y el tema elegido. Validar textos principales/secundarios,
 foco, selección activa/inactiva, filas recientes, íconos tintables y multicolor, campos,
@@ -83,7 +83,7 @@ con defaults compatibles para temas antiguos, sin forzar preferencias nuevas.
 
 Continuación del 14 de septiembre: RP-4B2 extiende el supervisor a texto/resaltado y 3D,
 conserva la escena para giro sin I/O, limita transporte y scratch y reserva un margen
-temporal compartido. Ver [alcance/validación RP-4B2](../VALIDACION-RP4B2-2026-09-14.md).
+temporal compartido. Ver [alcance/validación RP-4B2](../evidencia/VALIDACION-RP4B2-2026-09-14.md).
 No presentar estos presupuestos como techo de memoria de toda la aplicación. Los
 párrafos siguientes documentan los cortes anteriores, no revierten lo ya implementado.
 
@@ -92,21 +92,21 @@ retención de plazas hasta terminar el hilo, suspensión por visibilidad y cáma
 única. No añade procesos ni presenta la cancelación cooperativa como terminación real.
 RP-4B conserva ese trabajo y los presupuestos completos; las animaciones siguen en RP-5.
 Este corte permite validar la navegación y el 3D antes de introducir aislamiento y medir
-su costo. [Registro RP-4A](../VALIDACION-RP4A-2026-09-09.md).
+su costo. [Registro RP-4A](../evidencia/VALIDACION-RP4A-2026-09-09.md).
 
 RP-4B1 continúa con lectores pesados aislados, sin imponer proceso a cada gesto 3D ni
-presentar 192 MiB por hijo como consumo total. [Alcance/evidencia](../VALIDACION-RP4B1-2026-09-09.md).
+presentar 192 MiB por hijo como consumo total. [Alcance/evidencia](../evidencia/VALIDACION-RP4B1-2026-09-09.md).
 La muestra WebP aportada tiene 50 frames y 5 segundos por ciclo: se utiliza sólo en lectura,
 no se distribuye; comprobar su poster no certifica composición ni reproducción animada.
 
 ### Formatos y fidelidad
 
 RP-5B implementa calidad económica configurable y retención compartida; validación en
-[registro RP-5B](../VALIDACION-RP5B-2026-09-10.md). No confundir presupuesto de contenido
+[registro RP-5B](../evidencia/VALIDACION-RP5B-2026-09-10.md). No confundir presupuesto de contenido
 retenido con límites completos del proceso/temporales de RP-4 ni con mediciones de RP-6.
 
 RP-5A implementa reproducción secuencial WebP/GIF/APNG, controles y reloj dedicado;
-validación/distribución registrada en [RP-5A](../VALIDACION-RP5A-2026-09-09.md).
+validación/distribución registrada en [RP-5A](../evidencia/VALIDACION-RP5A-2026-09-09.md).
 No cierra presupuestos globales RP-4, calidad económica configurable ni aceptación
 instalada de toda la matriz. No se activó `.wepb` por defecto.
 
@@ -201,14 +201,14 @@ responsabilidad, ownership, límites medidos vs provisionales, errores, cancelac
 
 RP-1 cuenta con pruebas nuevas de sintaxis, capacidad/timeout, generaciones y teclado del
 editor Slint. Los resultados y límites de cobertura se registran en
-[validación del 9 de septiembre](../VALIDACION-2026-09-09.md); no sustituyen R04–R06 nativos
+[validación del 9 de septiembre](../evidencia/VALIDACION-2026-09-09.md); no sustituyen R04–R06 nativos
 con teclado chileno/IME, servidores caídos ni D01–D02 en otras máquinas.
 RP-2 añade cableado real con destino capturado/cancelación/cierre y acciones/teclado/render
-del componente superior; ver [validación RP-2](../VALIDACION-RP2-2026-09-09.md).
+del componente superior; ver [validación RP-2](../evidencia/VALIDACION-RP2-2026-09-09.md).
 RP-3 añade compatibilidad/contraste de paletas, persistencia de tokens, catálogo único y
-render software de quince temas: [evidencia RP-3](../VALIDACION-RP3-2026-09-09.md).
+render software de quince temas: [evidencia RP-3](../evidencia/VALIDACION-RP3-2026-09-09.md).
 RP-4A añade cancelación/capacidad/visibilidad y controles Slint; ver
-[registro RP-4A](../VALIDACION-RP4A-2026-09-09.md). RP-4B–RP-6 siguen pendientes;
+[registro RP-4A](../evidencia/VALIDACION-RP4A-2026-09-09.md). RP-4B–RP-6 siguen pendientes;
 no confundir pruebas sintéticas con aceptación nativa completa.
 
 | Casos | Comprobación exigida |
@@ -245,7 +245,7 @@ comunicado. Esto certifica procedencia del paquete, no que compile ni que sus ca
   validación reescrita para reservar plazas antes de lanzar hilos y descartar revisiones.
   No se integraron preview, temas ni scripts experimentales. Las seis paletas sí están
   recuperadas en `crates/core/src/theme/builtin/isgroth-*.json` dentro de la copia aislada.
-- Hashes de las referencias reutilizadas: [registro de validación](../VALIDACION-2026-09-09.md).
+- Hashes de las referencias reutilizadas: [registro de validación](../evidencia/VALIDACION-2026-09-09.md).
 
 | Elemento | Identificador comunicado |
 | --- | --- |

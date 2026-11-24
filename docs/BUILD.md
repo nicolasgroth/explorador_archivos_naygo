@@ -102,8 +102,8 @@ para compilar RP-4B2 con fat LTO/una unidad. Ambos intentos terminaron antes del
 empaquetado; RP-5B quedó respaldado. El perfil ThinLTO autorizado después completó el build
 con 12 GiB. No reintentar automáticamente aumentando límites si otro build falla: revisar
 las condiciones y validar sus trade-offs antes de generar una entrega.
-Ver [evidencia de recuperación](VALIDACION-RP4B2-2026-09-14.md) y
-[ajuste autorizado/auditoría de espacio](VALIDACION-BUILD-2026-09-14.md).
+Ver [evidencia de recuperación](evidencia/VALIDACION-RP4B2-2026-09-14.md) y
+[ajuste autorizado/auditoría de espacio](evidencia/VALIDACION-BUILD-2026-09-14.md).
 
 Modos de comprobación sin empaquetar:
 
@@ -130,7 +130,7 @@ al terminar. `-ExecutableOnly` permite detenerse tras compilar para una firma re
 empaqueta el ejecutable ya firmado sin recompilar. Ver [distribución](DISTRIBUTION.md).
 
 La distribución 0.5.2 del 14 de octubre está registrada en
-[validación del build](VALIDACION-BUILD-2026-10-14.md). Comprobar fecha, versión/build, hashes,
+[validación del build](evidencia/VALIDACION-BUILD-2026-10-14.md). Comprobar fecha, versión/build, hashes,
 integridad ZIP y coincidencia del EXE empaquetado
 con el release. Si falta Inno o falla el instalador, no anunciar una entrega completa.
 Cambios sólo documentales no requieren nueva versión ni EXE; las guías empaquetadas se

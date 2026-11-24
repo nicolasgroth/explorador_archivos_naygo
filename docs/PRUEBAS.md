@@ -11,7 +11,7 @@
   sobre una tubería efímera de prueba, creada por un helper oculto de Windows PowerShell.
 - Las reservas temporales siguen ocupadas mientras termina el worker retirado. Contrato
   entre límite del hijo, mayor respuesta IPC, scratch de raster y margen por plaza.
-- Evidencia de ejecución, pendientes y paquetes: [registro RP-4B2](VALIDACION-RP4B2-2026-09-14.md).
+- Evidencia de ejecución, pendientes y paquetes: [registro RP-4B2](evidencia/VALIDACION-RP4B2-2026-09-14.md).
 
 ### Preview económico y retención (RP-5B)
 
@@ -35,9 +35,9 @@ no significa cobertura exhaustiva: red real, DPI, accesibilidad y sesión instal
 comprobación aparte. La matriz del [plan de rutas/preview](plans/2026-09-09-rutas-preview-y-configuracion.md)
 conserva aceptación manual pendiente; no queda aprobada por pasar los tests de la base.
 La hoja de ejecución para el release actual está en
-[VALIDACION-WINDOWS-0.5.2-2026-10-15.md](VALIDACION-WINDOWS-0.5.2-2026-10-15.md). La actualización
+[evidencia/VALIDACION-WINDOWS-0.5.2-2026-10-15.md](evidencia/VALIDACION-WINDOWS-0.5.2-2026-10-15.md). La actualización
 local y la inspección UI Automation tienen resultados parciales documentados en
-[VALIDACION-BUILD-2026-10-16.md](VALIDACION-BUILD-2026-10-16.md); la matriz funcional completa aún
+[evidencia/VALIDACION-BUILD-2026-10-16.md](evidencia/VALIDACION-BUILD-2026-10-16.md); la matriz funcional completa aún
 requiere prueba en un entorno Windows aislado.
 
 Para preparar las carpetas sintéticas de los casos manuales W-07/W-13, usar
@@ -68,7 +68,7 @@ después de navegar. El pegado simultáneo comprueba ambos contenidos y notifica
 al reabrir el modal; captura sintética en `target/agent-out/nav052-highlight.png`.
 Los tests sólo crean/eliminan datos dentro de directorios temporales propios.
 RP-1 añade pruebas del editor Slint real, validación y capacidad de workers: ver
-[registro del 9 de septiembre](VALIDACION-2026-09-09.md).
+[registro del 9 de septiembre](evidencia/VALIDACION-2026-09-09.md).
 RP-2 añade `callbacks_pathbar_tests.rs` (cableado real, destino capturado, cancelación,
 error y cierre de panel, con configuración temporal aislada) y `tests/toolbar_path.rs`
 (clics, teclado, acciones y render software a 260 px). No usan el portapapeles real ni
@@ -79,7 +79,7 @@ compatibilidad y colores Unicode inválidos), una prueba de guardado/restauraci�
 en `config_ctrl.rs` y `tests/theme_render.rs`. Esta última renderiza quince temas con paneles,
 ruta y botones Slint reales; además comprueba el catálogo único y los índices estables.
 Capturas: `target/agent-out/rp3-themes/`. No certifican accesibilidad ni aceptación nativa
-de toda Configuración. [Evidencia RP-3](VALIDACION-RP3-2026-09-09.md).
+de toda Configuración. [Evidencia RP-3](evidencia/VALIDACION-RP3-2026-09-09.md).
 
 ## Gate reproducible de una entrega
 
@@ -98,7 +98,7 @@ A → B → A, desconexión terminal, cancelar durante debounce/capacidad/miniat
 restaurar, pestañas, panel maximizado, cierre, cámara coalescida y callbacks Slint reales.
 El core añade cancelación de un triángulo sin modificar los buffers. Usan datos temporales
 o canales controlados, no red ni documentos personales. No prueban terminación forzosa
-de un decoder ni presupuesto global de memoria. [Registro RP-4A](VALIDACION-RP4A-2026-09-09.md).
+de un decoder ni presupuesto global de memoria. [Registro RP-4A](evidencia/VALIDACION-RP4A-2026-09-09.md).
 
 Conservar `Cargo.lock` y registrar `rustc --version`. Ejecutar secuencialmente:
 
@@ -109,7 +109,7 @@ que un SVG no acceda a imágenes externas. `NAYGO_PREVIEW_SAMPLE` permite pasar 
 privada WebP 800 × 450 en lectura: no se copia ni se guarda su ruta en el resultado.
 La prueba original sólo certificaba imagen estática. Medidas del proceso hijo
 son memoria comprometida y tiempo de lectura, no consumo completo ni fluidez del explorador.
-[Registro RP-4B1](VALIDACION-RP4B1-2026-09-09.md).
+[Registro RP-4B1](evidencia/VALIDACION-RP4B1-2026-09-09.md).
 
 ```powershell
 cargo fmt --all -- --check

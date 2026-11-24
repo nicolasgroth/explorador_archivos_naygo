@@ -1100,7 +1100,7 @@ El gate 0.5.4 pasó (1.509 pruebas, 8 ignoradas, Clippy y formato). El benchmark
 modo sólido reportó mediana 18,483 ms para 96.800 triángulos a 1024×768, sin comparación
 controlada. Build supervisado completado (Release 28m59s, Inno 117,578 s, pico 10,72 GiB); ZIP y
 setup verificados, sin firma, instalación ni publicación. Los hashes y límites están en
-[`VALIDACION-0.5.4-VISOR-2026-10-30.md`](VALIDACION-0.5.4-VISOR-2026-10-30.md). Es una
+[`evidencia/VALIDACION-0.5.4-VISOR-2026-10-30.md`](evidencia/VALIDACION-0.5.4-VISOR-2026-10-30.md). Es una
 distribución de avance, no el cierre de 7-Zip, materiales 3MF ni revisión completa de temas.
 
 El visor permite elegir tonos uniformes azul, blanco y cálido, y modos sólido, bordes o malla con
@@ -1120,7 +1120,7 @@ el proceso que ya estaba abierto quedó intacto. Nicolás validará manualmente 
 comportamiento en este equipo y en máquinas de 8/16 GiB. Los límites de 250 líneas y 1.000
 caracteres por línea siguen activos; XML/SIF minificado puede requerir una opción futura de
 formateo. Detalle y hashes en
-[`VALIDACION-PREVIEW-TEXTO-2026-10-21.md`](VALIDACION-PREVIEW-TEXTO-2026-10-21.md).
+[`evidencia/VALIDACION-PREVIEW-TEXTO-2026-10-21.md`](evidencia/VALIDACION-PREVIEW-TEXTO-2026-10-21.md).
 
 ## Continuación 2026-10-19 — L-08 y release local instalado
 
@@ -1132,7 +1132,7 @@ Release (SHA-256 `960ccee8a5bdfb85eaafcd8fa6112e736d4b050237e7fdfb592f41799671ca
 JSON de usuario y el PDB existente conservaron sus hashes. ZIP y setup siguen sin firma y no se han
 publicado. Los tests Linux compilan, pero no se ejecutaron: WSL informa
 `HCS_E_HYPER_V_NOT_INSTALLED`. L-08 permanece abierto hasta validar runtime en Ubuntu nativo. Ver
-[`VALIDACION-L08-INSTANCE-2026-10-19.md`](VALIDACION-L08-INSTANCE-2026-10-19.md).
+[`evidencia/VALIDACION-L08-INSTANCE-2026-10-19.md`](evidencia/VALIDACION-L08-INSTANCE-2026-10-19.md).
 
 ## Instalación Windows 0.5.3 — 2026-10-20, actualización W-06B
 
@@ -1150,7 +1150,7 @@ fue `True`. UI Automation de solo lectura encontró 356 descendientes; 120/120 e
 69 acciones `Invoke`, cero botones sin ese patrón y árbol completo. La sesión seguía bloqueada: esto
 no mide interacción ni latencia; Narrador y aceptación manual siguen pendientes, así que W-07 y W-13
 no se cierran. Setup y ZIP siguen `NotSigned`; no se publicaron. Ver
-[`VALIDACION-INSTALACION-W06B-2026-10-20.md`](VALIDACION-INSTALACION-W06B-2026-10-20.md).
+[`evidencia/VALIDACION-INSTALACION-W06B-2026-10-20.md`](evidencia/VALIDACION-INSTALACION-W06B-2026-10-20.md).
 
 ## W-13 — UI Automation pasiva, 2026-10-20
 
@@ -1158,7 +1158,7 @@ La inspección del PID 43624 expuso 356 descendientes; los 120 controles enfocab
 los 69 botones anuncian `Invoke` y el árbol quedó completo. El SHA del EXE instalado coincide con
 `target/release/naygo.exe` (0.5.3). No se activaron controles ni se leyeron nombres/rutas. Narrador,
 calidad de anuncios, foco real y diálogos siguen pendientes. Evidencia:
-[`VALIDACION-W13-PASIVO-2026-10-20.md`](VALIDACION-W13-PASIVO-2026-10-20.md).
+[`evidencia/VALIDACION-W13-PASIVO-2026-10-20.md`](evidencia/VALIDACION-W13-PASIVO-2026-10-20.md).
 
 ## Vista previa Windows — `.sif` y `.sh`, 2026-10-20
 
@@ -1170,7 +1170,7 @@ desde este equipo para reproducir permisos o estado de la unidad. Verificación 
 El gate completo pasó (1.503 aprobados, 8 ignorados; Clippy y formato verdes). El build supervisado
 se detuvo al quedar 7,91 GiB libres, bajo el umbral de 8 GiB; por eso no hay una distribución nueva
 ni instalación de esta corrección. Los artefactos previos permanecen intactos. Evidencia:
-[`VALIDACION-PREVIEW-SIF-SH-2026-10-20.md`](VALIDACION-PREVIEW-SIF-SH-2026-10-20.md).
+[`evidencia/VALIDACION-PREVIEW-SIF-SH-2026-10-20.md`](evidencia/VALIDACION-PREVIEW-SIF-SH-2026-10-20.md).
 
 ## Límite configurable del preview de texto — implementado y empaquetado
 
@@ -1212,7 +1212,7 @@ nueve catálogos correctos. El paquete supervisado terminó (Release 51m07s, Inn
 10,66 GiB); ZIP y setup verificados, ZIP con cuatro entradas y EXE idéntico al Release. No se
 instaló, firmó ni publicó; Naygo continúa abierto como PID 50260 con la versión previa. Hashes y
 límites están en
-[`VALIDACION-WINDOWS-TRASH-UTF16-2026-10-19.md`](VALIDACION-WINDOWS-TRASH-UTF16-2026-10-19.md).
+[`evidencia/VALIDACION-WINDOWS-TRASH-UTF16-2026-10-19.md`](evidencia/VALIDACION-WINDOWS-TRASH-UTF16-2026-10-19.md).
 
 ## W-07 — observación pasiva reciente
 
@@ -1229,7 +1229,7 @@ A las 23:53 del 2026-10-19, PID 50260 respondía y tenía handle de ventana, per
 expuso controles descendientes; la raíz era un `Pane` sin hijo y `LogonUI` estaba activo en la misma
 sesión. Esto no prueba la causa ni demuestra una regresión. No se enviaron acciones. Repetir con la
 ventana visible en una sesión desbloqueada; Narrador y diálogos siguen pendientes. Detalle en
-[`VALIDACION-W13-INVOKE-2026-10-19.md`](VALIDACION-W13-INVOKE-2026-10-19.md).
+[`evidencia/VALIDACION-W13-INVOKE-2026-10-19.md`](evidencia/VALIDACION-W13-INVOKE-2026-10-19.md).
 
 Reintento pasivo 2026-10-20 00:40 Chile: PID 50260 responde, pero el título de ventana está vacío y
 UIA vuelve a no exponer descendientes. `LockApp` y `LogonUI` siguen activos en la sesión; no se
@@ -1254,7 +1254,7 @@ Con autorización previa de Nicolás, se actualizó in-place desde `dist/Naygo-0
 (SHA-256 del setup `fa6fa2cb3f7542243a9076d060466cc0c7cc3c707a506cc0fa2233ff2651fd00`). Inno terminó
 con código 0; los hashes de settings, workspace, favoritos, plantillas y PDB quedaron idénticos y
 los JSON parsean. El EXE instalado coincide con Release (`cb8f28efcd9619463a5977ba6fb771e59656352bb4a49dfe76bb9fb3c0682229`); Naygo quedó abierto/respondiente como PID 31304, versión 0.5.3. No se firmó ni publicó. La sesión está bloqueada, por lo que la aceptación visual sigue pendiente. Evidencia en
-[`VALIDACION-WINDOWS-TRASH-UTF16-2026-10-19.md`](VALIDACION-WINDOWS-TRASH-UTF16-2026-10-19.md) y el respaldo de datos en `target/agent-out/install-preserve-053-20261020-wtrash/`.
+[`evidencia/VALIDACION-WINDOWS-TRASH-UTF16-2026-10-19.md`](evidencia/VALIDACION-WINDOWS-TRASH-UTF16-2026-10-19.md) y el respaldo de datos en `target/agent-out/install-preserve-053-20261020-wtrash/`.
 
 ## W-07 — muestra pasiva del ejecutable instalado, 2026-10-20
 
@@ -1274,7 +1274,7 @@ tras confirmar la escritura; fallos se muestran en un toast. Test focalizado: 2/
 de UI pasó con el aviso esperado de que el recurso PE de Windows no aplica al target Linux. La
 distribución 0.5.3 se regeneró bajo supervisor (Release 46m08s, Inno 176,562 s), ZIP y setup
 verificados sin firma; PID 31304 continúa ejecutando el build anterior. Evidencia:
-[`VALIDACION-W06B-PASTE-CLIPBOARD-2026-10-20.md`](VALIDACION-W06B-PASTE-CLIPBOARD-2026-10-20.md).
+[`evidencia/VALIDACION-W06B-PASTE-CLIPBOARD-2026-10-20.md`](evidencia/VALIDACION-W06B-PASTE-CLIPBOARD-2026-10-20.md).
 
 Auditoría adicional de W-06B autorizada por Nicolás: la copia de la ruta del resultado de Entregas
 también pasa por `OpsCtrl::write_clipboard_text`. No se hallaron accesos al backend de plataforma
@@ -1289,7 +1289,7 @@ focalizadas, el gate completo (1.492 aprobadas, 8 ignoradas, Clippy/formato) y e
 crate core para `x86_64-unknown-linux-gnu`. La función aún no está conectada al clipboard del
 escritorio; Nautilus/Dolphin, copy/cut, Wayland/X11 y tests nativos siguen pendientes. No se
 regeneró distribución porque el codec todavía no tiene consumidores de runtime. Evidencia:
-[`VALIDACION-L09A-URI-LIST-2026-10-20.md`](VALIDACION-L09A-URI-LIST-2026-10-20.md).
+[`evidencia/VALIDACION-L09A-URI-LIST-2026-10-20.md`](evidencia/VALIDACION-L09A-URI-LIST-2026-10-20.md).
 
 ### Avance posterior — formatos copy/cut Nautilus y Dolphin
 
@@ -1299,7 +1299,7 @@ Nautilus junto a las URIs y el byte de estado `0`/`1` de Dolphin. El codec limit
 también pasan. Se actualizó Graphify. Esto aún no es integración de runtime: L-09A sigue abierto,
 no hay transporte del clipboard ni confirmación de copy/cut con aplicaciones Linux nativas, y no se
 regeneró distribución. Ver
-[`VALIDACION-L09A-FORMATOS-2026-10-20.md`](VALIDACION-L09A-FORMATOS-2026-10-20.md).
+[`evidencia/VALIDACION-L09A-FORMATOS-2026-10-20.md`](evidencia/VALIDACION-L09A-FORMATOS-2026-10-20.md).
 
 ## Registro histórico 2026-10-19 — W-13 instalado y reinspeccionado (reemplazado)
 
@@ -1310,7 +1310,7 @@ pasiva de la ventana principal reportó 356 descendientes, 120/120 controles enf
 69 acciones `Invoke`, cero botones sin `Invoke` y árbol completo. No se ejecutaron acciones ni se
 abrieron diálogos. La aceptación con Narrador y el recorrido manual de Ajustes/diálogos siguen
 pendientes, por lo que W-13 permanece abierto. Checksums y detalles en
-[`VALIDACION-W13-INVOKE-2026-10-19.md`](VALIDACION-W13-INVOKE-2026-10-19.md).
+[`evidencia/VALIDACION-W13-INVOKE-2026-10-19.md`](evidencia/VALIDACION-W13-INVOKE-2026-10-19.md).
 Una muestra W-07 pasiva de 3×30 s en esa instalación registró 61,7 MiB working set, 30,1 MiB
 privados, 387 handles y 26 hilos máximos; no controló actividad ni mide interacción/presentación.
 W-07 sigue abierto. Detalle en [`BENCHMARKS.md`](BENCHMARKS.md).
@@ -1323,7 +1323,7 @@ capacidad limitada. Pasaron check/Clippy cruzados Linux de platform y UI, el gat
 (1.480 tests, 8 ignorados, Clippy y formato) y `graphify update`. WSL sigue sin poder iniciar por
 `HCS_E_HYPER_V_NOT_INSTALLED`, así que los tests Linux compilan pero no se ejecutaron y L-08 queda
 abierto para runtime nativo. El release Windows posterior ya se instaló; el estado y hashes actuales
-están en la sección inicial y en [`VALIDACION-L08-INSTANCE-2026-10-19.md`](VALIDACION-L08-INSTANCE-2026-10-19.md).
+están en la sección inicial y en [`evidencia/VALIDACION-L08-INSTANCE-2026-10-19.md`](evidencia/VALIDACION-L08-INSTANCE-2026-10-19.md).
 
 ## Continuación 2026-10-19 — reinspección UIA pasiva
 
@@ -1331,7 +1331,7 @@ La instancia ya abierta (PID 42728, versión de archivo 0.5.3) respondió a una 
 lectura: 980 descendientes y 219/219 controles enfocables con nombre; el árbol no se truncó. No se
 enviaron entradas ni se abrieron diálogos. El EXE instalado no coincide con la distribución W-06E
 reconstruida; este resultado no cierra Narrador ni la aceptación de W-13. Evidencia y hashes en
-[`VALIDACION-UIA-2026-10-19.md`](VALIDACION-UIA-2026-10-19.md).
+[`evidencia/VALIDACION-UIA-2026-10-19.md`](evidencia/VALIDACION-UIA-2026-10-19.md).
 
 ## Continuación 2026-10-19 — acciones UIA de controles personalizados
 
@@ -1346,7 +1346,7 @@ botones custom de maximizar/cerrar panel y los selectores de categoría de confi
 exponían `Invoke`; ya se corrigieron con nombre y foco/acción de teclado donde faltaban. Este cambio
 pasó el gate completo repetido; falta regenerar la distribución e inspeccionar UIA sobre la nueva
 instalación. Evidencia:
-[`VALIDACION-W13-INVOKE-2026-10-19.md`](VALIDACION-W13-INVOKE-2026-10-19.md).
+[`evidencia/VALIDACION-W13-INVOKE-2026-10-19.md`](evidencia/VALIDACION-W13-INVOKE-2026-10-19.md).
 
 ## Continuación 2026-10-19 — L-07 Papelera Linux
 
@@ -1358,7 +1358,7 @@ compilaron, pero el host Windows/WSL no puede ejecutarlos. El primer build se de
 GiB libres; el reintento terminó en 42m14s, Inno Setup en 159,329 s y pico 10,65 GiB. `dist/` se
 actualizó y verificó, sin instalar/publicar/firmar. Naygo PID 42728 sigue abierto con la versión
 previamente instalada. Evidencia:
-[`VALIDACION-L07-TRASH-2026-10-19.md`](VALIDACION-L07-TRASH-2026-10-19.md).
+[`evidencia/VALIDACION-L07-TRASH-2026-10-19.md`](evidencia/VALIDACION-L07-TRASH-2026-10-19.md).
 
 ## Continuación 2026-10-19 — W-06E temas
 
@@ -1369,7 +1369,7 @@ tests focalizados pasaron; `scripts/test-all.ps1` pasó con 1.480 tests aprobado
 sin warnings y formato correcto. El build supervisado finalizó (Release 40m08s, Inno Setup 195,625 s,
 pico Job 10,65 GiB bajo el límite de 12 GiB). ZIP, setup y versión se verificaron; no se instaló,
 publicó ni firmó. Los hashes nuevos están en la validación detallada. Evidencia:
-[`VALIDACION-W06E-2026-10-19.md`](VALIDACION-W06E-2026-10-19.md).
+[`evidencia/VALIDACION-W06E-2026-10-19.md`](evidencia/VALIDACION-W06E-2026-10-19.md).
 
 ## Revalidación remota de workflows — 2026-10-19
 
@@ -1420,7 +1420,7 @@ En ese punto de control, la instancia instalada era PID 42728, SHA-256
 pasiva del proceso actual encontró 821 descendientes, 654 con nombre y 190/190 controles
 enfocables nombrados, árbol completo. Esto no sustituye Narrador ni el recorrido manual. Los cuatro
 JSON parsean; sus hashes y el PDB previo (289.722.368 bytes) se conservaron. La validación completa está en
-[`VALIDACION-0.5.3-2026-10-19.md`](VALIDACION-0.5.3-2026-10-19.md).
+[`evidencia/VALIDACION-0.5.3-2026-10-19.md`](evidencia/VALIDACION-0.5.3-2026-10-19.md).
 
 Muestra pasiva W-07 sobre la instancia actual PID 42728, 2026-10-19 10:09: 78,4–78,7 MiB working
 set, 46,6–46,8 MiB privados, 385 handles, 26 hilos y CPU delta 0,81–0,98 s en ventanas de 30 s;
@@ -1434,7 +1434,7 @@ reposo de la máquina. Evidencia y límites en [`BENCHMARKS.md`](BENCHMARKS.md).
 
 La inspección anterior del PID 48444 (hash previo) sigue como evidencia histórica y no debe
 confundirse con la inspección del proceso actual. Los dos resultados son estructurales y no
-reemplazan la aceptación con Narrador. Registro: [`VALIDACION-UIA-2026-10-18.md`](VALIDACION-UIA-2026-10-18.md).
+reemplazan la aceptación con Narrador. Registro: [`evidencia/VALIDACION-UIA-2026-10-18.md`](evidencia/VALIDACION-UIA-2026-10-18.md).
 
 Revalidación Linux 2026-10-19: WSL2 registra Ubuntu pero no puede iniciar porque la plataforma de
 máquina virtual está deshabilitada (`HYPERV_NOT_INSTALLED`). No se modificó la configuración de
@@ -1446,7 +1446,7 @@ falla con `HCS_E_HYPERV_NOT_INSTALLED`, indicando que Virtual Machine Platform/v
 habilitada. No se intentó habilitar características ni reiniciar el PC. El copyright oficial del
 runtime Ayatana GLib 2.0.1-1build1 de Ubuntu Resolute coincide por SHA-256 con el aviso preservado en
 `licenses/linux/`; evidencia ampliada en
-[`VALIDACION-L00-AUDITORIA-2026-10-17.md`](VALIDACION-L00-AUDITORIA-2026-10-17.md).
+[`evidencia/VALIDACION-L00-AUDITORIA-2026-10-17.md`](evidencia/VALIDACION-L00-AUDITORIA-2026-10-17.md).
 
 Revalidación cruzada posterior a W-06D, 2026-10-19: `cargo check --workspace --tests --locked
 --offline --target x86_64-unknown-linux-gnu --jobs 1` pasó; Clippy `--all-targets -D warnings`
@@ -1474,7 +1474,7 @@ parsean correctamente y el PDB previo se conserva. UIA de solo lectura encontró
 enfocables con nombre, sin truncar el árbol; falta Narrador y validación interactiva. Captura W-07
 pasiva sobre este Release: 60,6–60,7 MiB working set y 0,06/0,09/0,05 s CPU en tres ventanas de
 30 s; no mide input o presentación y no cierra W-07. Detalles en [`BENCHMARKS.md`](BENCHMARKS.md)
-y [`VALIDACION-UIA-2026-10-18.md`](VALIDACION-UIA-2026-10-18.md).
+y [`evidencia/VALIDACION-UIA-2026-10-18.md`](evidencia/VALIDACION-UIA-2026-10-18.md).
 
 Actualización 2026-10-18 23:05: tras incorporar roles/nombres/acciones UIA en «Subir carpeta»,
 recientes y menús de contexto/filtro, pasó el gate completo (1.464 pruebas, 8 ignoradas, Clippy y
@@ -1483,7 +1483,7 @@ El setup se instaló con autorización previa; Naygo quedó abierto y respondien
 EXE instalado coincide con Release (`1f93266279feae63839bbd125aaa30c181bf85b09f1c8457a2eb9e52c3c6db2f`),
 los cuatro JSON de usuario parsean y el PDB anterior se conserva. UIA: 350 descendientes, 88/88
 enfocables con nombre, árbol completo. W-13 sigue pendiente de Narrador y recorrido manual; W-14
-firma Authenticode también sigue abierta. Evidencia: [`VALIDACION-W13-CONTROLES-2026-10-18.md`](VALIDACION-W13-CONTROLES-2026-10-18.md).
+firma Authenticode también sigue abierta. Evidencia: [`evidencia/VALIDACION-W13-CONTROLES-2026-10-18.md`](evidencia/VALIDACION-W13-CONTROLES-2026-10-18.md).
 
 Muestra W-07 adicional del 2026-10-18, 21:28–21:29: el PID instalado 48792 tuvo 93,9 MiB de
 working set, 53,6 MiB privados, 481 handles, 40 hilos y CPU delta 0,078/0/0,016 s en tres
@@ -1497,11 +1497,11 @@ tipos C correspondientes. Check y Clippy Linux cruzados de todos los targets pas
 Windows pasó 1.464 pruebas, 8 ignoradas, Clippy y formato. `dist/` se regeneró bajo supervisor
 (pico 10,64 GiB); ZIP íntegro, hashes verificados y EXE interno coincidente con release. Setup/EXE
 sin firma; no se instaló. La ejecución de bandeja aún requiere Ubuntu 26.04 nativo. Evidencia:
-[`VALIDACION-L03-CROSS-2026-10-17.md`](VALIDACION-L03-CROSS-2026-10-17.md).
+[`evidencia/VALIDACION-L03-CROSS-2026-10-17.md`](evidencia/VALIDACION-L03-CROSS-2026-10-17.md).
 UIA pasiva posterior del PID 48792 (EXE anterior al release actual): 759 controles, 80/80
 enfocables con nombre, árbol completo y sin truncar; no valida Narrador ni la build nueva. El
 escritorio está desbloqueado, pero la captura visual agotó el tiempo. Evidencia:
-[`VALIDACION-UIA-2026-10-18.md`](VALIDACION-UIA-2026-10-18.md).
+[`evidencia/VALIDACION-UIA-2026-10-18.md`](evidencia/VALIDACION-UIA-2026-10-18.md).
 
 Actualizado: 2026-10-18 (America/Santiago). L-02, importación de configuración: el importador
 omite rutas incompatibles y capacidades Linux aún no implementadas antes de escribir; presenta un
@@ -1514,7 +1514,7 @@ Build supervisado: pico 10,63 GiB; release 28m35s e Inno Setup 116,890 s. ZIP
 `955b5aa5d822024ff129af7d686c74090d3bea61be39cee119de723308a19564`. Manifiesto y ZIP verificados;
 ZIP sin PDB, EXE interno coincide con Release; el setup sigue sin Authenticode. La build quedó en
 `dist/`, no se instaló ni publicó. Evidencia:
-[`VALIDACION-L02-IMPORT-CONFIG-2026-10-18.md`](VALIDACION-L02-IMPORT-CONFIG-2026-10-18.md).
+[`evidencia/VALIDACION-L02-IMPORT-CONFIG-2026-10-18.md`](evidencia/VALIDACION-L02-IMPORT-CONFIG-2026-10-18.md).
 W-13: las filas de archivos y las acciones del Inspector exponen roles, nombres, estados y acciones
 accesibles; aceptación UIA/Narrador sobre la build nueva sigue pendiente.
 Fix de modificadores: el modal de nuevas carpetas limpia Ctrl/Shift al abrir y cerrar/aplicar, y los
@@ -1522,51 +1522,51 @@ clics sincronizan su modificador desde el gesto real antes de interpretar doble 
 pruebas aprobadas, 8 ignoradas, Clippy y formato correctos. Build supervisado previo: pico 10,64 GiB;
 release 29m44s e Inno Setup 125,250 s. Esa build se instaló con autorización previa y quedó abierta,
 PID 48792 respondía; settings/workspace/favorites/templates y PDB se preservaron. Evidencia:
-[`VALIDACION-MODIFICADORES-2026-10-18.md`](VALIDACION-MODIFICADORES-2026-10-18.md).
+[`evidencia/VALIDACION-MODIFICADORES-2026-10-18.md`](evidencia/VALIDACION-MODIFICADORES-2026-10-18.md).
 W-13 da nombres accesibles localizados al editor del preview, campos de nombre, búsqueda,
 configuración, favoritos, recetas, consultas, toolbar y unidades; aceptación UIA/Narrador pendiente. L-05,
 capacidad de elevación y subpaso Linux `xdg-open` pasaron el gate Windows;
 la UI Linux completa además pasó check/Clippy cruzados para `x86_64-unknown-linux-gnu` desde Windows
 con Fontconfig dinámico, incluido el test POSIX al compilar todos los targets. La ejecución nativa
-Linux sigue pendiente. Evidencia: [`VALIDACION-L05-ADMIN-2026-10-18.md`](VALIDACION-L05-ADMIN-2026-10-18.md)
-y [`VALIDACION-L03-CROSS-2026-10-17.md`](VALIDACION-L03-CROSS-2026-10-17.md).
+Linux sigue pendiente. Evidencia: [`evidencia/VALIDACION-L05-ADMIN-2026-10-18.md`](evidencia/VALIDACION-L05-ADMIN-2026-10-18.md)
+y [`evidencia/VALIDACION-L03-CROSS-2026-10-17.md`](evidencia/VALIDACION-L03-CROSS-2026-10-17.md).
 La instancia instalada PID 48792 sigue activa; su EXE conserva la build anterior, SHA-256 `94070d7b4dea91ebb9670cfb6f63abf63d8644f06556a4ff0a2c569c2fee3746`. La distribución L-02 actual está solo en `dist/` y no se instaló; settings/workspace/favorites/templates no se tocaron en esta entrega.
 UIA pasiva de E-6 vio 751 descendientes y 79/79 controles enfocables con nombre, sin truncar el árbol.
 El menú «Más» no se abrió; la captura de ventana expiró dos veces, así que aún falta revisar la barra
 visualmente, usar Narrador y comprobar sus acciones. L-03 aún
 requiere runtime y escritorio Ubuntu nativos. Evidencia:
-[`VALIDACION-L03-CROSS-2026-10-17.md`](VALIDACION-L03-CROSS-2026-10-17.md) y
-[`VALIDACION-READDIR-2026-10-18.md`](VALIDACION-READDIR-2026-10-18.md).
+[`evidencia/VALIDACION-L03-CROSS-2026-10-17.md`](evidencia/VALIDACION-L03-CROSS-2026-10-17.md) y
+[`evidencia/VALIDACION-READDIR-2026-10-18.md`](evidencia/VALIDACION-READDIR-2026-10-18.md).
 La inspección UIA anterior del PID 25124 encontró un `Edit` enfocable sin nombre, sin identificarlo;
 esa instancia era de una distribución previa. Se añadieron nombres accesibles a los campos Slint y
 se inspeccionó el árbol del PID 41292: no mostró controles enfocables sin nombre, aunque el menú
 «Más» y los diálogos estaban cerrados. La captura de escritorio falló antes de poder abrirlos; falta
 comprobarlos con Narrador y revisar la interfaz visualmente. Ver
-[`VALIDACION-UIA-2026-10-18.md`](VALIDACION-UIA-2026-10-18.md).
+[`evidencia/VALIDACION-UIA-2026-10-18.md`](evidencia/VALIDACION-UIA-2026-10-18.md).
 La muestra pasiva de E-6, PID 41292, dio 78,2 MiB working set, 47,1 MiB privados, 388 handles,
 26 hilos y CPU 0/0/0 s en tres ventanas de 30 s; no observó procesos auxiliares ni mapeos SMB.
 No se controló inactividad ni mide input, latencia o presentación, por lo que no cierra W-07.
 Registro y límites en `docs/BENCHMARKS.md`.
-Evidencia: [`docs/VALIDACION-E4-CATALOGO-2026-10-18.md`](VALIDACION-E4-CATALOGO-2026-10-18.md),
-[`docs/VALIDACION-TOOLBAR-2026-10-18.md`](VALIDACION-TOOLBAR-2026-10-18.md).
+Evidencia: [`docs/evidencia/VALIDACION-E4-CATALOGO-2026-10-18.md`](evidencia/VALIDACION-E4-CATALOGO-2026-10-18.md),
+[`docs/evidencia/VALIDACION-TOOLBAR-2026-10-18.md`](evidencia/VALIDACION-TOOLBAR-2026-10-18.md).
 Favoritos globales o propios se eligen al crear un espacio; v1 migra a global y las diez traducciones
 están incluidas. El gate completo pasó 1.450 pruebas (8 ignoradas), Clippy `-D warnings` y formato.
-Evidencia E-4: [`docs/VALIDACION-E4-FAVORITOS-2026-10-18.md`](VALIDACION-E4-FAVORITOS-2026-10-18.md).
+Evidencia E-4: [`docs/evidencia/VALIDACION-E4-FAVORITOS-2026-10-18.md`](evidencia/VALIDACION-E4-FAVORITOS-2026-10-18.md).
 El PDB no se incluye en el ZIP. Evidencia de cierre e instalación en
-[`docs/VALIDACION-CIERRE-SEGURO-2026-10-17.md`](VALIDACION-CIERRE-SEGURO-2026-10-17.md).
+[`docs/evidencia/VALIDACION-CIERRE-SEGURO-2026-10-17.md`](evidencia/VALIDACION-CIERRE-SEGURO-2026-10-17.md).
 La muestra pasiva E-5 del proceso recién instalado midió 76,7–77,9 MiB de working set, 45,5–46,7 MiB
 privados, 385–387 handles, 26–27 hilos y CPU 0,032/0,359/0 s en tres ventanas de 30 s; comenzó 79 s
 después del arranque y no controló inactividad, así que no cierra W-07. UIA expuso 721 descendientes,
 536 con nombre y 55 enfocables; todos los enfocables tenían nombre accesible. No sustituye Narrador
 ni aceptación manual. Evidencia en
-[`docs/VALIDACION-FAVORITOS-2026-10-17.md`](VALIDACION-FAVORITOS-2026-10-17.md),
+[`docs/evidencia/VALIDACION-FAVORITOS-2026-10-17.md`](evidencia/VALIDACION-FAVORITOS-2026-10-17.md),
 [`docs/BENCHMARKS.md`](BENCHMARKS.md) y
-[`docs/VALIDACION-WINDOWS-0.5.2-2026-10-15.md`](VALIDACION-WINDOWS-0.5.2-2026-10-15.md).
+[`docs/evidencia/VALIDACION-WINDOWS-0.5.2-2026-10-15.md`](evidencia/VALIDACION-WINDOWS-0.5.2-2026-10-15.md).
 Evidencia histórica anterior:
-[E-1](VALIDACION-BUILD-2026-10-17-E1.md), [L-01A / build](VALIDACION-BUILD-2026-10-17-L01A.md),
-[L-01A JSON y distribución](VALIDACION-BUILD-2026-10-17-L01A-JSON.md),
-[W-16](VALIDACION-W16-2026-10-17.md) y
-[visor 3D](VALIDACION-VISOR-3D-2026-10-17.md).
+[E-1](evidencia/VALIDACION-BUILD-2026-10-17-E1.md), [L-01A / build](evidencia/VALIDACION-BUILD-2026-10-17-L01A.md),
+[L-01A JSON y distribución](evidencia/VALIDACION-BUILD-2026-10-17-L01A-JSON.md),
+[W-16](evidencia/VALIDACION-W16-2026-10-17.md) y
+[visor 3D](evidencia/VALIDACION-VISOR-3D-2026-10-17.md).
 
 W-01–W-06D, W-08–W-11C, W-15, W-16 y E-2 (crash en drop desde 7-Zip) están implementados, probados y empaquetados. La L-11 está ahora instalada, abierta y responde; en su log del 17-10 el único panic es el evento viejo de las 12:58, anterior a la actualización. El registro confirma que el cierre E-2 ocurrió en la build anterior al procesar el resultado del drop; no confirma que el OBJ se copiara. Queda pendiente repetir el drop con el fixture de aceptación. W-12 y la corrección Windows de la
 Papelera pasan validaciones locales; falta ejecutar el workflow actualizado en GitHub sobre
@@ -1586,12 +1586,12 @@ reescribir commits. El binding FFI GLib ahora está implementado localmente y pa
 en un harness cruzado aislado. El 18 de octubre `core` y `platform` pasaron `cargo check` y Clippy
 para `x86_64-unknown-linux-gnu` con todos sus targets desde Windows. El código Linux sigue parcial:
 faltan build y tests nativos, validación de ABI/runtime e integración de escritorio, supervisor de
-preview y empaquetado. Evidencia: [`docs/VALIDACION-L03-CROSS-2026-10-17.md`](VALIDACION-L03-CROSS-2026-10-17.md).
+preview y empaquetado. Evidencia: [`docs/evidencia/VALIDACION-L03-CROSS-2026-10-17.md`](evidencia/VALIDACION-L03-CROSS-2026-10-17.md).
 Revalidación 2026-10-18: WSL muestra Ubuntu registrado, pero `wsl -d Ubuntu` falla con
 `HYPERV_NOT_INSTALLED`; la capa de virtualización no está disponible y no se cambió Windows. Por
 ahora no se puede ejecutar la validación nativa desde este host.
 La auditoría local de licencias/autoría del 2026-10-17 está en
-[`docs/VALIDACION-L00-AUDITORIA-2026-10-17.md`](VALIDACION-L00-AUDITORIA-2026-10-17.md): historial
+[`docs/evidencia/VALIDACION-L00-AUDITORIA-2026-10-17.md`](evidencia/VALIDACION-L00-AUDITORIA-2026-10-17.md): historial
 con un solo autor normalizado y 275/275 fuentes con SPDX; quedan pendientes revisión de fragmentos
 importados, fuente correspondiente y notices finales. La revisión local del source package Ayatana
 GLib 2.0.1-1build1 confirmó GPL-3 para la biblioteca y CC0-1.0 para una plantilla, coherente con la
@@ -1622,20 +1622,20 @@ plataforma y las dos regresiones de flujo UI pasan. El gate workspace terminó c
 8 ignoradas y Clippy limpio; check/Clippy cruzados de core/platform para Linux también pasan. La
 distribución 0.5.2 se regeneró bajo supervisor con pico 10,45 GiB y está en `dist/`; esta compilación
 no se ha instalado y la instancia abierta no se modificó. Hashes y alcance en
-`docs/VALIDACION-BUILD-2026-10-16.md`.
+`docs/evidencia/VALIDACION-BUILD-2026-10-16.md`.
 También se implementó localmente el reemplazo de árboles con staging hermano, restauración del
 destino anterior si el rename final falla, conservación del origen de Move hasta publicar y
 revalidación de contenido antes de retirarlo. Pasaron las siete pruebas focales y el gate workspace
 (1.423 tests, 8 ignorados), Clippy, formato, diff check y check/Clippy cruzados Linux de core y
 platform. La regeneración supervisada de distribución terminó con pico 10,45 GiB; ZIP/setup y
-hashes están registrados en `docs/VALIDACION-BUILD-2026-10-16.md`. No se instaló esta compilación.
+hashes están registrados en `docs/evidencia/VALIDACION-BUILD-2026-10-16.md`. No se instaló esta compilación.
 Windows requiere dos renames para sustituir una carpeta, así que aún puede haber un intervalo corto
 sin ruta. El delta local de L-01B registra la transacción antes del staging y recupera al listar el
 padre: revierte si el proceso terminó entre renames y completa limpieza si el árbol nuevo se publicó.
 El gate protegido pasó 1.433 tests (8 ignorados), Clippy, formato y diff check; check/Clippy
 cruzados Linux de core/platform también pasan. La distribución 0.5.2 se regeneró bajo supervisor
 (pico 10,45 GiB), sin instalarla. Se probó terminación abrupta de proceso en ambos límites, no pérdida
-de energía. Hashes y evidencia en `docs/VALIDACION-BUILD-2026-10-16.md`.
+de energía. Hashes y evidencia en `docs/evidencia/VALIDACION-BUILD-2026-10-16.md`.
 El smoke del portable con 100 archivos produjo spans internos de listado/modelo, pero no de entrada:
 UIA encontró 23 filas visibles y la captura gráfica falló dos veces, sin enviar teclas/clics. Tras
 restaurar los cuatro JSON y relanzar la instalación, el PID 9204 respondió; 3×30 s pasivos midieron
@@ -1676,7 +1676,7 @@ desmarcar, reemplazo al marcar y retiro al desinstalar. El producto no ofrece re
 (`NoRepair=1`). Reinspección de solo lectura del PID 25520: 731 descendientes UIA, 541 con nombre y
 55 enfocables; el proceso responde y el EXE coincide con el release actual. La sesión no contiene
 grupos de pestañas, así que esta captura no valida Narrador ni la navegación de la barra. Evidencia
-detallada en `VALIDACION-BUILD-2026-10-16.md`.
+detallada en `evidencia/VALIDACION-BUILD-2026-10-16.md`.
 Un ensayo aislado adicional con clic y teclado no fue concluyente: UIA observó el clic, pero la
 aserción tras Enter no encontró selección; no se cuenta como interacción aprobada. La prueba dirigida
 headless `tab_bar_accessibility` pasó 1/1.
@@ -1722,7 +1722,7 @@ visible y respondiendo en Windows 10 Home 19045. Esa primera instalación era el
 anterior; después AccessKit y la barra accesible de pestañas se instalaron como actualizaciones
 sucesivas. El EXE instalado vigente es
 `c492982e5f70d6a8d1a2e78982035554e6a1065a3a5fbbf3fdd05eb82540bdca`; detalles e inventario UIA en
-`VALIDACION-BUILD-2026-10-16.md`. El ZIP vigente se verificó como archivo, pero no se abrió en
+`evidencia/VALIDACION-BUILD-2026-10-16.md`. El ZIP vigente se verificó como archivo, pero no se abrió en
 paralelo para evitar el mutex de instancia única; su ejecución portable y la aceptación interactiva
 siguen pendientes. Inno Setup no modifica configuraciones; para la última actualización, los cuatro
 JSON se compararon con el respaldo tras el cierre limpio y coinciden byte a byte.
@@ -1734,7 +1734,7 @@ La revalidación release posterior, en una sola pasada (no agregada a las median
 100k en 269,938 ms inicial, 1,479 ms no-op, 27,949 ms al modificar una fila, 21,101 ms append y
 2,301 ms render p50; el Job alcanzó 8,67 GiB durante la compilación supervisada. No incluye Winit,
 presentación física ni entrada, así que no cierra W-07. Detalle y log en `docs/BENCHMARKS.md` y
-`docs/VALIDACION-BUILD-2026-10-16.md`.
+`docs/evidencia/VALIDACION-BUILD-2026-10-16.md`.
 El intento local de generar teclado con automatización tampoco produjo callbacks: Windows no permitió
 activar la ventana desde el proceso de prueba y se evitó enviar teclas a la app que estaba en primer
 plano. Después, un test headless invocó directamente 256 veces el callback Slint real de `wire_nav_keys`;
@@ -1748,12 +1748,12 @@ captura de 90 s sobre 100k midió hasta 265,7 MiB working set; `--shutdown` no r
 durante el streaming. W-10C implementado y empaquetado: el modelo agrega solo el lote nuevo si el
 prefijo visible permanece intacto; tres corridas release midieron 21,279 ms de mediana al añadir una
 fila a 100k, frente a 561,367 ms previos (~26,4×, headless). Gate completo y Clippy pasan. W-07 sigue
-abierto. Evidencia en `docs/BENCHMARKS.md` y `docs/VALIDACION-BUILD-2026-10-16.md`.
+abierto. Evidencia en `docs/BENCHMARKS.md` y `docs/evidencia/VALIDACION-BUILD-2026-10-16.md`.
 W-12 local revalida pins, sintaxis YAML y pruebas sintéticas de firma; el último CI remoto sigue
 fallido en `abdef402`. `HEAD` remoto coincide con la base local, pero los cambios W-12 están sin
 publicar, así que aún no existe un run que los pruebe en Windows Server 2025.
 L-02 también sigue parcial porque falta entorno Linux nativo. Hashes y evidencia en
-`VALIDACION-BUILD-2026-10-16.md`. La prioridad vigente es cerrar primero todos los bloques Windows.
+`evidencia/VALIDACION-BUILD-2026-10-16.md`. La prioridad vigente es cerrar primero todos los bloques Windows.
 El 14 de octubre se repitió tres veces el benchmark sintético Windows en el mismo Ryzen 7 1700X:
 las medianas de 100.000 filas variaron +1,0–9,4 % frente a la base del 13 de octubre, dentro del
 umbral orientativo de 15 %. Esto no mide la UI completa ni cierra W-07. Nicolás pidió priorizar
@@ -1788,7 +1788,7 @@ release 0.5.2 que ahora se probó como portable (`a2810673…`); las capturas an
 la entrega actual. La prueba opt-in reciente sólo aporta telemetría parcial; faltan las muestras de
 callback y la matriz de aceptación.
 La matriz y hoja para probar esta entrega con resultados por entorno está en
-[`VALIDACION-WINDOWS-0.5.2-2026-10-15.md`](VALIDACION-WINDOWS-0.5.2-2026-10-15.md); el smoke portable
+[`evidencia/VALIDACION-WINDOWS-0.5.2-2026-10-15.md`](evidencia/VALIDACION-WINDOWS-0.5.2-2026-10-15.md); el smoke portable
 de arranque/cierre está anotado, y el resto de casos manuales sigue pendiente.
 El capturador pasivo W-07 pasó a schema v3: muestrea los procesos descendientes cada 2 s por defecto,
 reporta identidades vistas al menos una vez y picos de recursos por ventana. Un intervalo menor puede
@@ -1811,7 +1811,7 @@ Tres mediciones headless a 100.000 filas dan una mediana de 31,874 ms para modif
 a 353,568 ms en la muestra anterior. El append mantiene aplicación estructural incremental; sus cifras
 nuevas deben compararse con una línea base controlada. El gate completo pasó y la distribución 0.5.2
 se regeneró bajo supervisor con hashes verificados. La sesión interactiva completa queda pendiente.
-Evidencia en `BENCHMARKS.md` y `VALIDACION-BUILD-2026-10-15.md`.
+Evidencia en `BENCHMARKS.md` y `evidencia/VALIDACION-BUILD-2026-10-15.md`.
 W-11A ya reutiliza el parse del preview PDF, limita el texto extraído a 8.000 caracteres y el
 contenido recorrido a 500 páginas; sus pruebas dirigidas, suite, Clippy y build supervisado pasaron,
 con hashes de distribución verificados. Falta aceptación instalada y medición con corpus PDF.
@@ -1863,15 +1863,15 @@ Papelera, verificó que el destino y su archivo siguieran intactos y restauró e
 tests dirigidos y los checks cruzados Windows de platform/UI pasaron. El gate completo quedó verde:
 1.389 tests, seis ignorados, Clippy `-D warnings` y formato. La distribución de este último delta
 sigue vigente en 0.5.2: ZIP y setup se regeneraron bajo supervisor con pico 10,41 GiB; hashes,
-tamaño y estado Authenticode `NotSigned` están en [la validación del 15 de octubre](VALIDACION-BUILD-2026-10-15.md).
+tamaño y estado Authenticode `NotSigned` están en [la validación del 15 de octubre](evidencia/VALIDACION-BUILD-2026-10-15.md).
 El test de ida/vuelta ya no está ignorado, confirma que Shell entregó el ítem y pasó en el gate local
 completo (1.381 tests, 6 ignorados; Clippy limpio). El portable y el instalador se regeneraron bajo
-supervisor y verificaron; detalle y hashes en [la validación](VALIDACION-BUILD-2026-10-14.md). W-12
+supervisor y verificaron; detalle y hashes en [la validación](evidencia/VALIDACION-BUILD-2026-10-14.md). W-12
 sigue pendiente del run remoto con este cambio adicional. El gate local supervisado del 14 de
 octubre pasó suite completa y Clippy (`-D warnings`), con pico 5,93 GiB. La distribución 0.5.2 se
 regeneró con el caché FIFO: Cargo release tardó 31m11s, Inno Setup 114,485 s y el pico Job fue
 10,41 GiB. ZIP, setup, EXE incluido y `SHA256SUMS.txt` se verificaron; detalle y hashes en
-[la bitácora](VALIDACION-BUILD-2026-10-14.md). W-12 aún espera la validación remota.
+[la bitácora](evidencia/VALIDACION-BUILD-2026-10-14.md). W-12 aún espera la validación remota.
 Faltan mediciones reales de UI, memoria/CPU y red. Falta aceptación instalada en un equipo externo antes
 de considerar la entrega validada.
 Refuerzo de Papelera del 15 de octubre: el restore y el fallback inspeccionan la entrada con
@@ -1900,7 +1900,7 @@ para comparar `Naygo`/`0.5.2`. La primera solicitud SignPath debe confirmar que 
 metadata normaliza ese padding; si lo rechaza, W-14 requiere resolverlo antes de firmar.
 La distribución local se regeneró el 14 de octubre tras el ajuste de identidad de rutas y la limpieza
 de warnings cruzados Linux; gate, Clippy, formato, diff y Graphify pasaron. Sus hashes/validaciones están en
-[VALIDACION-BUILD-2026-10-14.md](VALIDACION-BUILD-2026-10-14.md).
+[evidencia/VALIDACION-BUILD-2026-10-14.md](evidencia/VALIDACION-BUILD-2026-10-14.md).
 Este documento distingue
 producto disponible, trabajo aprobado y evidencia histórica. No convierte un plan ni un
 resultado de CI en una entrega instalada.
@@ -1969,7 +1969,7 @@ el contrato UTF-8 existente. El check/test Windows pasa; los tests POSIX compila
 la ejecución requiere un host Linux nativo. El gate completo pasó (1.393 tests, 7 ignorados, Clippy y
 formato); después del ajuste de visualización pasaron los tests CLI focales, Clippy Linux cruzado y
 check UI. Se regeneró el release Windows con pico 10,42 GiB; hashes y limitaciones en
-[la validación 2026-10-15](VALIDACION-BUILD-2026-10-15.md).
+[la validación 2026-10-15](evidencia/VALIDACION-BUILD-2026-10-15.md).
 
 **Nota de planificación, 2026-10-13:** Nicolás solicitó [un plan de mejoras para GPT-6 Luna](plans/2026-10-13-mejoras-y-ejecucion-luna.md)
 y [un plan Linux](plans/2026-10-13-linux-ubuntu-luna.md), con Ubuntu LTS y derivados x86_64
@@ -1983,7 +1983,7 @@ rutas para resaltar cambios y lo invalida al navegar; sus tests dirigidos y benc
 pasaron. W-03 reemplaza `Vec<Entry>` por metadatos compactos y LRU. El límite de 32 MiB estimados /
 100.000 entradas es provisional; falta medición W-07. Sus cuatro pruebas core pasaron. La
 distribución 0.5.2 se regeneró y sus hashes se verificaron; detalles en
-[el registro del build](VALIDACION-BUILD-2026-10-13.md).
+[el registro del build](evidencia/VALIDACION-BUILD-2026-10-13.md).
 W-04 eliminó consultas al filesystem desde UI al sugerir nombres y detectar colisiones de Copy/Move.
 La preconsulta del drop corre en un worker acotado, conserva errores de acceso y deja el staging vivo
 hasta decidir entre el diálogo genérico o el de conflicto; el motor revalida antes de actuar. Los
@@ -2003,7 +2003,7 @@ packs, copia de PNG de usuario, guardado/borrado de temas, logging ordinario, co
 consultas de carpeta perdida. Durante la carga inicial se usan assets embebidos; el catálogo del
 usuario se aplica cuando el worker termina. Verificación actual: 359 tests UI, 891 core y 22 flujos
 de operaciones aprobados. El build supervisado está registrado en
-[la validación](VALIDACION-BUILD-2026-10-13.md).
+[la validación](evidencia/VALIDACION-BUILD-2026-10-13.md).
 
 W-06C mueve a un worker la lectura inicial de settings, idioma, keymap, sesión, favoritos y
 plantillas; el primer frame usa defaults/recursos embebidos. La aplicación del snapshot conserva
@@ -2013,13 +2013,13 @@ defaults sobre archivos existentes. Hallazgo adicional: la escritura atómica no
 padre, lo que impedía guardar favoritos/plantillas en una configuración nueva; ahora lo crea en el
 worker. Suites completas: 365 UI, 893 core, 22 flujos de operaciones y 54 platform (6 ignorados).
 `cargo check`, formato y diff check pasan. La distribución supervisada de W-06C está en
-[la validación](VALIDACION-BUILD-2026-10-13.md). Clippy encontró 16 ocurrencias agrupadas en siete
+[la validación](evidencia/VALIDACION-BUILD-2026-10-13.md). Clippy encontró 16 ocurrencias agrupadas en siete
 clases y Nicolás aprobó registrarlas como mantenimiento M-01.
 
 W-07 capturó tres ejecuciones de benchmark sintético y agregó métricas opt-in de tick, sincronización
 Slint, listado y fases de preview. Suite UI aprobada tras instrumentar; la distribución supervisada
 está generada y sus hashes se verificaron. No se han medido CPU en reposo, memoria principal/
-auxiliares, latencia de interacción ni UNC. Ver [validación](VALIDACION-BUILD-2026-10-13.md).
+auxiliares, latencia de interacción ni UNC. Ver [validación](evidencia/VALIDACION-BUILD-2026-10-13.md).
 M-01 limpió las 16 ocurrencias Clippy en siete clases. El gate global con `-D warnings`, suites
 completas y nueva distribución supervisada pasaron; evidencia en el plan y validación de build.
 
@@ -2027,7 +2027,7 @@ completas y nueva distribución supervisada pasaron; evidencia en el plan y vali
 
 Nicolás autorizó auditar temporales/dependencias y ajustar la compilación. Se identificó
 caché regenerable (144,61 GiB, no eliminada por restricción de herramienta) y se validó
-ThinLTO/16 unidades bajo el mismo supervisor: [registro](VALIDACION-BUILD-2026-09-14.md).
+ThinLTO/16 unidades bajo el mismo supervisor: [registro](evidencia/VALIDACION-BUILD-2026-09-14.md).
 
 Texto/resaltado y STL/3MF aislados; protocolo de geometría y temporales de raster acotados.
 Se conservan giro 3D sin I/O, reglas de lenguaje y copia parcial. **1.324 pruebas y Clippy
@@ -2035,7 +2035,7 @@ aprobados**, siete pruebas adicionales del EXE release. Instalador/portable
 **0.5.2+build.202609142135**, generados a las **22:04** y verificados el 14 de septiembre.
 Build completo con pico contable 10,44 GiB (límite 12 GiB). ZIP/entradas/checksums/autoría
 verificados; PDB opcional en instalador, fuera del ZIP. Sin instalar ni publicar a GitHub.
-[Registro RP-4B2](VALIDACION-RP4B2-2026-09-14.md).
+[Registro RP-4B2](evidencia/VALIDACION-RP4B2-2026-09-14.md).
 
 Recuperación tras reinicio forzado: fuentes y distribución anterior intactas; Git sin
 corrupción, **1.324 pruebas aprobadas**, seis ignoradas preexistentes y Clippy limpio.
@@ -2052,7 +2052,7 @@ Clippy sin advertencias, diez idiomas/formato/diff correctos y grafo actualizado
 Instalador/portable **0.5.2+build.202609100757** generados y verificados a las **08:26**
 del 10 de septiembre. Cinco pruebas adicionales del lector release aprobadas.
 La entrega anterior está respaldada; sin instalación sobre la sesión personal ni GitHub.
-[Evidencia y límites RP-5B](VALIDACION-RP5B-2026-09-10.md).
+[Evidencia y límites RP-5B](evidencia/VALIDACION-RP5B-2026-09-10.md).
 
 Continuación de aquel corte: I/O bloqueado de texto/3D y presupuestos temporales;
 implementados ahora en RP-4B2, cuya validación figura al inicio de este documento.
@@ -2070,7 +2070,7 @@ el 2026-09-10 a las 01:19 local; cuatro pruebas adicionales del lector release a
 RP-5A respaldado; sin instalar sobre la sesión personal ni publicar a GitHub.
 Siguiente: aceptación de estos gestos en la instalación del usuario; los presupuestos globales,
 modo económico y demás pendientes RP-4/RP-5/RP-6 conservan su alcance anterior.
-[Registro 0.5.2](VALIDACION-0.5.2.md).
+[Registro 0.5.2](evidencia/VALIDACION-0.5.2.md).
 
 ## Entrega anterior — RP-5A
 
@@ -2082,7 +2082,7 @@ Cuatro pruebas del lector release aprobadas: la muestra privada recorrió 55 fra
 de decodificación/IPC sin esperas de presentación; cancelación en 30 ms. No mide reproducción UI.
 Sin instalar sobre la sesión personal ni publicar a GitHub. Siguiente: presupuestos globales,
 calidad económica configurable y aceptación instalada; RP-4/RP-5/RP-6 no están cerrados completos.
-[Registro RP-5A](VALIDACION-RP5A-2026-09-09.md).
+[Registro RP-5A](evidencia/VALIDACION-RP5A-2026-09-09.md).
 
 ## Entrega anterior — RP-4B1
 
@@ -2094,7 +2094,7 @@ respaldada. Prueba adicional del ejecutable release aprobada con PNG/SVG/ZIP/PDF
 WebP de Nicolás, sólo en lectura. No se instaló ni se publicó a GitHub.
 WebP confirmado animado (50 frames, 800 × 450, ciclo 5 s), pero **en ese build el preview seguía estático**.
 RP-4 continúa parcial: I/O bloqueado de texto/3D y presupuesto global pendientes;
-RP-5 animación y RP-6 lectores/métricas también. [Registro RP-4B1](VALIDACION-RP4B1-2026-09-09.md).
+RP-5 animación y RP-6 lectores/métricas también. [Registro RP-4B1](evidencia/VALIDACION-RP4B1-2026-09-09.md).
 
 ## Entrega anterior — RP-4A
 
@@ -2104,7 +2104,7 @@ aprobadas, seis ignoradas preexistentes, Clippy limpio, idiomas/formato/diff cor
 Controles Slint renderizados y probados con datos sintéticos. Instalador/portable
 **0.5.1+build.202609092050** generados y verificados (21:18 local), entrega anterior
 respaldada. Sin instalar sobre la sesión activa ni publicar a GitHub.
-[Validación RP-4A](VALIDACION-RP4A-2026-09-09.md). Siguiente: RP-4B, aislamiento/terminación
+[Validación RP-4A](evidencia/VALIDACION-RP4A-2026-09-09.md). Siguiente: RP-4B, aislamiento/terminación
 no cooperativa y presupuestos completos. RP-4 no está cerrado; aceptación nativa pendiente.
 
 ## Entrega anterior — RP-3
@@ -2115,7 +2115,7 @@ aprobadas, seis ignoradas preexistentes, Clippy limpio y diez idiomas correctos*
 Quince temas renderizados e inspeccionados con componentes Slint reales y datos sintéticos.
 Instalador/portable **0.5.1+build.202609091919** generados y verificados (19:44 local).
 Entrega anterior respaldada; sin instalación sobre la sesión personal ni publicación remota.
-[Registro RP-3](VALIDACION-RP3-2026-09-09.md). Entrega anterior a RP-4A.
+[Registro RP-3](evidencia/VALIDACION-RP3-2026-09-09.md). Entrega anterior a RP-4A.
 
 ## Entrega anterior — RP-2
 
@@ -2124,7 +2124,7 @@ con panel destino capturado, acciones sobre ruta confirmada y retorno de foco al
 Suite aprobada: 1.257 pruebas y seis ignoradas preexistentes; Clippy limpio.
 Instalador y portable **0.5.1+build.202609091819** generados y verificados (18:48 local).
 Distribución anterior respaldada; aceptación instalada/DPI/AltGr/red pendiente.
-[Registro de este bloque](VALIDACION-RP2-2026-09-09.md).
+[Registro de este bloque](evidencia/VALIDACION-RP2-2026-09-09.md).
 
 ## Entrega anterior — RP-1
 
@@ -2133,7 +2133,7 @@ lápiz, cursor/selección/undo nativos, validación asíncrona con error inline,
 y destino capturado. Configuración y dependencias conservadas. **1.255 pruebas aprobadas,
 seis ignoradas preexistentes, Clippy sin advertencias**. Instalador y portable regenerados
 como **0.5.1+build.202609091710**, con integridad y hashes comprobados;
-ver [registro de entrega](VALIDACION-2026-09-09.md).
+ver [registro de entrega](evidencia/VALIDACION-2026-09-09.md).
 
 Fuentes experimentales recuperadas de GitHub en una carpeta separada, con ZIP/hashes
 verificados; no se aplicaron en bloque. RP-3/RP-4A entregados; RP-4B–RP-6 siguen pendientes. La documentación que
@@ -2164,7 +2164,7 @@ no significa que todos los escenarios de escritorio/red hayan recibido aceptaci�
 | Formato y diff | Aprobados | Salida de la revisión local |
 | Catálogos ES/EN/PT/DE/FR/HI/IT/JA/KO/ZH | Claves y placeholders correctos | `scripts/check_i18n_lang.py` |
 | ZIP portable | Integridad aprobada por `7z t` | Salida de la revisión local |
-| SHA-256 del setup, ZIP y EXE | Coinciden con la entrega del día 7 | [Registro de distribución](VALIDACION-2026-09-07.md) |
+| SHA-256 del setup, ZIP y EXE | Coinciden con la entrega del día 7 | [Registro de distribución](evidencia/VALIDACION-2026-09-07.md) |
 
 Desglose: 865 core, 22 integración core, 47 platform, 309 UI y 3 integración visual.
 Los seis tests ignorados no se ejecutaron en esta revisión. El smoke nativo del watcher
@@ -2197,7 +2197,7 @@ No rehacer flujos ya implementados porque un registro antiguo diga «working tre
 - RP-1 elimina la concatenación especial de `\`: la edición nativa respeta caret/selección.
 - Desde RP-5A, el preview presenta WebP, GIF y APNG animados de forma secuencial, con pausa,
   reanudación y repetición. La decodificación y el reloj tienen límites y ciclo de vida propios;
-  consultar [RP-5A](VALIDACION-RP5A-2026-09-09.md) y [la arquitectura](ARQUITECTURA.md).
+  consultar [RP-5A](evidencia/VALIDACION-RP5A-2026-09-09.md) y [la arquitectura](ARQUITECTURA.md).
 - RP-4A ofrece Cancelar desde el debounce y sobre miniaturas con trabajo pendiente;
   un token no interrumpe una llamada bloqueante del SO o un decoder que no lo consulta.
 - Los límites de salida visible no garantizan un presupuesto total de memoria/CPU;
@@ -2228,4 +2228,4 @@ El Markdown temporal fue consolidado por petición de Nicolás. Su original se c
 `target/agent-out/traspaso-original-20260909.zip` (respaldo local, no versionado). Los requisitos,
 identificadores de recuperación y advertencias útiles permanecen en el plan versionable.
 
-L-01B avanzó parcialmente en Windows: las copias usan staging en un temporal del directorio de destino y publicación al final. Cancelar/fallar conserva el archivo anterior; los movimientos cross-volume borran el origen sólo tras publicar. Pasaron 916 tests core, 22 flujos de operaciones, gate completo de 1.408 pruebas (8 ignoradas), Clippy, formato y check cruzado Linux del core. La distribución de esa etapa `0.5.2` se regeneró bajo supervisor con pico 10,45 GiB; ZIP SHA-256 `46687762…`, setup `106e34c3…`, EXE `c9db8752…`. Se instaló con autorización previa y se dejó abierta/respondiendo; tras el smoke aislado y la restauración exacta de los cuatro JSON, el proceso de esa actualización fue PID 9204. El PDB antiguo quedó intacto. En la regeneración posterior descrita al inicio de este documento se cerró la carrera de overwrite de la ruta rápida Windows. El reemplazo de árboles ya tiene staging y rollback local; el gate y la distribución regenerada se registran al inicio de este documento. L-01B permanece parcial por aceptación manual, recuperación ante pérdida de energía, pruebas de disco/permisos, movimiento entre volúmenes y ejecución Linux nativa; la recuperación tras terminación de proceso se documenta en el avance posterior. W-07 sigue pendiente: el fixture aislado produjo métricas internas, pero la captura de ventana agotó tiempo y no se enviaron entradas. Detalle de la nueva evidencia en `docs/VALIDACION-BUILD-2026-10-16.md` y el plan Linux.
+L-01B avanzó parcialmente en Windows: las copias usan staging en un temporal del directorio de destino y publicación al final. Cancelar/fallar conserva el archivo anterior; los movimientos cross-volume borran el origen sólo tras publicar. Pasaron 916 tests core, 22 flujos de operaciones, gate completo de 1.408 pruebas (8 ignoradas), Clippy, formato y check cruzado Linux del core. La distribución de esa etapa `0.5.2` se regeneró bajo supervisor con pico 10,45 GiB; ZIP SHA-256 `46687762…`, setup `106e34c3…`, EXE `c9db8752…`. Se instaló con autorización previa y se dejó abierta/respondiendo; tras el smoke aislado y la restauración exacta de los cuatro JSON, el proceso de esa actualización fue PID 9204. El PDB antiguo quedó intacto. En la regeneración posterior descrita al inicio de este documento se cerró la carrera de overwrite de la ruta rápida Windows. El reemplazo de árboles ya tiene staging y rollback local; el gate y la distribución regenerada se registran al inicio de este documento. L-01B permanece parcial por aceptación manual, recuperación ante pérdida de energía, pruebas de disco/permisos, movimiento entre volúmenes y ejecución Linux nativa; la recuperación tras terminación de proceso se documenta en el avance posterior. W-07 sigue pendiente: el fixture aislado produjo métricas internas, pero la captura de ventana agotó tiempo y no se enviaron entradas. Detalle de la nueva evidencia en `docs/evidencia/VALIDACION-BUILD-2026-10-16.md` y el plan Linux.

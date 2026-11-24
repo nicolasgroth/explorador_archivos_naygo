@@ -8,7 +8,7 @@ Fecha: 2026-10-18 (America/Santiago). Base: Naygo 0.5.2.
 
 Este informe registra la primera versión, que conservaba recientes durante una sola sesión. El
 catálogo persistente implementado después, con su gate y build Windows, está en
-`docs/VALIDACION-E4-CATALOGO-2026-10-18.md`.
+`docs/evidencia/VALIDACION-E4-CATALOGO-2026-10-18.md`.
 
 ## Cambio
 

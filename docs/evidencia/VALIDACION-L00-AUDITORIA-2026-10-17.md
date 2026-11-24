@@ -102,7 +102,7 @@ final del source correspondiente/notices del artefacto Naygo y comprobar el runt
 Se preservaron byte a byte la licencia upstream `COPYING` y el `debian/copyright` obtenido del
 paquete binario autenticado en `licenses/linux/`. Sus SHA-256 coinciden con los artefactos
 verificados que se documentan arriba. Se creó
-[`THIRD-PARTY-NOTICES-LINUX.md`](../THIRD-PARTY-NOTICES-LINUX.md) para atribuir el runtime
+[`THIRD-PARTY-NOTICES-LINUX.md`](../../THIRD-PARTY-NOTICES-LINUX.md) para atribuir el runtime
 `libayatana-appindicator-glib2` 2.0.1-1build1 y dejar explícitos la decisión GPL-3 Linux-only y
 los límites pendientes. El archivo general de avisos ahora se identifica como inventario Windows.
 

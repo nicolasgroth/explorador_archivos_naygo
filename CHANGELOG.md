@@ -396,7 +396,7 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
   componentes de ruta que no sean UTF-8 se rechazan antes de crear o truncar el archivo destino, en
   vez de sustituirse silenciosamente. Los dos tests Unix están compilados para Linux; falta correrlos
   en un host Linux nativo. Se regeneró la distribución Windows con gate completo y build supervisado;
-  hashes y firma pendiente constan en `docs/VALIDACION-BUILD-2026-10-15.md`. Esto no habilita
+  hashes y firma pendiente constan en `docs/evidencia/VALIDACION-BUILD-2026-10-15.md`. Esto no habilita
   operaciones Linux.
 - Las plantillas conservan rutas fijas como `PathBuf` y rechazan explícitamente una ruta POSIX no
   UTF-8 antes de cambiar el catálogo, ya que el JSON vigente sólo representa texto. La UI muestra el
@@ -410,7 +410,7 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
   abrir Naygo. La ruta se conserva en `PathBuf` y se escapa al construir avisos; flags y valores de
   tema/plantilla siguen siendo UTF-8. Los tests POSIX compilan en check/Clippy cruzados; falta su
   ejecución Linux nativa. El gate Windows y el build supervisado pasan; artefactos y hashes en
-  [`docs/VALIDACION-BUILD-2026-10-15.md`](docs/VALIDACION-BUILD-2026-10-15.md).
+  [`docs/evidencia/VALIDACION-BUILD-2026-10-15.md`](docs/evidencia/VALIDACION-BUILD-2026-10-15.md).
 - L-01A: el listado, el árbol y las búsquedas de core muestran bytes POSIX no UTF-8 como `\\xNN`,
   y duplican el backslash literal para que no se confunda con un escape. Buscar por el mismo texto
   visible encuentra el nombre original; la ruta operativa sigue en `PathBuf`. El check y Clippy
@@ -427,7 +427,7 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
   la reconciliación existente. Tres corridas release headless midieron 21,279 ms de mediana al
   añadir una fila a 100k, frente a 561,367 ms en el harness previo. Gate y distribución 0.5.2
   supervisados pasan; ZIP, setup y EXE sin firma Authenticode y sus hashes están en
-  `docs/VALIDACION-BUILD-2026-10-16.md`.
+  `docs/evidencia/VALIDACION-BUILD-2026-10-16.md`.
 - W-07 añade spans opt-in para duración de callbacks de teclado, navegación por filas y ordenamiento.
   No capturan entradas ni rutas; separan el callback del tick/renderer y no sustituyen las mediciones
   de interacción extremo a extremo.
@@ -465,7 +465,7 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
   verifica reciclaje, restauración y conservación del contenido destino. Pasaron 5/5 tests
   dirigidos de Papelera, 1.389 tests del workspace, Clippy `-D warnings`, formato y checks cruzados
   Windows de platform/UI. La distribución 0.5.2 se regeneró bajo supervisor y sus hashes se
-  verificaron en `docs/VALIDACION-BUILD-2026-10-15.md`.
+  verificaron en `docs/evidencia/VALIDACION-BUILD-2026-10-15.md`.
 - Se añadió `scripts/capture-w07-process.ps1` para recoger en JSON memoria, CPU, handles y threads
   del proceso Windows en ventanas configurables, más los mapeos SMB cuando están disponibles. No
   interactúa con Naygo ni sustituye las métricas internas opt-in o la matriz real de navegación.
@@ -480,7 +480,7 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
   `docs/BENCHMARKS.md`.
 - Se volvió a verificar el gate completo Windows y se regeneraron portable ZIP e instalador 0.5.2
   bajo el supervisor de memoria; ambos siguen sin firma Authenticode y sus hashes están en
-  `docs/VALIDACION-BUILD-2026-10-14.md`.
+  `docs/evidencia/VALIDACION-BUILD-2026-10-14.md`.
 - El restore de Papelera usa primero el nombre de parsing capturado por `PostDeleteItem` y ahora
   difiere por completo la enumeración de la carpeta virtual hasta necesitar el respaldo. Esto cubre
   runners sin enumerador Shell. El caché de hasta 1.024 identidades ahora expulsa FIFO para conservar
@@ -490,7 +490,7 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
   local; el build 0.5.2 final está verificado. El ZIP, el setup y sus hashes coinciden;
   queda correr GitHub Actions en Windows Server 2025.
 - Se regeneraron los artefactos 0.5.2 después de la corrección de Papelera. ZIP e instalador siguen
-  sin firma; hashes y límite de memoria constan en `docs/VALIDACION-BUILD-2026-10-14.md`.
+  sin firma; hashes y límite de memoria constan en `docs/evidencia/VALIDACION-BUILD-2026-10-14.md`.
 
 ### Distribución
 - El build supervisado aísla los módulos PowerShell 7 heredados al lanzar Windows PowerShell 5.1.
@@ -555,12 +555,12 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
   `-D warnings`; los stubs explicitan que espacio, carpetas conocidas y Papelera no están disponibles.
   Los recursos/helpers propios de Windows ya no generan warnings al compilar la variante Linux.
   La suite Windows, Clippy, formato y diff pasaron, y se regeneró la distribución 0.5.2 bajo supervisor;
-  los hashes figuran en `docs/VALIDACION-BUILD-2026-10-14.md`. Build y ejecución nativos Ubuntu siguen
+  los hashes figuran en `docs/evidencia/VALIDACION-BUILD-2026-10-14.md`. Build y ejecución nativos Ubuntu siguen
   pendientes.
 - La distribución Windows 0.5.2 se volvió a generar después de los cambios de parser e identidad de
   rutas: el build supervisado
   terminó dentro del tope de 12 GiB. EXE y setup siguen sin firma Authenticode; hashes y límites en
-  `docs/VALIDACION-BUILD-2026-10-14.md`.
+  `docs/evidencia/VALIDACION-BUILD-2026-10-14.md`.
 
 ### CI
 - El test de ida/vuelta de Papelera vuelve a ejecutarse en CI. El runner Windows no refrescaba de
@@ -577,18 +577,18 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
 - El preview ZIP/TAR/TAR.GZ limita registros e índice ZIP, bytes leídos/comprimidos/expandidos,
   rutas internas y suma de tamaños. Mantiene hasta 500 filas, sin extraer contenido; los límites
   conservan una salida parcial o muestran el aviso de recursos existente. Suite workspace, Clippy
-  y distribución supervisada pasaron; hashes en `docs/VALIDACION-BUILD-2026-10-13.md`.
+  y distribución supervisada pasaron; hashes en `docs/evidencia/VALIDACION-BUILD-2026-10-13.md`.
 - El preview PDF carga el documento una vez, obtiene las páginas y reutiliza el parser para extraer
   texto con el formato previo. Un writer detiene la extracción al llegar a 8.000 caracteres y el
   lector recorre hasta 500 páginas de contenido; conserva el aislamiento, timeout y cancelación
   existentes. No renderiza páginas. Suite completa, Clippy y build supervisado pasaron; hashes de
-  distribución registrados en `docs/VALIDACION-BUILD-2026-10-13.md`.
+  distribución registrados en `docs/evidencia/VALIDACION-BUILD-2026-10-13.md`.
 - El acceso cacheado a índices de vista comparte un `Arc<[usize]>` con el render y la comparación
   de filas, sin copiar el vector entero en cada hit. En el microbenchmark a 100.000 filas bajó de
   0,021924 ms con copia a 0,000061 ms compartido; el resultado no mide el frame completo. Suite
   workspace, Clippy global, formato, diff y Graphify pasaron. La distribución 0.5.2 se regeneró
   bajo supervisor y sus hashes coinciden con el manifiesto; evidencia y límites en
-  `docs/BENCHMARKS.md` y `docs/VALIDACION-BUILD-2026-10-13.md`.
+  `docs/BENCHMARKS.md` y `docs/evidencia/VALIDACION-BUILD-2026-10-13.md`.
 - Files, árbol y el diagnóstico de carpetas comparten un máximo de ocho workers. Cuando no hay
   plaza, Files conserva sólo la última ruta por panel, el árbol deduplica ramas y el probe conserva
   el último ámbito. Los permisos se liberan al terminar el hilo; los probes de navegación consultan
@@ -603,7 +603,7 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
   listado y construcción de previews. La cola y las muestras están limitadas; el event loop usa
   envío no bloqueante. El log al cierre contiene solo tipos estáticos y duraciones, sin rutas ni
   nombres de archivo. La distribución 0.5.2 se regeneró bajo supervisor; hashes y limitaciones
-  figuran en `docs/VALIDACION-BUILD-2026-10-13.md`. La matriz de rendimiento W-07 continúa pendiente.
+  figuran en `docs/evidencia/VALIDACION-BUILD-2026-10-13.md`. La matriz de rendimiento W-07 continúa pendiente.
 - Los mismos logs opt-in informan inicio, término, rechazos, trabajos activos y pico simultáneo
   de workers de preview y validación de rutas, usando los permisos reales que limitan esos hilos.
   El worker serial de packs también registra envíos, rechazos, espera de cola y duración. Una prueba
@@ -633,7 +633,7 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
   no se tratan como destino libre, el staging vive hasta el resultado y el motor revalida al
   ejecutar; copiar/mover ya no consulta `exists()` desde el controlador de operaciones.
 - Generada nuevamente la distribución 0.5.2 con W-01–W-06C; ver checksums y límites en
-  [validación del build del 13 de octubre](docs/VALIDACION-BUILD-2026-10-13.md).
+  [validación del build del 13 de octubre](docs/evidencia/VALIDACION-BUILD-2026-10-13.md).
 - Los cambios de ajustes, atajos y sesión se coalescen por archivo en un worker JSON único;
   al salir, Naygo espera las escrituras finales fuera del hilo de UI con plazo acotado.
 - La carga inicial de settings, idioma, atajos, sesión, favoritos y plantillas corre en un worker;
