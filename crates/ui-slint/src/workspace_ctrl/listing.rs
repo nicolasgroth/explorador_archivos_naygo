@@ -487,6 +487,13 @@ impl WorkspaceCtrl {
         self.footer_disk_cache.clear();
     }
 
+    /// ¿Hay una lectura de espacio de disco del footer todavía sin publicar? Solo para tests que
+    /// deben esperar a que ese trabajo asíncrono se asiente antes de medir (ver `sync.rs`).
+    #[cfg(test)]
+    pub(crate) fn footer_disk_in_flight(&self) -> bool {
+        !self.footer_disk_pending.is_empty()
+    }
+
     /// Drena las lecturas de espacio terminadas. Corre en el tick de UI pero solo hace `try_recv`:
     /// la llamada WinAPI real vive exclusivamente en el worker lanzado más abajo.
     fn pump_footer_disk_results(&mut self) {

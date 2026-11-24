@@ -3288,6 +3288,11 @@ mod tests {
         // Disposición clásica: árbol + dos Files + Propiedades + Vista previa (los paneles que
         // antes se re-asignaban en cada tick).
         ctrl.borrow_mut().apply_first_run_layout();
+        // El resaltado "fresco" vence por reloj (8 s por defecto): bajo carga el test podía
+        // cruzar ese umbral entre dos syncs y repintar la fila. Con una duración enorme el
+        // vencimiento deja de ser una variable del test.
+        ctrl.borrow_mut().config.settings.highlight_duration =
+            naygo_core::config::HighlightDuration::FadeSeconds(3_600);
         let models = Rc::new(RefCell::new(Models::new()));
         let ui = AppWindow::new().unwrap();
         let sync = build_sync(
@@ -3352,21 +3357,32 @@ mod tests {
                 .any(|row| row.name == "fresco.txt" && row.highlight),
             "la fila fresca se pinta resaltada"
         );
-        // Con un archivo enfocado, Propiedades pide su metadata a un worker. Su respuesta llega
-        // cuando quiere (bajo la carga de la suite completa, a veces entre los dos syncs medidos)
-        // y cambia el `PaneVm` del Inspector: es un cambio real, no trabajo por tick. Esperar a
-        // que el estado se asiente (un sync sin avisos en `panes`) antes de medir. Si cada sync
-        // re-asignara paneles, el bucle se agota y la aserción de abajo falla igual.
+        // Fuentes asíncronas que cambian el `PaneVm` por su cuenta (cambios reales, no trabajo por
+        // tick) y que, bajo la carga de la suite completa, podían llegar ENTRE los dos syncs
+        // medidos si solo se esperaba "un sync sin avisos":
+        //  - la metadata del archivo enfocado (Propiedades pide su lectura a un worker);
+        //  - el espacio libre del disco en el footer (un hilo consulta el volumen y su resultado
+        //    se publica en un sync posterior, cuando `pump_footer_disk_results` lo drena).
+        // Se espera por CONDICIÓN EXPLÍCITA (ambas fuentes sin trabajo en vuelo) más un sync
+        // quieto, sin depender de la duración de un sleep. Si cada sync re-asignara paneles, el
+        // bucle se agota y la aserción de abajo falla igual.
         {
             let settle = listen(&ModelRc::from(models.borrow().panes.clone()));
-            for _ in 0..200 {
+            let mut settled = false;
+            for _ in 0..2_000 {
                 settle.0.set(0);
                 (sync.sync_rows)();
-                if settle.0.get() == 0 && !ctrl.borrow().meta_loading() {
+                let idle = {
+                    let c = ctrl.borrow();
+                    !c.meta_loading() && !c.footer_disk_in_flight()
+                };
+                if settle.0.get() == 0 && idle {
+                    settled = true;
                     break;
                 }
-                std::thread::sleep(std::time::Duration::from_millis(10));
+                std::thread::sleep(std::time::Duration::from_millis(5));
             }
+            assert!(settled, "el estado asíncrono no se asentó en 10 s");
         }
         let row_listeners: Vec<_> = file_rows.iter().map(|(_, rows)| listen(rows)).collect();
 
